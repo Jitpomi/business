@@ -399,8 +399,21 @@ side effects. They are not automatically repaired by restarting the worker.
 Keep the old remote scheduler disabled before any cutover, reconcile outstanding
 provider records, and configure the new worker against a verified canonical
 database. Startup does not migrate data, configure a remote webhook, or enable
-live payments. Mercury's restored sandbox connection still needs its hosted card
-checkout checked separately; Stripe test acceptance does not certify Mercury.
+live payments. Stripe test acceptance does not certify Mercury's hosted card
+checkout.
+
+Mercury support (Sophie, ticket #2717152; confirmation received October 28,
+2026) confirmed that card payments are not supported in Mercury's sandbox.
+The missing card option is an expected sandbox limitation, even when Stripe is
+connected and the invoice API returns `creditCardEnabled: true`. Do not reconnect
+Stripe or change live settings to try to fix this behavior.
+
+Use Mercury sandbox to check invoice creation, branding and supported API
+behavior. Use Stripe test mode for successful and declined card payments,
+automatic collection, receipts and reminders. Mercury's full hosted card flow
+remains unverified until a separately authorized live transaction is completed;
+simulated invoice status changes are not evidence of card processing. No live
+transaction is authorized by running the sandbox tests.
 
 ### Sandbox workflow acceptance
 
