@@ -179,14 +179,8 @@ async fn account_action(
     data: Value,
     kind: &str,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let secret = std::env::var("BUSINESS_GATEWAY_SECRET")
-        .or_else(|_| std::env::var("PORTAL_ORIGIN_SECRET"))
-        .unwrap_or_default();
-    let received = headers
-        .get("x-gateway-secret")
-        .and_then(|s| s.to_str().ok())
-        .unwrap_or("");
-    if secret.len() < 32 || !bool::from(secret.as_bytes().ct_eq(received.as_bytes())) {
+    let secret = std::env::var("BUSINESS_GATEWAY_SECRET").unwrap_or_default();
+    if !crate::admission::gateway_matches(&headers, &secret) {
         return Err((
             StatusCode::UNAUTHORIZED,
             Json(json!({"message":"Please use the account website."})),

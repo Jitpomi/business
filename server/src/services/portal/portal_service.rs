@@ -142,12 +142,9 @@ impl DogService<Value, BusinessParams> for PortalService {
                     e.invoice_match(&id)?
                 ))
                 .await?;
+            ensure!(binding.len() == 1, "Invoice binding unavailable");
             let external = schema::field(&binding[0], "external")?;
-            let provider = if row["provider"] == "stripe" {
-                Provider::Stripe
-            } else {
-                Provider::Mercury
-            };
+            let provider: Provider = serde_json::from_value(row["provider"].clone())?;
             if provider == Provider::Mercury {
                 return e.providers.payment_history(provider, &json!({})).await;
             }
@@ -196,12 +193,6 @@ impl DogService<Value, BusinessParams> for PortalService {
             "setup_card" => {
                 ensure!(data["save_only"] == true, "Save a payment method first");
                 let external = e.ensure_customer(&customer, Provider::Stripe).await?;
-                let base = std::env::var("BILLING_PUBLIC_URL")?;
-                let base = reqwest::Url::parse(&base)?;
-                ensure!(
-                    base.scheme() == "https" && base.host_str() == Some("jitpomi.com"),
-                    "Invalid payment return destination"
-                );
                 let success = format!(
                     "https://jitpomi.com/account/?setup={{CHECKOUT_SESSION_ID}}&customer={id}"
                 );

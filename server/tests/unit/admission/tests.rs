@@ -26,3 +26,20 @@ async fn full_waiting_queue_rejects_before_handler() {
     assert_eq!(response.headers()["retry-after"], "1");
     drop(held);
 }
+
+#[test]
+fn gateway_requires_the_canonical_header_and_a_strong_matching_secret() {
+    use axum::http::{HeaderMap, HeaderValue};
+    let secret = "gateway-test-secret-at-least-32-bytes";
+    let mut headers = HeaderMap::new();
+    assert!(!gateway_matches(&headers, secret));
+    headers.insert("x-portal-secret", HeaderValue::from_static(secret));
+    assert!(!gateway_matches(&headers, secret));
+    headers.insert("x-gateway-secret", HeaderValue::from_static("incorrect"));
+    assert!(!gateway_matches(&headers, secret));
+    headers.insert("x-gateway-secret", HeaderValue::from_static(secret));
+    assert!(gateway_matches(&headers, secret));
+    headers.insert("x-gateway-secret", HeaderValue::from_static("short"));
+    assert!(!gateway_matches(&headers, "short"));
+    assert!(!gateway_matches(&HeaderMap::new(), ""));
+}

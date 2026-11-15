@@ -15,7 +15,7 @@ impl Engine {
         }
         // Fresh provider state avoids reminders based only on an old local observation.
         self.reconcile(id).await?;
-        let rows=self.read(format!(r#"{} fetch {{"email":$c.bill_email,"description":$i.name,"amount":$i.bill_amount,"due":$i.bill_next,"status":$i.bill_status,"provider":$i.bill_provider,"url":$i.bill_url}};"#,self.invoice_match(id)?)).await?;
+        let rows=self.read(format!(r#"{} fetch {{"email":$c.bill_email,"description":$i.name,"amount":$i.bill_amount,"due":$i.bill_next,"status":$i.bill_status,"url":$i.bill_url}};"#,self.invoice_match(id)?)).await?;
         ensure!(rows.len() == 1, "Invoice missing");
         let row = &rows[0];
         let now = chrono::Utc::now().timestamp();
@@ -28,8 +28,7 @@ impl Engine {
             (1..=30).contains(&interval),
             "Reminder interval must be 1..30 days"
         );
-        let Some(kind) = provider_notice_kind(string(row, "provider")?, state, due, now, interval)
-        else {
+        let Some(kind) = notice_kind(state, due, now, interval) else {
             return Ok(0);
         };
         let key = format!("{id}-{kind}");
@@ -101,16 +100,6 @@ impl Engine {
         Ok(rows)
     }
 }
-fn provider_notice_kind(
-    _provider: &str,
-    state: &str,
-    due: i64,
-    now: i64,
-    days: i64,
-) -> Option<String> {
-    notice_kind(state, due, now, days)
-}
-
 pub fn notice_kind(state: &str, due: i64, now: i64, days: i64) -> Option<String> {
     if state == "paid" {
         return Some("receipt".into());

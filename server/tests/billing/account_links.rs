@@ -265,6 +265,20 @@ pub async fn check(e: &Engine) -> Result<()> {
         denied.status() == 401,
         "Direct recovery bypassed the gateway"
     );
+    // An old portal variable must not create a second gateway configuration path.
+    std::env::remove_var("BUSINESS_GATEWAY_SECRET");
+    std::env::set_var("PORTAL_ORIGIN_SECRET", GATEWAY);
+    let legacy = call(
+        &r,
+        "account",
+        "",
+        "/recovery",
+        json!({"action":"request","email":"owner-links@example.com"}),
+    )
+    .await;
+    std::env::set_var("BUSINESS_GATEWAY_SECRET", GATEWAY);
+    std::env::remove_var("PORTAL_ORIGIN_SECRET");
+    ensure!(legacy?.0 == 401, "Legacy gateway configuration accepted");
     println!("Verified invitation renewal, acceptance, replay protection, tenant permissions, generic recovery, reset race, password change and session revocation.");
     Ok(())
 }

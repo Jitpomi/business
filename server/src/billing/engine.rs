@@ -157,7 +157,7 @@ impl Engine {
             serde_json::from_value::<Provider>(row["manual_provider"].clone())?
         };
         // A missing key must not consume a job; check before the durable claim.
-        self.provider_ready(provider)?;
+        self.providers.ready(provider)?;
         self.write(format!(r#"{} $i has bill_status "queued";$c has bill_revision {};select $t,$i;distinct;update $i has bill_status "issuing",has bill_provider "{}",has bill_choice "{}",has bill_updated {now},has bill_revision {};fetch {{"id":$i.bill_key}};"#,self.invoice_match(id)?,schema::quoted(string(row,"revision")?),schema::word(provider),schema::word(mode),schema::quoted(string(row,"revision")?))).await?;
         // Once claimed, an ambiguous failure is attention-required, never a fresh charge retry.
         let result=async{
@@ -177,24 +177,11 @@ impl Engine {
         }
         result
     }
-    fn provider_ready(&self, provider: Provider) -> Result<()> {
-        self.providers.ready(provider)
-    }
     pub async fn apply_observation(
         &self,
         id: &str,
         provider: Provider,
         value: &Value,
-    ) -> Result<()> {
-        self.apply_observation_guarded(id, provider, value, "")
-            .await
-    }
-    pub async fn apply_observation_guarded(
-        &self,
-        id: &str,
-        provider: Provider,
-        value: &Value,
-        permission: &str,
     ) -> Result<()> {
         let external = providers::field(value, "id")?;
         providers::safe_id(external)?;
@@ -208,7 +195,7 @@ impl Engine {
         if matches!(string(row, "status")?, "paid" | "void") && row["status"] != status {
             return Ok(());
         }
-        self.write(format!(r#"{permission} {} $i has bill_status {};select $t,$i;distinct;update $i has bill_status "{status}",has bill_external_id {},has bill_url {},has bill_updated {now};fetch {{"id":$i.bill_key}};"#,self.invoice_match(id)?,schema::quoted(string(row,"status")?),schema::quoted(external),schema::quoted(&url))).await?;
+        self.write(format!(r#"{} $i has bill_status {};select $t,$i;distinct;update $i has bill_status "{status}",has bill_external_id {},has bill_url {},has bill_updated {now};fetch {{"id":$i.bill_key}};"#,self.invoice_match(id)?,schema::quoted(string(row,"status")?),schema::quoted(external),schema::quoted(&url))).await?;
         Ok(())
     }
     pub async fn validate_observation(

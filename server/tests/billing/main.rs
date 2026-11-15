@@ -169,3 +169,80 @@ async fn scheduled_payment_receipt_and_decline_reminder() -> Result<()> {
     driver.databases().get(&name).await?.delete().await?;
     outcome
 }
+
+/// Account and invoice state acceptance does not require payment or email keys.
+#[tokio::test]
+#[ignore = "Real development TypeDB; disposable database only; no provider calls or email"]
+async fn account_and_invoice_workflow_without_provider_effects() -> Result<()> {
+    dotenvy::from_path(std::env::var("BUSINESS_ENV_FILE")?)?;
+    ensure!(
+        std::env::var("TYPEDB_DB")? == "business_dev",
+        "Development credentials only"
+    );
+    let driver = Arc::new(
+        dog_typedb::TypeDBDriverFactory::connect(
+            &std::env::var("TYPEDB_ADDR")?,
+            &std::env::var("TYPEDB_USERNAME")?,
+            &std::env::var("TYPEDB_PASSWORD")?,
+            true,
+        )
+        .await?,
+    );
+    let name = format!("business_backend_test_{}", uuid::Uuid::new_v4().simple());
+    let merchant = uuid::Uuid::new_v4().to_string();
+    for (key, value) in [
+        ("BILLING_MERCHANT_ID", merchant.as_str()),
+        ("BILLING_ENABLED", "true"),
+        ("BILLING_LIVE", "false"),
+        ("BILLING_MAIL_ENABLED", "false"),
+        ("STRIPE_CONNECTIONS_JSON", "[]"),
+        ("MERCURY_CONNECTIONS_JSON", "[]"),
+        (
+            "BILLING_TICK_SECRET",
+            "fixture-tick-secret-with-at-least-32-bytes",
+        ),
+    ] {
+        std::env::set_var(key, value);
+    }
+    let engine = Engine::configured(Arc::new(TypeDBState {
+        driver: driver.clone(),
+        database: name.clone(),
+    }))?;
+    database::install(&driver, &name).await?;
+    let result = async {
+        let tx = driver.transaction(&name, TransactionType::Write).await?;
+        tx.query(format!(r#"insert $t isa tenant,has tenant_id "{merchant}",has name "TEST workflow",has status "active",has revision "initial";"#)).await?;
+        tx.commit().await?;
+        account_links::check(&engine).await?;
+        let customer = engine.read(format!(r#"{} (merchant:$t,customer:$c) isa bill_account;$c has bill_email "new-links@example.com";fetch {{"id":$c.bill_key}};"#, engine.prefix())).await?;
+        ensure!(customer.len() == 1, "Accepted customer missing");
+        let customer = customer[0]["id"].as_str().context("Missing customer ID")?;
+        let plan = uuid::Uuid::new_v4().to_string();
+        let at = chrono::Utc::now().timestamp();
+        engine.write(format!(r#"{} insert $p isa bill_plan,has bill_key "{plan}",has name "TEST one-time work",has bill_amount 500,has bill_due_days 7,has bill_anchor {at},has bill_next {at},has bill_sequence 0,has bill_interval "once",has bill_status "active";(customer:$c,plan:$p) isa bill_plan_owner;fetch {{"id":$p.bill_key}};"#,engine.customer_match(customer)?)).await?;
+        ensure!(engine.enqueue_due(at - 1).await? == 0, "Invoice issued early");
+        ensure!(engine.enqueue_due(at).await? == 1, "Due occurrence missing");
+        ensure!(engine.enqueue_due(at).await? == 0, "Duplicate occurrence");
+        let rows = engine.read(format!(r#"{} (customer:$c,plan:$p) isa bill_plan_owner;(plan:$p,invoice:$i) isa bill_invoice_owner;fetch {{"id":$i.bill_key,"due":$i.bill_next,"status":$i.bill_status,"plan_status":$p.bill_status}};"#,engine.customer_match(customer)?)).await?;
+        ensure!(rows.len() == 1 && rows[0]["plan_status"] == "finished", "One-time schedule did not finish");
+        ensure!(server::billing::engine::number(&rows[0], "due")? == at + 7 * 86400, "Incorrect due date");
+        let invoice = rows[0]["id"].as_str().context("Missing invoice")?;
+        ensure!(engine.issue(invoice).await.is_err(), "Missing provider accepted");
+        let stored = engine.read(format!(r#"{} fetch {{"status":$i.bill_status}};"#,engine.invoice_match(invoice)?)).await?;
+        ensure!(stored[0]["status"] == "queued", "Missing provider consumed the invoice claim");
+        // Seed a provider observation binding, without contacting any provider.
+        engine.write(format!(r#"{} select $t,$c,$i;distinct;update $c has bill_stripe_id "cus_fixture";$i has bill_provider "stripe",has bill_external_id "in_fixture",has bill_status "open";fetch {{"id":$i.bill_key}};"#,engine.invoice_match(invoice)?)).await?;
+        let observation = json!({"id":"in_fixture","customer":"cus_fixture","currency":"usd","total":500,"metadata":{"business_invoice":invoice},"status":"paid","hosted_invoice_url":"https://invoice.stripe.com/i/fixture"});
+        let mut wrong = observation.clone(); wrong["total"] = json!(501);
+        ensure!(engine.apply_observation(invoice,Provider::Stripe,&wrong).await.is_err(),"Wrong amount accepted");
+        engine.apply_observation(invoice,Provider::Stripe,&observation).await?;
+        let mut stale = observation; stale["status"] = json!("open");
+        engine.apply_observation(invoice,Provider::Stripe,&stale).await?;
+        let stored = engine.read(format!(r#"{} fetch {{"status":$i.bill_status}};"#,engine.invoice_match(invoice)?)).await?;
+        ensure!(stored[0]["status"] == "paid", "Stale observation reopened a paid invoice");
+        ensure!(engine.notify_invoice(invoice).await? == 0, "Disabled mail attempted delivery");
+        Ok::<_, anyhow::Error>(())
+    }.await;
+    driver.databases().get(&name).await?.delete().await?;
+    result
+}

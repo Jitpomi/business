@@ -45,10 +45,8 @@ impl Providers {
                 "Billing Mercury permission or environment mismatch"
             );
         }
-        ensure!(
-            stripe.is_some() || mercury.is_some(),
-            "No provider connection for billing merchant"
-        );
+        // Accounts and local invoice state do not require a payment connection.
+        // Provider operations enforce readiness before claims or external calls.
         let connected_account = stripe.as_ref().and_then(|c| c.connected_account.clone());
         let _ = rustls::crypto::ring::default_provider().install_default();
         Ok(Self {

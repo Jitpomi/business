@@ -23,15 +23,18 @@ static ACTIVE: LazyLock<Semaphore> =
     LazyLock::new(|| Semaphore::new(configured_limit().expect("validated admission budget")));
 static WAITING: LazyLock<Semaphore> = LazyLock::new(|| Semaphore::new(32));
 
+pub(crate) fn gateway_matches(headers: &axum::http::HeaderMap, secret: &str) -> bool {
+    use subtle::ConstantTimeEq;
+    let supplied = headers
+        .get("x-gateway-secret")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    secret.len() >= 32 && bool::from(secret.as_bytes().ct_eq(supplied.as_bytes()))
+}
+
 pub(crate) async fn guard(request: Request, next: Next) -> Response {
     if let Ok(secret) = std::env::var("BUSINESS_GATEWAY_SECRET") {
-        use subtle::ConstantTimeEq;
-        let supplied = request
-            .headers()
-            .get("x-gateway-secret")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("");
-        if secret.len() < 32 || !bool::from(secret.as_bytes().ct_eq(supplied.as_bytes())) {
+        if !gateway_matches(request.headers(), &secret) {
             return (
                 StatusCode::UNAUTHORIZED,
                 axum::Json(serde_json::json!({"message":"Gateway access required"})),

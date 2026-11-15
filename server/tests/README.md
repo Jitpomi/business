@@ -41,3 +41,20 @@ payment, finalizes an invoice or sends email. Mercury performs read-only checks 
 all four resources and fails if upstream access is denied; an allowlist failure is
 not reported as a passing end-to-end test. No provider token is sent by this test
 client or printed in its output.
+
+## Account and invoice acceptance without providers
+
+To exercise the canonical account and local invoice lifecycle against a generated
+disposable development database without sending email or contacting a payment
+provider:
+
+```sh
+BUSINESS_ENV_FILE=/private/dev.env cargo test --locked --test billing account_and_invoice_workflow_without_provider_effects -- --ignored --test-threads=1
+```
+
+This test disables mail and clears its process-local provider connections. It
+covers real HTTP account flows, recovery races, scheduling and verified local
+state transitions using synthetic provider observations. It does not certify
+Stripe/Mercury connectivity or live billing. Run it separately from the explicit
+provider-and-mail acceptance test because those tests configure process-global
+environment variables differently.

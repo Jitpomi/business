@@ -43,3 +43,41 @@ function is used externally; uncertain candidates were retained.
 40 Rust tests and five JavaScript tests passed. Seven external integration tests
 were intentionally ignored. Formatting, all-target build, Clippy with warnings
 denied and documentation tests passed. No migration or live payment was run.
+
+## Business flow follow-up
+
+Traced account discovery, invitations/recovery, billing permissions, consent,
+scheduling, issuance, collection, observations and notifications, together with
+the companion website's Worker contract.
+
+Removed the unused permission-fragment observation entry point and provider-ready
+wrapper. Notifications now use one provider-independent rule directly. Account
+recovery and ordinary API ingress share the same gateway comparison and the
+BUSINESS_GATEWAY_SECRET configuration; the old PORTAL_ORIGIN_SECRET fallback is
+not accepted by Business. The website can still name its Worker-side secret
+PORTAL_ORIGIN_SECRET, but sends it under the canonical x-gateway-secret header.
+
+Account operations and local scheduling no longer require a writable payment
+connection. Missing providers still fail before an invoice issuance claim, and
+payment/provider calls still require their configured credentials and permissions.
+Removed a BILLING_PUBLIC_URL check whose value never affected the fixed JITPOMI
+checkout destination. History now parses the provider enum strictly and checks
+that its invoice binding exists rather than silently treating unknown providers
+as Mercury or indexing a missing binding.
+
+Added a separate real-database account/invoice test with no provider or email
+calls. It covers invitation renewal/acceptance/replay/expiry, existing-account
+protection, reset races, session revocation, canonical gateway enforcement,
+one-time schedule completion, exact due dates, duplicate occurrence prevention,
+provider-unavailable queue preservation, amount binding and stale observations.
+
+The four existing real TypeDB backend tests passed, including policy enforcement,
+provisioning through actual executables, concurrent reviews and HTTP rollback.
+The new isolated account/invoice test also passed. Disposable databases used by
+these tests were removed. Local Rust tests, formatting and Clippy passed.
+Fresh real Stripe/Mercury payment and email acceptance was not run by this audit.
+
+Companion website changes remove the retired backend switch and stop proxying
+the removed payment-demo API. The old demo and tests are preserved outside the
+Worker asset tree; its old URL redirects to the invoice workspace. The website
+changes belong to the existing customer-account-portal PR, not this backend repo.
