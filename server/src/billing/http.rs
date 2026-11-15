@@ -1,39 +1,28 @@
 //! Narrow server-to-server ingress; no tenant header controls merchant identity.
-use super::{billing_schema::Provider, engine::Engine};
-use anyhow::{ensure, Result};
+use super::engine::Engine;
+use anyhow::Result;
 use axum::{
     body::Bytes,
-    extract::{DefaultBodyLimit, State},
+    extract::{DefaultBodyLimit, Path, State},
     http::{HeaderMap, StatusCode},
     routing::post,
     Json, Router,
 };
-#[cfg(test)]
-use hmac::{Hmac, Mac};
 use serde_json::{json, Value};
-#[cfg(test)]
-use sha2::Sha256;
 use std::sync::Arc;
 use subtle::ConstantTimeEq;
 #[derive(Clone)]
 struct Ingress {
     engine: Engine,
     tick_secret: String,
-    webhook_secret: String,
     slots: Arc<tokio::sync::Semaphore>,
     account_slots: Arc<tokio::sync::Semaphore>,
 }
 fn configured(engine: Engine) -> Result<Ingress> {
-    let tick_secret = std::env::var("BILLING_TICK_SECRET")?;
-    let webhook_secret = std::env::var("STRIPE_WEBHOOK_SECRET").unwrap_or_default();
-    ensure!(
-        tick_secret.len() >= 32,
-        "Billing tick secret must have at least 32 characters"
-    );
+    let tick_secret = engine.runtime.scheduler_secret.clone().unwrap_or_default();
     Ok(Ingress {
         engine,
         tick_secret,
-        webhook_secret,
         slots: Arc::new(tokio::sync::Semaphore::new(1)),
         account_slots: Arc::new(tokio::sync::Semaphore::new(4)),
     })
@@ -41,7 +30,7 @@ fn configured(engine: Engine) -> Result<Ingress> {
 fn routes(state: Ingress) -> Router {
     Router::new()
         .route("/internal/billing/tick", post(tick))
-        .route("/webhooks/stripe", post(webhook))
+        .route("/webhooks/{plugin}", post(webhook))
         .route("/onboarding", post(accept_invitation))
         .route("/recovery", post(recover_account))
         .layer(DefaultBodyLimit::max(64 * 1024))
@@ -90,7 +79,9 @@ async fn tick(
         .and_then(|s| s.to_str().ok())
         .and_then(|s| s.strip_prefix("Bearer "))
         .unwrap_or("");
-    if !bool::from(state.tick_secret.as_bytes().ct_eq(received.as_bytes())) {
+    if state.tick_secret.len() < 32
+        || !bool::from(state.tick_secret.as_bytes().ct_eq(received.as_bytes()))
+    {
         return Err(StatusCode::UNAUTHORIZED);
     }
     let _slot = state
@@ -111,68 +102,42 @@ async fn tick(
 }
 async fn webhook(
     State(state): State<Ingress>,
+    Path(plugin_id): Path<String>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Json<Value>, StatusCode> {
-    let signature = headers
-        .get("stripe-signature")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-    verify_signature(
-        &state.webhook_secret,
-        signature,
-        &body,
-        chrono::Utc::now().timestamp(),
-    )
-    .map_err(|_| StatusCode::UNAUTHORIZED)?;
-    let event: Value = serde_json::from_slice(&body).map_err(|_| StatusCode::BAD_REQUEST)?;
-    if event["account"].as_str() != state.engine.providers.connected_account.as_deref() {
-        return Err(StatusCode::BAD_REQUEST);
-    }
-    if event["livemode"].as_bool() != Some(state.engine.providers.live) {
-        return Err(StatusCode::BAD_REQUEST);
-    }
-    if !event["type"].as_str().unwrap_or("").starts_with("invoice.") {
-        return Ok(Json(json!({"received":true})));
-    }
-    let Some(id) = event
-        .pointer("/data/object/metadata/business_invoice")
-        .and_then(Value::as_str)
-    else {
-        return Ok(Json(json!({"received":true})));
-    };
+    let plugin = state
+        .engine
+        .runtime
+        .financial(&plugin_id)
+        .map_err(|_| StatusCode::NOT_FOUND)?;
+    let headers = headers
+        .iter()
+        .filter_map(|(k, v)| v.to_str().ok().map(|v| (k.to_string(), v.to_string())))
+        .collect();
     let _slot = state
         .slots
         .try_acquire()
         .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
-    let external = event
-        .pointer("/data/object/id")
-        .and_then(Value::as_str)
-        .ok_or(StatusCode::BAD_REQUEST)?;
-    let result = async {
-        let observation = state
-            .engine
-            .providers
-            .observe(Provider::Stripe, external)
-            .await?;
-        state
-            .engine
-            .apply_observation(id, Provider::Stripe, &observation)
-            .await
-    };
-    tokio::time::timeout(std::time::Duration::from_secs(45), result)
-        .await
-        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?
-        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
-    // ACK only after the database write; duplicates reconcile current state.
-    Ok(Json(json!({"received":true})))
+    let result = tokio::time::timeout(std::time::Duration::from_secs(45), async {
+        let observation = plugin.webhook(&headers, &body).await.map_err(|e| match e {
+            crate::finance::WebhookError::Unauthorized => StatusCode::UNAUTHORIZED,
+            crate::finance::WebhookError::Invalid => StatusCode::BAD_REQUEST,
+            crate::finance::WebhookError::Unavailable => StatusCode::SERVICE_UNAVAILABLE,
+        })?;
+        if let Some(observation) = observation {
+            state
+                .engine
+                .apply_observation(&observation.invoice_id, &plugin_id, &observation)
+                .await
+                .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+        }
+        Ok::<_, StatusCode>(Json(json!({"received":true})))
+    })
+    .await
+    .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    result
 }
-// Preserve existing callers while exposing verification to other payment consumers.
-pub use super::signature::verify_signature;
-#[cfg(test)]
-#[path = "../../tests/billing/http.rs"]
-mod tests;
-
 async fn account_action(
     state: Ingress,
     headers: HeaderMap,

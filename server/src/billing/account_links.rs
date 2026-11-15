@@ -45,34 +45,19 @@ async fn hash(password: String) -> Result<String> {
 }
 impl Engine {
     async fn send_link(&self, email: &str, token: &str, kind: &str) -> Result<()> {
-        ensure!(!self.providers.live, "Sandbox only");
-        let allowed = std::env::var("INVITATION_TEST_EMAILS")
-            .or_else(|_| std::env::var("BILLING_TEST_EMAIL"))
-            .unwrap_or_default();
-        ensure!(
-            allowed
-                .split(',')
-                .any(|v| v.trim().eq_ignore_ascii_case(email)),
-            "Sandbox recipient is not approved"
-        );
-        ensure!(
-            std::env::var("BILLING_MAIL_ENABLED").as_deref() == Ok("true"),
-            "Email disabled"
-        );
+        ensure!(self.runtime.sandbox, "Sandbox only");
         let (subject, body) = if kind == "invite" {
             ("[TEST] Your JITPOMI account is ready",format!("You’re invited to JITPOMI. Set your password to see your company’s invoices and payments.\n\nhttps://jitpomi.com/account/#invite={token}\n\nThis private link works once and expires in 48 hours. Already have an account? Use your existing password.\n\nThis is a sandbox test. No real payments. Need help? Email dev@jitpomi.com."))
         } else {
             ("[TEST] Reset your JITPOMI password",format!("Choose a new password here:\n\nhttps://jitpomi.com/account/#reset={token}\n\nThis private link works once and expires in 30 minutes. If you didn’t ask for this, ignore this email. Your password has not changed.\n\nThis is a sandbox test. Need help? Email dev@jitpomi.com."))
         };
-        self.providers
-            .email(
-                &std::env::var("RESEND_API_KEY")?,
-                &std::env::var("BILLING_EMAIL_FROM")?,
-                email,
-                subject,
-                &body,
-                &format!("account-{kind}-{}", digest(token)),
-            )
+        self.runtime
+            .send(crate::finance::Message {
+                to: email.into(),
+                subject: subject.into(),
+                text: body,
+                key: format!("account-{kind}-{}", digest(token)),
+            })
             .await?;
         Ok(())
     }
@@ -90,7 +75,7 @@ impl Engine {
             let address = email(data)?;
             let customer = uuid::Uuid::new_v4().to_string();
             let buyer = uuid::Uuid::new_v4().to_string();
-            self.write(format!(r#"{} {scope} not {{(merchant:$t,customer:$old) isa bill_account;$old has bill_email {};}};select $t;distinct;insert $buyer isa tenant,has tenant_id "{buyer}",has name {},has status "active",has revision "{key}";$c isa bill_customer,has bill_key "{customer}",has name {},has bill_email {},has bill_policy "customer",has bill_choice "manual",has bill_provider "stripe",has bill_stripe_id "",has bill_mercury_id "",has bill_payment_method "",has bill_consent "",has bill_revision "{key}";(merchant:$t,buyer:$buyer,customer:$c) isa bill_account;$l isa account_link,has token_key "{key}",has email {},has link_kind "invite",has link_target "{buyer}",has link_version "{key}",has link_expires {expires},has link_used false;fetch {{"id":$c.bill_key}};"#,self.prefix(),q(&address),q(name),q(name),q(&address),q(&address))).await?;
+            self.write(format!(r#"{} {scope} not {{(merchant:$t,customer:$old) isa bill_account;$old has bill_email {};}};select $t;distinct;insert $buyer isa tenant,has tenant_id "{buyer}",has name {},has status "active",has revision "{key}";$c isa bill_customer,has bill_key "{customer}",has name {},has bill_email {},has bill_policy "customer",has bill_choice "manual",has bill_provider {},has bill_bindings "{{}}",has bill_method_plugin "",has bill_payment_method "",has bill_consent "",has bill_revision "{key}";(merchant:$t,buyer:$buyer,customer:$c) isa bill_account;$l isa account_link,has token_key "{key}",has email {},has link_kind "invite",has link_target "{buyer}",has link_version "{key}",has link_expires {expires},has link_used false;fetch {{"id":$c.bill_key}};"#,self.prefix(),q(&address),q(name),q(name),q(&address),q(self.runtime.default_financial.as_deref().unwrap_or("")),q(&address))).await?;
             (customer, buyer, address)
         } else {
             ensure!(
@@ -119,7 +104,7 @@ impl Engine {
         )
     }
     pub async fn public_account_action(&self, kind: &str, data: &Value) -> Result<Value> {
-        ensure!(!self.providers.live, "Sandbox only");
+        ensure!(self.runtime.sandbox, "Sandbox only");
         if kind == "reset" && data["action"] == "request" {
             let address = email(data)?;
             let answer = json!({"requested":true,"message":"If you have an account, we’ll email you a link to reset your password. Check your inbox and spam folder."});

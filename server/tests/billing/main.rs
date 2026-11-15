@@ -4,8 +4,8 @@ mod portal;
 use anyhow::{ensure, Context, Result};
 use serde_json::json;
 use server::{
-    billing::{billing_schema::Provider, engine::Engine, providers::pairs},
     database,
+    plugins::builtin_transport::{pairs, Provider},
     typedb::TypeDBState,
 };
 use std::{collections::HashMap, sync::Arc};
@@ -66,9 +66,17 @@ async fn scheduled_payment_receipt_and_decline_reminder() -> Result<()> {
         driver: driver.clone(),
         database: name.clone(),
     });
-    let engine = Engine::configured(state)?;
+    let providers = server::plugins::configuration::transport(&merchant)?;
+    std::env::set_var("TENANT_FINANCIAL_SETTINGS_JSON",json!([{"tenant_id":merchant,"default_financial":"stripe","webhook_secret":"whsec_synthetic_signature_test"}]).to_string());
+    std::env::set_var("TENANT_NOTIFICATION_PLUGINS_JSON",json!([{"tenant_id":merchant,"plugin":"resend","token":std::env::var("RESEND_API_KEY")?,"from":std::env::var("BILLING_EMAIL_FROM")?,"allowed_test_recipients":[recipient]}]).to_string());
+    let engine = server::plugins::configuration::engine(state, &merchant)?;
+    let adapter = server::plugins::BuiltinFinancial {
+        transport: providers.clone(),
+        provider: Provider::Stripe,
+        webhook_secret: None,
+    };
     ensure!(
-        engine.providers.ready(Provider::Mercury).is_err(),
+        providers.ready(Provider::Mercury).is_err(),
         "Read-only Mercury connection became writable"
     );
     let outcome=async {
@@ -78,13 +86,14 @@ async fn scheduled_payment_receipt_and_decline_reminder() -> Result<()> {
         tx.commit().await?;
         for (label,method) in [("success","pm_card_visa"),("decline","pm_card_chargeCustomerFail")] {
             let cid=uuid::Uuid::new_v4().to_string();
-            let customer=engine.providers.customer(Provider::Stripe,&cid,&format!("TEST ONLY {label}"),&recipient).await?;
-            let saved=engine.providers.stripe(reqwest::Method::POST,&format!("/payment_methods/{method}/attach"),&format!("fixture-{cid}"),&pairs(&[("customer",&customer)])).await?;
+            let customer=providers.customer(Provider::Stripe,&cid,&format!("TEST ONLY {label}"),&recipient).await?;
+            let saved=providers.stripe(reqwest::Method::POST,&format!("/payment_methods/{method}/attach"),&format!("fixture-{cid}"),&pairs(&[("customer",&customer)])).await?;
             let pm=saved["id"].as_str().context("Missing payment method")?;
             let plan=uuid::Uuid::new_v4().to_string();
+            let bindings=server::billing::billing_schema::quoted(&json!({"stripe":customer}).to_string());
             engine.write(format!(r#"{} insert
                 $buyer isa tenant,has tenant_id "{}",has name "TEST buyer {label}",has status "active",has revision "initial";
-                $c isa bill_customer,has bill_key "{cid}",has name "TEST {label}",has bill_email "{recipient}",has bill_policy "customer",has bill_choice "automatic",has bill_provider "stripe",has bill_stripe_id "{customer}",has bill_mercury_id "",has bill_payment_method "{pm}",has bill_consent "fixture-consent",has bill_revision "fixture-consent";
+                $c isa bill_customer,has bill_key "{cid}",has name "TEST {label}",has bill_email "{recipient}",has bill_policy "customer",has bill_choice "automatic",has bill_provider "stripe",has bill_stripe_id "{customer}",has bill_mercury_id "",has bill_bindings {bindings},has bill_method_plugin "stripe",has bill_payment_method "{pm}",has bill_consent "fixture-consent",has bill_revision "fixture-consent";
                 (merchant:$t,buyer:$buyer,customer:$c) isa bill_account;
                 $p isa bill_plan,has bill_key "{plan}",has name "TEST ONLY {label} scheduled invoice",has bill_amount 100,has bill_due_days 0,has bill_anchor {now},has bill_next {now},has bill_sequence 0,has bill_interval "once",has bill_status "active";
                 (customer:$c,plan:$p) isa bill_plan_owner;fetch {{"id":$p.bill_key}};"#,engine.prefix(),uuid::Uuid::new_v4())).await?;
@@ -104,15 +113,15 @@ async fn scheduled_payment_receipt_and_decline_reminder() -> Result<()> {
         engine.write(format!(r#"{} select $t,$c,$p;distinct;update $c has bill_choice "automatic";$p has bill_status "paused";fetch {{"id":$c.bill_key}};"#,engine.invoice_match(invoice)?)).await?;
         engine.collect_due(invoice,now).await?;
         let binding=engine.read(format!(r#"{} fetch {{"external":$i.bill_external_id}};"#,engine.invoice_match(invoice)?)).await?;
-        let observed=engine.providers.observe(Provider::Stripe,binding[0]["external"].as_str().unwrap()).await?;
+        let observed=providers.observe(Provider::Stripe,binding[0]["external"].as_str().unwrap()).await?;
         ensure!(observed["attempt_count"]==0,"Revoked consent or paused schedule was charged");
         engine.write(format!(r#"{} select $t,$p;distinct;update $p has bill_status "finished";fetch {{"id":$p.bill_key}};"#,engine.invoice_match(invoice)?)).await?;
         let mut other=engine.clone();other.merchant=uuid::Uuid::new_v4().to_string();
         ensure!(other.reconcile(invoice).await.is_err(),"Cross-tenant invoice access");
         let mut wrong=observed.clone();wrong["total"]=json!(101);
-        ensure!(engine.apply_observation(invoice,Provider::Stripe,&wrong).await.is_err(),"Amount mismatch accepted");
+        ensure!(engine.apply_observation(invoice,"stripe",&adapter.observation(&wrong)?).await.is_err(),"Amount mismatch accepted");
         let other_invoice=rows[1]["id"].as_str().unwrap();
-        ensure!(engine.apply_observation(other_invoice,Provider::Stripe,&observed).await.is_err(),"Invoice substitution accepted");
+        ensure!(engine.apply_observation(other_invoice,"stripe",&adapter.observation(&observed)?).await.is_err(),"Invoice substitution accepted");
         // Actual production tick handles both due collection and receipt/reminder delivery.
         let tick=engine.tick().await?;
         ensure!(tick["errors"]==0,"Tick failed: {tick}");
@@ -125,7 +134,7 @@ async fn scheduled_payment_receipt_and_decline_reminder() -> Result<()> {
             ensure!(row["status"]==if success{"paid"}else{"open"},"Unexpected invoice outcome");
             ensure!(row["notice"].as_str().unwrap().ends_with(if success{"-receipt"}else{"-reminder-0"}),"Wrong notice");
             ensure!(row["delivery"].as_str().unwrap().starts_with("accepted:"),"Email not accepted");
-            let observation=engine.providers.observe(Provider::Stripe,row["external"].as_str().unwrap()).await?;
+            let observation=providers.observe(Provider::Stripe,row["external"].as_str().unwrap()).await?;
             ensure!(observation["auto_advance"]==false,"Hidden retries enabled");
             if !success { ensure!(observation["attempt_count"].as_u64()==Some(1),"Duplicate payment attempt"); }
         }
@@ -204,10 +213,15 @@ async fn account_and_invoice_workflow_without_provider_effects() -> Result<()> {
     ] {
         std::env::set_var(key, value);
     }
-    let engine = Engine::configured(Arc::new(TypeDBState {
-        driver: driver.clone(),
-        database: name.clone(),
-    }))?;
+    std::env::set_var("TENANT_NOTIFICATION_PLUGINS_JSON", "[]");
+    std::env::set_var("TENANT_FINANCIAL_SETTINGS_JSON", "[]");
+    let engine = server::plugins::configuration::engine(
+        Arc::new(TypeDBState {
+            driver: driver.clone(),
+            database: name.clone(),
+        }),
+        &merchant,
+    )?;
     database::install(&driver, &name).await?;
     let result = async {
         let tx = driver.transaction(&name, TransactionType::Write).await?;
@@ -231,13 +245,14 @@ async fn account_and_invoice_workflow_without_provider_effects() -> Result<()> {
         let stored = engine.read(format!(r#"{} fetch {{"status":$i.bill_status}};"#,engine.invoice_match(invoice)?)).await?;
         ensure!(stored[0]["status"] == "queued", "Missing provider consumed the invoice claim");
         // Seed a provider observation binding, without contacting any provider.
-        engine.write(format!(r#"{} select $t,$c,$i;distinct;update $c has bill_stripe_id "cus_fixture";$i has bill_provider "stripe",has bill_external_id "in_fixture",has bill_status "open";fetch {{"id":$i.bill_key}};"#,engine.invoice_match(invoice)?)).await?;
-        let observation = json!({"id":"in_fixture","customer":"cus_fixture","currency":"usd","total":500,"metadata":{"business_invoice":invoice},"status":"paid","hosted_invoice_url":"https://invoice.stripe.com/i/fixture"});
-        let mut wrong = observation.clone(); wrong["total"] = json!(501);
-        ensure!(engine.apply_observation(invoice,Provider::Stripe,&wrong).await.is_err(),"Wrong amount accepted");
-        engine.apply_observation(invoice,Provider::Stripe,&observation).await?;
-        let mut stale = observation; stale["status"] = json!("open");
-        engine.apply_observation(invoice,Provider::Stripe,&stale).await?;
+        let bindings=server::billing::billing_schema::quoted(&json!({"stripe":"cus_fixture"}).to_string());
+        engine.write(format!(r#"{} select $t,$c,$i;distinct;update $c has bill_bindings {bindings};$i has bill_provider "stripe",has bill_external_id "in_fixture",has bill_status "open";fetch {{"id":$i.bill_key}};"#,engine.invoice_match(invoice)?)).await?;
+        let observation=server::finance::InvoiceObservation{external_id:"in_fixture".into(),customer:"cus_fixture".into(),currency:"USD".into(),amount_minor:500,invoice_id:invoice.into(),state:server::finance::InvoiceState::Paid,payment_url:"https://invoice.stripe.com/i/fixture".into()};
+        let mut wrong=observation.clone();wrong.amount_minor=501;
+        ensure!(engine.apply_observation(invoice,"stripe",&wrong).await.is_err(),"Wrong amount accepted");
+        engine.apply_observation(invoice,"stripe",&observation).await?;
+        let mut stale=observation;stale.state=server::finance::InvoiceState::Open;
+        engine.apply_observation(invoice,"stripe",&stale).await?;
         let stored = engine.read(format!(r#"{} fetch {{"status":$i.bill_status}};"#,engine.invoice_match(invoice)?)).await?;
         ensure!(stored[0]["status"] == "paid", "Stale observation reopened a paid invoice");
         ensure!(engine.notify_invoice(invoice).await? == 0, "Disabled mail attempted delivery");

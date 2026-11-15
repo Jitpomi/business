@@ -6,7 +6,7 @@ use super::{
 use anyhow::{ensure, Result};
 impl Engine {
     pub async fn notify_invoice(&self, id: &str) -> Result<usize> {
-        if std::env::var("BILLING_MAIL_ENABLED").as_deref() != Ok("true") {
+        if self.runtime.notification.is_none() {
             return Ok(0);
         }
         let archived = self.read(format!(r#"{} (invoice:$i,notice:$archive) isa bill_notice_owner;$archive has bill_status "imported-history";fetch {{"id":$i.bill_key}};"#,self.invoice_match(id)?)).await?;
@@ -21,9 +21,7 @@ impl Engine {
         let now = chrono::Utc::now().timestamp();
         let state = string(row, "status")?;
         let due = number(row, "due")?;
-        let interval = std::env::var("BILLING_REMINDER_DAYS")
-            .unwrap_or("7".into())
-            .parse::<i64>()?;
+        let interval = self.runtime.reminder_days;
         ensure!(
             (1..=30).contains(&interval),
             "Reminder interval must be 1..30 days"
@@ -37,18 +35,7 @@ impl Engine {
             return Ok(0);
         }
         let recipient = string(row, "email")?;
-        if !self.providers.live {
-            ensure!(
-                std::env::var("BILLING_TEST_EMAIL").as_deref() == Ok(recipient),
-                "Sandbox emails require an explicitly allowed test recipient"
-            );
-        }
-        let from = std::env::var("BILLING_EMAIL_FROM")?;
-        let token = std::env::var("RESEND_API_KEY")?;
-        ensure!(
-            !token.is_empty() && !from.is_empty(),
-            "Mail is not configured"
-        );
+        self.runtime.validate_delivery(recipient)?;
         let amount = number(row, "amount")?;
         let description = string(row, "description")?;
         let url = string(row, "url")?;
@@ -57,7 +44,7 @@ impl Engine {
         } else {
             (if now>=due {"Payment reminder"} else {"Your invoice"},format!("Your invoice {id} for {description} is {}.\nAmount: USD {}.{:02}\nDue: {} UTC\nView and pay securely: {url}\nIf you need more time, please contact us. If payment is already processing, no further action is needed.\n",if now>=due{"due"}else{"ready"},amount/100,amount%100,chrono::DateTime::from_timestamp(due,0).ok_or_else(||anyhow::anyhow!("Invalid date"))?.format("%Y-%m-%d")))
         };
-        let subject = if self.providers.live {
+        let subject = if !self.runtime.sandbox {
             subject.to_owned()
         } else {
             format!("[TEST — no real payment] {subject}")
@@ -65,8 +52,13 @@ impl Engine {
         self.write(format!(r#"{} $i has bill_status {};not {{$n isa bill_notice,has bill_key {};}};select $t,$i;distinct;
    insert $n isa bill_notice,has bill_key {},has bill_status "sending",has bill_updated {now};(invoice:$i,notice:$n) isa bill_notice_owner;fetch {{"id":$n.bill_key}};"#,self.invoice_match(id)?,quoted(state),quoted(&key),quoted(&key))).await?;
         let result = self
-            .providers
-            .email(&token, &from, recipient, &subject, &body, &key)
+            .runtime
+            .send(crate::finance::Message {
+                to: recipient.into(),
+                subject,
+                text: body,
+                key: key.clone(),
+            })
             .await;
         let status = match &result {
             Ok(id) => format!("accepted:{id}"),
@@ -77,7 +69,7 @@ impl Engine {
         Ok(1)
     }
     pub async fn send_notices(&self) -> Result<(usize, usize)> {
-        if std::env::var("BILLING_MAIL_ENABLED").as_deref() != Ok("true") {
+        if self.runtime.notification.is_none() {
             return Ok((0, 0));
         }
         let rows = self.notification_candidates().await?;

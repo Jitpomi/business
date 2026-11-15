@@ -21,12 +21,24 @@ pub async fn build() -> Result<Backend> {
     let mut builder = dog_core::DogAppBuilder::new();
     crate::config::config(&mut builder)?;
     crate::typedb::TypeDBState::initialize(&mut builder).await?;
-    compose(builder)
+    compose(builder, crate::plugins::configuration::registry()?)
 }
 /// The same composition used by the executable, tools and integration tests.
 pub fn build_with_state(
     state: Arc<crate::typedb::TypeDBState>,
     jwt_secret: String,
+) -> Result<Backend> {
+    build_with_plugins(
+        state,
+        jwt_secret,
+        crate::plugins::configuration::registry()?,
+    )
+}
+/// Hosts can register any trusted plugin implementation without editing business services.
+pub fn build_with_plugins(
+    state: Arc<crate::typedb::TypeDBState>,
+    jwt_secret: String,
+    registry: Arc<crate::finance::TenantRegistry>,
 ) -> Result<Backend> {
     anyhow::ensure!(
         jwt_secret.trim().len() >= 32,
@@ -35,14 +47,18 @@ pub fn build_with_state(
     let mut builder = dog_core::DogAppBuilder::new();
     builder.set("auth.jwt.secret", jwt_secret);
     builder.set("typedb", state);
-    compose(builder)
+    compose(builder, registry)
 }
-fn compose(mut builder: dog_core::DogAppBuilder<Value, BusinessParams>) -> Result<Backend> {
+fn compose(
+    mut builder: dog_core::DogAppBuilder<Value, BusinessParams>,
+    registry: Arc<crate::finance::TenantRegistry>,
+) -> Result<Backend> {
     let state: Arc<crate::typedb::TypeDBState> = builder
         .get("typedb")
         .ok_or_else(|| anyhow::anyhow!("TypeDB state missing"))?;
+    builder.set("tenant.plugins", registry.clone());
     let auth = crate::auth::strategies(&mut builder, state.clone())?;
-    crate::services::configure(&mut builder, auth.clone(), state)?;
+    crate::services::configure(&mut builder, auth.clone(), state, registry)?;
     let app = builder.build();
     auth.setup(app.clone());
     let http = app.clone().into_service(
@@ -58,8 +74,7 @@ pub fn router(http: DogHttpService<Value, BusinessParams>) -> axum::Router {
         .route_service("/authentication", endpoint(http.clone()))
         .route_service("/data", endpoint(http.clone()))
         .route_service("/portal", endpoint(http.clone()))
-        .merge(crate::mercury::router(http.clone()))
-        .merge(crate::stripe::router(http))
+        .merge(crate::plugins::routes(http))
         .route_layer(axum::middleware::from_fn(crate::admission::guard))
         .route(
             "/queries/data/{name}",

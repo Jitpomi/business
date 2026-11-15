@@ -107,7 +107,7 @@ pub async fn check(e: &Engine) -> Result<()> {
     ensure!(
         call(
             &r,
-            buyer,
+            &e.merchant,
             buyer_token,
             "/portal",
             json!({"action":"invite","name":"denied","email":"denied@example.com"})

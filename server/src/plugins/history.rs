@@ -1,9 +1,6 @@
 //! Read-only provider history. Refund/dispute amounts belong to payments and are
 //! not subtracted from invoice balances: Stripe permits shared payment allocations.
-use super::{
-    billing_schema::Provider,
-    providers::{field, safe_id, Providers},
-};
+use super::builtin_transport::{field, safe_id, Provider, Providers};
 use anyhow::{ensure, Result};
 use reqwest::Method;
 use serde_json::{json, Value};

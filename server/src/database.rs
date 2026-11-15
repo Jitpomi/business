@@ -31,7 +31,8 @@ pub fn target(name: &str) -> Result<()> {
 }
 pub async fn verify(driver: &TypeDBDriver, name: &str) -> Result<()> {
     let schema = driver.databases().get(name).await?.schema().await?;
-    ensure!(schema.contains("dog.security.scope")&&schema.contains("scope_resource")&&schema.contains("credential_version")&&schema.contains("bootstrap_record"),"Database is not the canonical Business model; provision a new target explicitly. Startup will not migrate or reset it");
+    let compact: String = schema.chars().filter(|c| !c.is_whitespace()).collect();
+    ensure!(schema.contains("dog.security.scope")&&schema.contains("scope_resource")&&schema.contains("credential_version")&&schema.contains("bootstrap_record")&&compact.contains("ownsbill_bindings@card(1..1)")&&compact.contains("ownsbill_method_plugin@card(1..1)"),"Database is not the canonical Business model; provision a new target or follow the explicit financial-plugin migration guide. Startup will not migrate or reset it");
     Ok(())
 }
 pub async fn install(driver: &TypeDBDriver, name: &str) -> Result<()> {

@@ -2,28 +2,53 @@
 //! Ordinary billing CRUD remains in the schema-policy data service.
 use super::{portal_schema as schema, portal_shared};
 use crate::{
-    billing::{
-        billing_schema::{quoted, Provider},
-        engine::Engine,
-        providers::pairs,
-    },
+    billing::{billing_schema::quoted, engine::Engine},
     services::BusinessParams,
     typedb::TypeDBState,
 };
 use anyhow::{ensure, Result};
 use dog_core::{DogError, DogService, ServiceCapabilities, TenantContext};
-use reqwest::Method;
 use serde_json::{json, Value};
 use std::sync::Arc;
 pub struct PortalService {
     state: Arc<TypeDBState>,
+    registry: Arc<crate::finance::TenantRegistry>,
 }
 impl PortalService {
-    pub fn new(state: Arc<TypeDBState>) -> Self {
-        Self { state }
+    pub fn new(state: Arc<TypeDBState>, registry: Arc<crate::finance::TenantRegistry>) -> Self {
+        Self { state, registry }
     }
-    fn engine(&self) -> Result<Engine> {
-        Engine::configured(self.state.clone())
+    fn engine(&self, tenant: &str) -> Result<Engine> {
+        let runtime = self
+            .registry
+            .get(tenant)
+            .unwrap_or_else(|_| Arc::new(crate::finance::TenantRuntime::new(tenant.into(), true)));
+        Engine::new(self.state.clone(), tenant, runtime)
+    }
+    async fn engine_for(&self, ctx: &TenantContext, actor: &str, data: &Value) -> Result<Engine> {
+        if matches!(
+            data["action"].as_str(),
+            Some("invite" | "renew_invite" | "revoke_invite")
+        ) {
+            return self.engine(&ctx.tenant_id.0);
+        }
+        let selector = if let Some(id) = data["invoice_id"].as_str() {
+            format!("(customer:$c,plan:$p) isa bill_plan_owner;(plan:$p,invoice:$i) isa bill_invoice_owner;$i has bill_key {};",quoted(&crate::billing::billing_schema::id(id)?))
+        } else {
+            format!(
+                "$c has bill_key {};",
+                quoted(&crate::billing::billing_schema::id(schema::field(
+                    data,
+                    "customer_id"
+                )?)?)
+            )
+        };
+        let e = self.engine(&ctx.tenant_id.0)?;
+        let rows=e.read(format!("match $viewer isa person,has identity_id {};$scope isa tenant,has tenant_id {};$merchant isa tenant;$c isa bill_customer;(merchant:$merchant,customer:$c) isa bill_account;{selector}let $allowed=bill_reader($viewer,$scope,$c,{});$allowed==true;select $merchant;distinct;fetch {{'merchant':$merchant.tenant_id}};",quoted(actor),quoted(&ctx.tenant_id.0),now())).await?;
+        if rows.len() != 1 {
+            return Err(DogError::forbidden("Billing account unavailable").into_anyhow());
+        }
+        self.engine(schema::field(&rows[0], "merchant")?)
     }
     fn permission(ctx: &TenantContext, actor: &str, customer: &str, kind: &str) -> Result<String> {
         ensure!(
@@ -60,18 +85,24 @@ impl PortalService {
         }
         Ok(permission)
     }
-    async fn payment(&self, e: &Engine, customer: &Value, method: &str) -> Result<Value> {
-        crate::billing::providers::safe_id(method)?;
-        let p = e
-            .providers
-            .stripe(Method::GET, &format!("/payment_methods/{method}"), "", &[])
+    async fn payment(
+        &self,
+        e: &Engine,
+        customer: &Value,
+        method: &str,
+    ) -> Result<crate::finance::SavedMethod> {
+        let plugin_id = e.method_plugin(customer)?;
+        let external = Engine::binding(customer, &plugin_id)?;
+        let saved = e
+            .runtime
+            .financial(&plugin_id)?
+            .method(&external, method)
             .await?;
         ensure!(
-            p["customer"] == customer["stripe_id"]
-                && matches!(p["type"].as_str(), Some("card" | "us_bank_account")),
-            "Payment method does not belong to this account"
+            saved.customer == external && saved.id == method,
+            "Saved method binding mismatch"
         );
-        Ok(p)
+        Ok(saved)
     }
 }
 fn now() -> String {
@@ -87,7 +118,7 @@ impl DogService<Value, BusinessParams> for PortalService {
     }
     async fn find(&self, ctx: &TenantContext, params: BusinessParams) -> Result<Vec<Value>> {
         let actor = schema::actor(ctx, &params)?;
-        let e = self.engine()?;
+        let e = self.engine(&ctx.tenant_id.0)?;
         let query = format!(
             r#"match $u isa person,has identity_id {}; $t isa tenant,has tenant_id {};let $active=active_member($u,$t,{});$active==true;let $owner=role_at_least($u,$t,"owner",{});fetch {{"email":$u.email,"tenant_id":$t.tenant_id,"owner":$owner,"merchant_id":{},"live":{},"companies":[match $company isa tenant;let $member=active_member($u,$company,{});$member==true;fetch {{"id":$company.tenant_id,"domain":$company.name}};]}};"#,
             quoted(&actor),
@@ -95,7 +126,7 @@ impl DogService<Value, BusinessParams> for PortalService {
             now(),
             now(),
             quoted(&e.merchant),
-            e.providers.live,
+            !e.runtime.sandbox,
             now()
         );
         e.read(query).await
@@ -107,7 +138,7 @@ impl DogService<Value, BusinessParams> for PortalService {
         params: BusinessParams,
     ) -> Result<Value> {
         let actor = schema::actor(ctx, &params)?;
-        let e = self.engine()?;
+        let e = self.engine_for(ctx, &actor, &data).await?;
         let action = schema::field(&data, "action")?;
         if matches!(action, "invite" | "renew_invite" | "revoke_invite") {
             ensure!(ctx.tenant_id.0 == e.merchant, "Merchant account required");
@@ -144,122 +175,90 @@ impl DogService<Value, BusinessParams> for PortalService {
                 .await?;
             ensure!(binding.len() == 1, "Invoice binding unavailable");
             let external = schema::field(&binding[0], "external")?;
-            let provider: Provider = serde_json::from_value(row["provider"].clone())?;
-            if provider == Provider::Mercury {
-                return e.providers.payment_history(provider, &json!({})).await;
+            let plugin_id = schema::field(row, "provider")?;
+            let plugin = e.runtime.financial(plugin_id)?;
+            if !plugin.capabilities().payment_history {
+                return Ok(
+                    json!({"supported":false,"message":"Detailed payment history is not supported by this financial plugin."}),
+                );
             }
-            let invoice = e.providers.observe(provider, external).await?;
-            e.validate_observation(&id, provider, &invoice).await?;
-            return e.providers.payment_history(provider, &invoice).await;
+            let invoice = plugin.observe_invoice(external).await?;
+            e.validate_observation(&id, plugin_id, &invoice).await?;
+            return plugin.history(external).await;
         }
+
         let id = crate::billing::billing_schema::id(schema::field(&data, "customer_id")?)?;
         let permission = self.allowed(&e, ctx, &actor, &id, "buyer").await?;
         let customer = e.customer(&id).await?;
-        let stripe = schema::field(&customer, "stripe_id").unwrap_or("");
+        let bindings: std::collections::HashMap<String, String> =
+            serde_json::from_str(schema::field(&customer, "bindings")?)?;
+        if action == "payment_methods" && bindings.values().all(String::is_empty) {
+            return Ok(json!({"methods":[]}));
+        }
+        let plugin_id = e.method_plugin(&customer)?;
+        let plugin = e.runtime.financial(&plugin_id)?;
+        plugin.ready()?;
+        ensure!(
+            plugin.capabilities().saved_methods,
+            "Saved methods unsupported by this financial plugin"
+        );
+        let external = Engine::binding(&customer, &plugin_id)?;
         match action {
             "payment_methods" => {
-                if stripe.is_empty() {
+                if external.is_empty() {
                     return Ok(json!({"methods":[]}));
                 }
-                let mut methods = Vec::new();
-                for kind in ["card", "us_bank_account"] {
-                    let list = e
-                        .providers
-                        .stripe(
-                            Method::GET,
-                            &format!("/customers/{stripe}/payment_methods"),
-                            "",
-                            &pairs(&[("type", kind), ("limit", "100")]),
-                        )
+                let mut methods = vec![];
+                for method in plugin.methods(&external).await? {
+                    ensure!(
+                        method.customer == external,
+                        "Payment method customer mismatch"
+                    );
+                    let pending = e
+                        .read(format!(
+                            "{} $c has bill_removed_method {};fetch {{'id':$c.bill_key}};",
+                            e.customer_match(&id)?,
+                            quoted(&format!("{plugin_id}:{}", method.id))
+                        ))
                         .await?;
-                    for p in list["data"]
-                        .as_array()
-                        .ok_or_else(|| anyhow::anyhow!("Invalid payment methods"))?
-                    {
-                        ensure!(p["customer"] == stripe, "Wrong customer binding");
-                        let part = &p[kind];
-                        let pending = e
-                            .read(format!(
-                                "{} $c has bill_removed_method {};fetch {{'id':$c.bill_key}};",
-                                e.customer_match(&id)?,
-                                quoted(schema::field(p, "id")?)
-                            ))
-                            .await?;
-                        methods.push(json!({"id":p["id"],"type":kind,"brand":part["brand"],"bank_name":part["bank_name"],"last4":part["last4"],"exp_month":part["exp_month"],"exp_year":part["exp_year"],"is_default":p["id"]==customer["payment_method"],"removal_pending":!pending.is_empty(),"automatic_enabled":pending.is_empty() && p["id"]==customer["payment_method"] && customer["choice"]=="automatic" && customer["consent"]==customer["revision"] && customer["policy"]!="manual"}));
-                    }
+                    let default = customer["payment_method"] == method.id
+                        && customer["method_plugin"] == plugin_id;
+                    let mut value = serde_json::to_value(method)?;
+                    value["plugin_id"] = json!(plugin_id);
+                    value["is_default"] = json!(default);
+                    value["removal_pending"] = json!(!pending.is_empty());
+                    value["automatic_enabled"] = json!(
+                        pending.is_empty()
+                            && default
+                            && customer["choice"] == "automatic"
+                            && customer["consent"] == customer["revision"]
+                            && customer["policy"] != "manual"
+                    );
+                    methods.push(value);
                 }
                 return Ok(json!({"methods":methods}));
             }
-            "setup_card" => {
+            "setup_card" | "setup_method" => {
                 ensure!(data["save_only"] == true, "Save a payment method first");
-                let external = e.ensure_customer(&customer, Provider::Stripe).await?;
-                let success = format!(
-                    "https://jitpomi.com/account/?setup={{CHECKOUT_SESSION_ID}}&customer={id}"
-                );
-                let key = format!("save-method-{}", uuid::Uuid::new_v4());
-                let method = if data["bank_account"] == true {
-                    "us_bank_account"
-                } else {
-                    "card"
-                };
-                let mut form = pairs(&[
-                    ("mode", "setup"),
-                    ("customer", &external),
-                    ("currency", "usd"),
-                    ("payment_method_types[0]", method),
-                    ("success_url", &success),
-                    ("cancel_url", "https://jitpomi.com/account/"),
-                    ("metadata[business_customer]", &id),
-                    ("metadata[purpose]", "save_only"),
-                ]);
-                if method == "us_bank_account" {
-                    form.extend(pairs(&[("payment_method_options[us_bank_account][financial_connections][permissions][0]","payment_method")]));
-                }
-                let result = e
-                    .providers
-                    .stripe(Method::POST, "/checkout/sessions", &key, &form)
-                    .await?;
-                let url = schema::field(&result, "url")?;
-                ensure!(
-                    url.starts_with("https://checkout.stripe.com/"),
-                    "Unexpected checkout URL"
-                );
-                return Ok(json!({"url":url}));
-            }
-            "confirm_card" => {
-                let session = schema::field(&data, "session_id")?;
-                crate::billing::providers::safe_id(session)?;
-                let checkout = e
-                    .providers
-                    .stripe(
-                        Method::GET,
-                        &format!("/checkout/sessions/{session}"),
-                        "",
-                        &[],
+                let external = e.ensure_customer(&customer, &plugin_id).await?;
+                let url = plugin
+                    .setup_method(
+                        &external,
+                        &id,
+                        data["bank_account"] == true,
+                        "https://jitpomi.com/account/",
+                        &format!("save-method-{}", uuid::Uuid::new_v4()),
                     )
                     .await?;
-                ensure!(
-                    checkout["mode"] == "setup"
-                        && checkout["status"] == "complete"
-                        && checkout["customer"] == stripe
-                        && checkout["metadata"]["business_customer"] == id
-                        && checkout["metadata"]["purpose"] == "save_only",
-                    "Setup not complete for this account"
-                );
-                let intent = schema::field(&checkout, "setup_intent")?;
-                crate::billing::providers::safe_id(intent)?;
-                let setup = e
-                    .providers
-                    .stripe(Method::GET, &format!("/setup_intents/{intent}"), "", &[])
+                return Ok(json!({"url":url}));
+            }
+            "confirm_card" | "confirm_method" => {
+                let method = plugin
+                    .confirm_method(&external, &id, schema::field(&data, "session_id")?)
                     .await?;
-                ensure!(
-                    setup["status"] == "succeeded" && setup["customer"] == stripe,
-                    "Payment method is not verified yet"
-                );
-                let method = schema::field(&setup, "payment_method")?;
-                self.payment(&e, &customer, method).await?;
+                self.payment(&e, &customer, &method).await?;
                 if customer["payment_method"] == "" {
-                    e.write(format!(r#"{} {permission} $c has bill_payment_method "",has bill_revision {};select $t,$c;distinct;update $c has bill_payment_method {},has bill_revision {},has bill_consent "",has bill_choice "manual";fetch {{"id":$c.bill_key}};"#,e.customer_match(&id)?,quoted(schema::field(&customer,"revision")?),quoted(method),quoted(&uuid::Uuid::new_v4().to_string()))).await?;
+                    e.write(format!(r#"{} {permission} $c has bill_payment_method "",has bill_revision {};select $t,$c;distinct;update $c has bill_payment_method {},has bill_method_plugin {},has bill_revision {},has bill_consent "",has bill_choice "manual";fetch {{"id":$c.bill_key}};"#,e.customer_match(&id)?,quoted(schema::field(&customer,"revision")?),quoted(&method),quoted(&plugin_id),quoted(&uuid::Uuid::new_v4().to_string()))).await?;
                 }
                 return Ok(json!({"setup_purpose":"save_only"}));
             }
@@ -274,6 +273,10 @@ impl DogService<Value, BusinessParams> for PortalService {
         let next = uuid::Uuid::new_v4().to_string();
         if action == "authorize_saved" {
             ensure!(
+                plugin.capabilities().automatic_collection,
+                "Automatic collection unsupported by this financial plugin"
+            );
+            ensure!(
                 customer["policy"] != "manual",
                 "Automatic payments are not available for this account"
             );
@@ -283,7 +286,7 @@ impl DogService<Value, BusinessParams> for PortalService {
                 .read(format!(
                     "{} $c has bill_removed_method {};fetch {{'id':$c.bill_key}};",
                     e.customer_match(&id)?,
-                    quoted(method)
+                    quoted(&format!("{plugin_id}:{method}"))
                 ))
                 .await?;
             ensure!(removed.is_empty(), "Payment method is being removed");
@@ -298,11 +301,11 @@ impl DogService<Value, BusinessParams> for PortalService {
                 .read(format!(
                     "{} $c has bill_removed_method {};fetch {{'id':$c.bill_key}};",
                     e.customer_match(&id)?,
-                    quoted(method)
+                    quoted(&format!("{plugin_id}:{method}"))
                 ))
                 .await?;
             ensure!(removed.is_empty(), "Payment method is being removed");
-            e.write(format!(r#"{} {permission} $c has bill_revision {};select $t,$c;distinct;update $c has bill_payment_method {},has bill_choice "manual",has bill_consent "",has bill_revision {};fetch {{"id":$c.bill_key}};"#,e.customer_match(&id)?,quoted(revision),quoted(method),quoted(&next))).await?;
+            e.write(format!(r#"{} {permission} $c has bill_revision {};select $t,$c;distinct;update $c has bill_payment_method {},has bill_method_plugin {},has bill_choice "manual",has bill_consent "",has bill_revision {};fetch {{"id":$c.bill_key}};"#,e.customer_match(&id)?,quoted(revision),quoted(method),quoted(&plugin_id),quoted(&next))).await?;
         } else {
             let default = customer["payment_method"] == method;
             let update = if default {
@@ -313,14 +316,9 @@ impl DogService<Value, BusinessParams> for PortalService {
             } else {
                 format!("update $c has bill_revision {};", quoted(&next))
             };
-            e.write(format!(r#"{} {permission} $c has bill_revision {};select $t,$c;distinct;{update} put $c has bill_removed_method {};fetch {{"id":$c.bill_key}};"#,e.customer_match(&id)?,quoted(revision),quoted(method))).await?;
-            e.providers
-                .stripe(
-                    Method::POST,
-                    &format!("/payment_methods/{method}/detach"),
-                    &format!("detach-{id}-{method}"),
-                    &[],
-                )
+            e.write(format!(r#"{} {permission} $c has bill_revision {};select $t,$c;distinct;{update} put $c has bill_removed_method {};fetch {{"id":$c.bill_key}};"#,e.customer_match(&id)?,quoted(revision),quoted(&format!("{plugin_id}:{method}")))).await?;
+            plugin
+                .detach_method(method, &format!("detach-{id}-{plugin_id}-{method}"))
                 .await?;
         }
         Ok(json!({"updated":true}))

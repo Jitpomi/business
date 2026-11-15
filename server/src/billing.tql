@@ -5,7 +5,9 @@ attribute bill_key, value string;
 attribute bill_email, value string;
 attribute bill_policy, value string @values("customer", "manual", "automatic");
 attribute bill_choice, value string @values("manual", "automatic");
-attribute bill_provider, value string @values("mercury", "stripe");
+attribute bill_provider, value string;
+attribute bill_bindings @meta("dog.security.hidden", "true"), value string;
+attribute bill_method_plugin @meta("dog.security.hidden", "true"), value string;
 attribute bill_status, value string;
 attribute bill_amount, value integer @range(50..99999999);
 attribute bill_due_days, value integer @range(0..90);
@@ -26,7 +28,8 @@ attribute bill_history @meta("dog.security.hidden", "true"), value string;
 entity bill_customer,
   owns bill_key @key, owns name @card(1), owns bill_email @card(1),
   owns bill_policy @card(1), owns bill_choice @card(1), owns bill_provider @card(1),
-  owns bill_stripe_id @card(1), owns bill_mercury_id @card(1),
+  owns bill_stripe_id @card(0..1), owns bill_mercury_id @card(0..1),
+  owns bill_bindings @card(1), owns bill_method_plugin @card(1),
   owns bill_payment_method @card(1), owns bill_consent @card(1), owns bill_revision @card(1),
   owns bill_removed_method @card(0..);
 relation bill_account, relates merchant @card(1), relates buyer @card(1), relates customer @card(1);

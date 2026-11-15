@@ -9,7 +9,7 @@ pub struct BeforeResolve;
 #[async_trait]
 impl DogBeforeHook<Value, BusinessParams> for BeforeResolve {
     async fn run(&self, ctx: &mut HookContext<Value, BusinessParams>) -> Result<()> {
-        ctx.params.inner.stripe_access = None;
+        ctx.params.inner.plugin_access.remove("stripe");
         if ctx
             .params
             .provider

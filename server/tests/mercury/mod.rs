@@ -335,17 +335,24 @@ async fn tenant_authentication_permissions_and_forgery_fail_before_provider() ->
     assert!(service.get(ctx.clone(), ID, invalid).await.is_err());
     assert_eq!(h.count(), 0);
     let mut p = h.params("alice", "tenant-a").await?;
-    p.inner.mercury_access = Some(Arc::new(MercuryAccess {
-        tenant: "tenant-a".into(),
-        actor: "alice".into(),
-        token: "do-not-serialize".into(),
-        environment: Environment::Sandbox,
-        write: false,
-    }));
+    p.inner.plugin_access.set(
+        "mercury",
+        Arc::new(MercuryAccess {
+            tenant: "tenant-a".into(),
+            actor: "alice".into(),
+            token: "do-not-serialize".into(),
+            environment: Environment::Sandbox,
+            write: false,
+        }),
+    );
     let serialized = serde_json::to_string(&p)?;
-    assert!(!serialized.contains("do-not-serialize") && !serialized.contains("mercury_access"));
+    assert!(!serialized.contains("do-not-serialize") && !serialized.contains("plugin_access"));
     let decoded: BusinessParams = serde_json::from_str(&serialized)?;
-    assert!(decoded.inner.mercury_access.is_none());
+    assert!(decoded
+        .inner
+        .plugin_access
+        .get::<MercuryAccess>("mercury")
+        .is_none());
     Ok(())
 }
 

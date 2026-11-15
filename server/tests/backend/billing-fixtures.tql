@@ -4,5 +4,6 @@ insert
   $c isa bill_customer, has bill_key "customer-a", has name "Native customer",
     has bill_email "dave@example.com", has bill_policy "customer", has bill_choice "manual",
     has bill_provider "stripe", has bill_stripe_id "cus_private", has bill_mercury_id "",
+    has bill_bindings "{\"stripe\":\"cus_private\"}", has bill_method_plugin "stripe",
     has bill_payment_method "pm_private", has bill_consent "", has bill_revision "initial";
   (merchant:$seller,buyer:$buyer,customer:$c) isa bill_account;
