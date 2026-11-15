@@ -35,3 +35,7 @@ pub fn verify_signature(secret: &str, header: &str, body: &[u8], now: i64) -> Re
     }
     anyhow::bail!("Invalid signature")
 }
+
+#[cfg(test)]
+#[path = "../../tests/billing/http.rs"]
+mod tests;

@@ -17,12 +17,6 @@ pub enum Policy {
 }
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
-pub enum Provider {
-    Mercury,
-    Stripe,
-}
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
 pub enum Interval {
     Once,
     Week,

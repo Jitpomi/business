@@ -113,5 +113,39 @@ fn every_service_uses_the_common_dogrs_modules() -> Result<()> {
         }
         Ok(())
     }
-    walk(&root)
+    walk(&root)?;
+    walk(&Path::new(env!("CARGO_MANIFEST_DIR")).join("src/plugins"))
+}
+
+#[test]
+fn business_rules_do_not_import_vendor_protocols_or_credentials() -> Result<()> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut files = Vec::new();
+    for dir in ["src/finance", "src/billing", "src/services/portal"] {
+        rust_files(&root.join(dir), &mut files)?;
+    }
+    files.push(root.join("src/services/types.rs"));
+    for file in files {
+        let source = std::fs::read_to_string(&file)?;
+        for forbidden in [
+            "Provider::Stripe",
+            "Provider::Mercury",
+            "STRIPE_",
+            "MERCURY_",
+            "RESEND_",
+            "plugins::stripe",
+            "plugins::mercury",
+            "reqwest::Client",
+            "reqwest::Method",
+            "bill_stripe_id",
+            "bill_mercury_id",
+        ] {
+            ensure!(
+                !source.contains(forbidden),
+                "Vendor dependency {forbidden} in {}",
+                file.display()
+            );
+        }
+    }
+    Ok(())
 }

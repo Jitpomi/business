@@ -1,5 +1,11 @@
 //! External payment calls. Application data never includes PAN/CVC or raw card forms.
-use super::billing_schema::{Mode, Provider};
+use crate::billing::billing_schema::Mode;
+#[derive(Clone, Copy, Debug, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Provider {
+    Mercury,
+    Stripe,
+}
 use anyhow::{ensure, Result};
 use reqwest::{Client, Method};
 use serde_json::{json, Value};
@@ -13,14 +19,15 @@ pub struct Providers {
     destination: Option<String>,
 }
 impl Providers {
-    pub fn configured(merchant: &str) -> Result<Self> {
-        use crate::services::mercury::auth_mercury::auth_mercury_schema as mercury;
-        use crate::services::stripe::auth_stripe::auth_stripe_schema as stripe;
-        let stripes: Vec<stripe::Connection> =
-            serde_json::from_str(&std::env::var("STRIPE_CONNECTIONS_JSON").unwrap_or("[]".into()))?;
-        let mercuries: Vec<mercury::Connection> = serde_json::from_str(
-            &std::env::var("MERCURY_CONNECTIONS_JSON").unwrap_or("[]".into()),
-        )?;
+    pub fn new(
+        merchant: &str,
+        stripes: Vec<crate::plugins::stripe::auth_stripe::auth_stripe_schema::Connection>,
+        mercuries: Vec<crate::plugins::mercury::auth_mercury::auth_mercury_schema::Connection>,
+        live: bool,
+        destination: Option<String>,
+    ) -> Result<Self> {
+        use crate::plugins::mercury::auth_mercury::auth_mercury_schema as mercury;
+        use crate::plugins::stripe::auth_stripe::auth_stripe_schema as stripe;
         stripe::validate_connections(&stripes)?;
         mercury::validate_connections(&mercuries)?;
         // Read-only proxy connections are not billing executors. Keep them
@@ -32,7 +39,6 @@ impl Providers {
         let mercury = mercuries
             .into_iter()
             .find(|c| c.tenant_id == merchant && c.write);
-        let live = std::env::var("BILLING_LIVE").as_deref() == Ok("true");
         if let Some(c) = &stripe {
             ensure!(
                 c.write && matches!(c.environment, stripe::Environment::Live) == live,
@@ -60,7 +66,7 @@ impl Providers {
             connected_account,
             stripe_token: stripe.map(|c| c.token),
             mercury_token: mercury.map(|c| c.token),
-            destination: std::env::var("BILLING_MERCURY_DESTINATION").ok(),
+            destination,
         })
     }
     pub async fn stripe(
@@ -291,30 +297,6 @@ impl Providers {
             &pairs(&[("payment_method", card), ("off_session", "true")]),
         )
         .await
-    }
-    pub async fn email(
-        &self,
-        token: &str,
-        from: &str,
-        to: &str,
-        subject: &str,
-        body: &str,
-        key: &str,
-    ) -> Result<String> {
-        let response = self
-            .http
-            .post("https://api.resend.com/emails")
-            .bearer_auth(token)
-            .header("Idempotency-Key", key)
-            .json(&json!({"from":from,"to":[to],"subject":subject,"text":body}))
-            .send()
-            .await?;
-        ensure!(
-            response.status().is_success(),
-            "Email send outcome requires reconciliation"
-        );
-        let value: Value = response.json().await?;
-        Ok(field(&value, "id")?.into())
     }
     pub async fn observe(&self, provider: Provider, id: &str) -> Result<Value> {
         safe_id(id)?;

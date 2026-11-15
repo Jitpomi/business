@@ -10,7 +10,7 @@ pub struct ResolveCredentials;
 #[async_trait]
 impl DogBeforeHook<Value, BusinessParams> for ResolveCredentials {
     async fn run(&self, ctx: &mut HookContext<Value, BusinessParams>) -> Result<()> {
-        ctx.params.inner.stripe_access = None;
+        ctx.params.inner.plugin_access.remove("stripe");
         let write = !matches!(
             ctx.method,
             ServiceMethodKind::Find
@@ -32,8 +32,10 @@ impl DogBeforeHook<Value, BusinessParams> for ResolveCredentials {
                 params,
             )
             .await?;
-        ctx.params.inner.stripe_access =
-            Some(StripeAccess::from_result(result, &ctx.tenant, &ctx.params)?);
+        ctx.params.inner.plugin_access.set(
+            "stripe",
+            StripeAccess::from_result(result, &ctx.tenant, &ctx.params)?,
+        );
         Ok(())
     }
 }

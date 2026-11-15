@@ -215,7 +215,7 @@ async fn run() -> Result<()> {
         out.query(format!(r#"match $t isa tenant,has tenant_id {};$u isa person,has identity_id {};insert (tenant:$t,member:$u) isa membership,has membership_role {},has start_at {start}{end};"#,q(tid),q(id),q(s(u,"role")?))).await?;
     }
     for c in &customers {
-        out.query(format!(r#"match $m isa tenant,has tenant_id "{NEW}";$b isa tenant,has tenant_id {};insert $c isa bill_customer{},has bill_choice "manual",has bill_consent "",has bill_revision "migration-v1";(merchant:$m,buyer:$b,customer:$c) isa bill_account;"#,q(s(c,"buyer")?),attrs(c,&[("id","bill_key"),("name","name"),("email","bill_email"),("policy","bill_policy"),("provider","bill_provider"),("stripe","bill_stripe_id"),("mercury","bill_mercury_id"),("method","bill_payment_method")])?)).await?;
+        out.query(format!(r#"match $m isa tenant,has tenant_id "{NEW}";$b isa tenant,has tenant_id {};insert $c isa bill_customer{},has bill_choice "manual",has bill_bindings {},has bill_method_plugin "stripe",has bill_consent "",has bill_revision "migration-v1";(merchant:$m,buyer:$b,customer:$c) isa bill_account;"#,q(s(c,"buyer")?),attrs(c,&[("id","bill_key"),("name","name"),("email","bill_email"),("policy","bill_policy"),("provider","bill_provider"),("stripe","bill_stripe_id"),("mercury","bill_mercury_id"),("method","bill_payment_method")])?,q(&serde_json::json!({"stripe":s(c,"stripe")?,"mercury":s(c,"mercury")?}).to_string()))).await?;
         for removed in c["removed"]
             .as_array()
             .ok_or_else(|| anyhow::anyhow!("Invalid removed methods"))?
@@ -223,7 +223,12 @@ async fn run() -> Result<()> {
             out.query(format!(
                 "match $c isa bill_customer,has bill_key {};insert $c has bill_removed_method {};",
                 q(s(c, "id")?),
-                removed
+                q(&format!(
+                    "stripe:{}",
+                    removed
+                        .as_str()
+                        .ok_or_else(|| anyhow::anyhow!("Invalid removed method"))?
+                ))
             ))
             .await?;
         }

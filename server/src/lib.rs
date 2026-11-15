@@ -9,5 +9,9 @@ pub mod typedb;
 pub use app::build;
 pub use services::BusinessParams;
 
-pub use services::mercury;
-pub use services::stripe;
+pub use plugins::mercury;
+pub use plugins::stripe;
+
+pub mod finance;
+pub mod plugin_migration;
+pub mod plugins;

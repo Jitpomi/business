@@ -114,7 +114,7 @@ dog-typedb's authenticated schema-policy executor.
 
 Stripe follows the same provider layout as Mercury. Each resource has its own
 service, shared hook registration, hooks and schema. Shared authentication and
-request-safety hooks are in `src/services/stripe/hooks/`. Credentials live only
+request-safety hooks are in `src/plugins/stripe/hooks/`. Credentials live only
 in `auth-stripe`; the adapter contains HTTP/endpoint/form/error handling, not
 TypeDB queries, invoice workflows or application business rules.
 
@@ -174,7 +174,7 @@ does not imply live-account or all-action acceptance.
 ## Mercury provider services
 
 Mercury follows the resource-service/shared-adapter pattern. Resource services
-delegate to `src/services/mercury/adapters/mercury_adapter.rs`; that adapter makes
+delegate to `src/plugins/mercury/adapters/mercury_adapter.rs`; that adapter makes
 Mercury HTTP calls only. It contains no TypeDB queries or billing workflows.
 
 | Service | Methods |
@@ -268,37 +268,37 @@ committed or pasted into logs. Use a dedicated non-admin runtime account.
 
 ## Billing execution
 
-`src/billing/` schedules invoices, reconciles provider status, attempts authorized
-Stripe payments, verifies Stripe webhooks, and delivers invoice/receipt/reminder
-emails through Resend. It uses the canonical `tenant`/`bill_account` graph. Frontend reads and permitted
-plan changes use protected `/data`; private provider identifiers and consent
-remain hidden. Authenticated account and payment-method operations use `/portal`;
-invitation acceptance and password recovery use the account-link workflow
-described below.
+`src/billing/` owns scheduling, consent, invoice state, collection claims,
+receipts and reminders. `src/finance/` defines business-owned financial and
+notification contracts. `src/plugins/` contains Stripe, Mercury and Resend
+implementations and trusted configuration. See [plugin architecture and migration](FINANCIAL_PLUGINS.md).
 
-Enable explicitly with `BILLING_ENABLED=true`, `BILLING_MERCHANT_ID` (tenant UUID)
-and `BILLING_TICK_SECRET` (32+ characters). The executable runs a bounded pass every
-60 seconds. One worker instance handles one explicitly configured merchant; other
-tenants are not swept. Use a separate worker configuration for another merchant.
-Provider credentials are selected from that tenant's existing
-`STRIPE_CONNECTIONS_JSON` / `MERCURY_CONNECTIONS_JSON`; write permission and matching
-environment are required. A configured Stripe Connect account is applied to all
-Stripe requests and checked on incoming events. Global legacy provider keys are
-not used by the engine.
+The same canonical tenant/account graph backs protected `/data` and `/portal`.
+Provider references, consent and credentials remain private. Credentials never go
+into business records. Notification delivery does not require a financial plugin.
 
-- `POST /internal/billing/tick`: bearer tick secret; no tenant header can change
-  its merchant. A pass is bounded to ten new occurrences, ten issuance attempts,
-  twenty reconciliations and twenty notification candidates.
-- `POST /webhooks/stripe`: raw-body signature verification with a five-minute
-  timestamp tolerance and the configured `STRIPE_WEBHOOK_SECRET`. The event only
-  prompts a fresh provider read. Stored invoice ID, merchant ownership, customer,
-  amount, currency, metadata and environment must agree. Repeated events cannot
-  undo a paid/void state or initiate a charge. Receipts are picked up by the worker.
-- `BILLING_MAIL_ENABLED=true` enables email with `RESEND_API_KEY` and
-  `BILLING_EMAIL_FROM`. Sandbox delivery requires an exact `BILLING_TEST_EMAIL`
-  match and is marked TEST. Mercury invoice creation uses `DontSend`, so this same
-  delivery policy also governs its invoice emails. `BILLING_MERCURY_DESTINATION`
-  selects that merchant's deposit account.
+Enable workers explicitly with `BILLING_ENABLED=true` and
+`BILLING_WORKER_TENANTS_JSON` (an array of tenant UUIDs). Each tenant has its own
+immutable plugin runtime, credentials, sandbox policy, notification plugin and
+scheduler secret. Configure `TENANT_FINANCIAL_SETTINGS_JSON` and
+`TENANT_NOTIFICATION_PLUGINS_JSON`; examples are in `.env.example`.
+Each configured worker runs a bounded pass every 60 seconds. Other tenants are
+not swept. Multiple tenants can run in one process.
+
+- `POST /tenants/<tenant UUID>/internal/billing/tick`: requires that tenant's
+  scheduler bearer secret (32+ characters). No header changes the tenant.
+  Each pass is bounded to ten new occurrences, ten issuance attempts, twenty
+  reconciliations and twenty notification candidates.
+- `POST /tenants/<tenant UUID>/webhooks/<plugin ID>`: dispatches to that tenant's
+  plugin for authenticity and normalization. The Stripe plugin verifies raw-body
+  signatures with five-minute tolerance and connected-account/environment checks,
+  then reads current provider state. The business engine checks customer, invoice,
+  amount, currency and tenant bindings. Replays cannot undo paid/void states or charge.
+- `ACCOUNT_TENANT_ID`, when explicitly in the worker list, also mounts that tenant's
+  routes at the root for the existing account website. There is no implicit primary.
+- Sandbox notification delivery requires an exact recipient in that tenant's
+  `allowed_test_recipients` list. Messages are marked TEST. The Mercury plugin
+  suppresses provider invoice emails so the independent notification policy applies.
 
 Amounts are integer USD cents. Weekly/monthly/yearly schedules use UTC and retain
 the original anchor (January 31 → February 28 → March 31). One-time plans finish
@@ -312,7 +312,7 @@ Stripe auto-advance is off. The worker makes at most one off-session attempt per
 invoice, after a durable claim, using a stable idempotency key. Declines leave a
 payment link for the customer. Processing bank payments receive no pay-again
 reminder. Open due invoices can receive at most four reminder windows, separated
-by `BILLING_REMINDER_DAYS` (1–30, default 7). A paid invoice gets one receipt.
+by the tenant's `reminder_days` (1–30, default 7). A paid invoice gets one receipt.
 Resend acceptance is recorded with its message ID; acceptance is not itself proof
 of inbox delivery.
 
@@ -405,10 +405,9 @@ and changes the credential version atomically, revoking existing sessions and
 other outstanding reset links. Passwords use bcrypt. Reset requests return the
 same message for known and unknown addresses, with a five-minute email cooldown.
 
-Mail requires `BILLING_MAIL_ENABLED=true`, the existing Resend configuration, and
-an exact recipient in `INVITATION_TEST_EMAILS` (comma-separated), falling back to
-`BILLING_TEST_EMAIL`. All messages are marked TEST. Links point to
-`https://jitpomi.com/account/`; the Cloudflare team gate stays in place. Mail
+Mail uses the tenant's independent notification plugin and exact sandbox
+`allowed_test_recipients` list. All sandbox messages are marked TEST. Links point
+to `https://jitpomi.com/account/`; the Cloudflare team gate stays in place. Mail
 failure is explicit to the inviting owner; reset requests preserve the generic
 response. A replacement invitation can be sent after checking the inbox.
 
