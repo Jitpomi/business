@@ -15,8 +15,6 @@ services:
         value: 0.0.0.0
       - key: HTTP_PORT
         value: "10000"
-      - key: ENVIRONMENT
-        value: production
       - key: TYPEDB_DB
         value: business_native_dev
       - key: TYPEDB_TLS

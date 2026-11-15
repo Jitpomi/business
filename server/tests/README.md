@@ -11,7 +11,7 @@ Tests are separate from source, following the DogRS/sp-connector service layout.
   and each service must have its common service/shared/hooks/schema modules.
 
 Run `cargo test --locked --all-targets` and
-`node --test tests/frontend/data-client.test.mjs`.
+`node --test tests/frontend/data-client.test.mjs ../deploy/billing-scheduler/worker.test.mjs`.
 Real integrations are intentionally ignored by default, not empty placeholders:
 
 ```sh
