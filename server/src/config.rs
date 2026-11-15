@@ -14,7 +14,8 @@ pub fn config(app: &mut DogAppBuilder<Value, BusinessParams>) -> Result<()> {
     crate::admission::configured_limit()?;
     config_http(app)?;
     config_typedb(app)?;
-    configure_auth(app)
+    app.set("auth.jwt.secret", env::var("AUTH_JWT_SECRET")?);
+    Ok(())
 }
 
 fn config_http(app: &mut DogAppBuilder<Value, BusinessParams>) -> Result<()> {
@@ -29,37 +30,11 @@ fn config_typedb(app: &mut DogAppBuilder<Value, BusinessParams>) -> Result<()> {
     let addr = env::var("TYPEDB_ADDR")?;
     let db = env::var("TYPEDB_DB")?;
     let username = env::var("TYPEDB_USERNAME")?;
-    anyhow::ensure!(
-        username != "admin",
-        "The application must use a non-admin TypeDB account"
-    );
     let password = env::var("TYPEDB_PASSWORD")?;
-    let tls = env::var("TYPEDB_TLS").unwrap_or("true".to_string());
-    anyhow::ensure!(tls == "true", "TLS is required in all environments");
-    let environment = env::var("ENVIRONMENT").unwrap_or("development".to_string());
-    let force_recreate = env::var("TYPEDB_FORCE_RECREATE").unwrap_or("false".to_string());
-
-    anyhow::ensure!(
-        force_recreate == "false",
-        "Database reset during startup is forbidden"
-    );
     app.set("typedb.addr", addr);
     app.set("typedb.db", db);
     app.set("typedb.username", username);
     app.set("typedb.password", password);
-    app.set("typedb.tls", tls);
-    app.set("typedb.environment", environment);
-    app.set("typedb.force_recreate", force_recreate);
-    Ok(())
-}
-
-fn configure_auth(dog_app: &mut DogAppBuilder<Value, BusinessParams>) -> Result<()> {
-    let jwt_secret = env::var("AUTH_JWT_SECRET").unwrap_or_else(|_| String::new());
-    anyhow::ensure!(
-        jwt_secret.len() >= 32,
-        "AUTH_JWT_SECRET must contain at least 32 bytes"
-    );
-    dog_app.set("auth.jwt.secret", jwt_secret);
     Ok(())
 }
 

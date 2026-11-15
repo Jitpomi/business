@@ -42,8 +42,6 @@ fn compose(mut builder: dog_core::DogAppBuilder<Value, BusinessParams>) -> Resul
         .get("typedb")
         .ok_or_else(|| anyhow::anyhow!("TypeDB state missing"))?;
     let auth = crate::auth::strategies(&mut builder, state.clone())?;
-    crate::hooks::global_hook(&mut builder)?;
-    crate::channels::channels(&mut builder)?;
     crate::services::configure(&mut builder, auth.clone(), state)?;
     let app = builder.build();
     auth.setup(app.clone());

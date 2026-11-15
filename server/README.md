@@ -1,7 +1,6 @@
 # Business backend
 
 One DogRS application, one canonical TypeDB model, one executable: `server`.
-There is no alternate rebuild server or legacy fallback.
 
 Human first. Simple first. Local first.
 
@@ -13,13 +12,11 @@ Human first. Simple first. Local first.
 - `src/schema.tql`, `src/functions.tql`, `src/schema-policy.tql` and `src/billing.tql` define identities, membership, ownership, grants, reviews and domain rules. Security functions and annotations are not replaced with Rust domain switches.
 - Provider resources have `_service`, `_shared`, `_hooks` and `_schema` modules; common provider hooks live in `hooks/`, credentials in `auth-<provider>/`, and HTTP in adapters. Providers do not query TypeDB.
 - `src/database.rs` and the `database` CLI handle explicit provisioning. Startup verifies the canonical model and never migrates, seeds or wipes data.
-- Tests live under `tests/`; no dormant test files for removed services are presented as coverage.
+- Tests live under `tests/`; layout tests check that every Rust source and test file belongs to an active Cargo target.
 
 The backend exposes authentication, protected data queries and provider proxies.
 An opt-in server-owned billing worker now executes the canonical billing graph;
-see **Billing execution** below. Provider proxies remain transport-only. Removed
-payment-demo routes, store checkout coordination and Gelato fulfillment have not
-been restored. Invitations and recovery now use the canonical identity model;
+see **Billing execution** below. Provider proxies remain transport-only. Invitations and recovery use the canonical identity model;
 see **Sandbox invitations and password resets** below.
 
 ## Provisioning and launch
@@ -316,10 +313,7 @@ token; local fixture tests are not evidence of live account/API access.
 
 Check every backend target with `cargo check --locked --all-targets`, build with
 `cargo build --locked --all-targets`, and run the registered backend suite with
-`cargo test --locked --all-targets`. The obsolete operations executable, module,
-tests and runbook have been removed; no database or provider data was removed.
-Deleted billing/onboarding/payment services have not been restored to make the
-provider services compile. External sandbox and disposable TypeDB tests are
+`cargo test --locked --all-targets`. External sandbox and disposable TypeDB tests are
 explicitly ignored by default and must be run separately with development
 credentials; a green local suite is not proof of production acceptance.
 
@@ -327,7 +321,7 @@ References: [Mercury invoicing](https://docs.mercury.com/docs/invoicing),
 [full invoice updates](https://docs.mercury.com/reference/updateinvoice),
 [sandbox setup](https://docs.mercury.com/docs/using-mercury-sandbox).
 
-This application uses published dog-typedb 0.3.3, dog-auth 0.3.1, and other DogRS 0.3.0 crates, dog-transport HTTP hosted by
+This application uses published dog-typedb 0.3.4, dog-auth 0.3.1, and other DogRS 0.3.0 crates, dog-transport HTTP hosted by
 Axum, and TypeDB 3.13.6 (the driver version required by dog-typedb).
 
 Development and production use the same code, TLS validation, auth strategy and
@@ -340,10 +334,11 @@ committed or pasted into logs. Use a dedicated non-admin runtime account.
 
 `src/billing/` schedules invoices, reconciles provider status, attempts authorized
 Stripe payments, verifies Stripe webhooks, and delivers invoice/receipt/reminder
-emails through Resend. It uses the current `tenant`/`bill_account` graph, not the
-removed company/workspace model. Frontend reads and permitted plan changes still
-use protected `/data`; private provider identifiers and consent remain hidden.
-This change does not restore the old portal's onboarding or saved-card endpoints.
+emails through Resend. It uses the canonical `tenant`/`bill_account` graph. Frontend reads and permitted
+plan changes use protected `/data`; private provider identifiers and consent
+remain hidden. Authenticated account and payment-method operations use `/portal`;
+invitation acceptance and password recovery use the account-link workflow
+described below.
 
 Enable explicitly with `BILLING_ENABLED=true`, `BILLING_MERCHANT_ID` (tenant UUID)
 and `BILLING_TICK_SECRET` (32+ characters). The executable runs a bounded pass every
