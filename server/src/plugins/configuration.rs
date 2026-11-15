@@ -16,6 +16,10 @@ struct Settings {
     #[serde(default = "sandbox")]
     sandbox: bool,
     mercury_destination: Option<String>,
+    #[serde(default)]
+    mercury_card_enabled: bool,
+    #[serde(default)]
+    mercury_ach_debit_enabled: bool,
     scheduler_secret: Option<String>,
     reminder_days: Option<i64>,
 }
@@ -74,7 +78,11 @@ pub fn registry() -> Result<Arc<TenantRegistry>> {
             mercuries.clone(),
             !runtime.sandbox,
             setting.and_then(|s| s.mercury_destination.clone()),
-        )?;
+        )?
+        .with_mercury_payment_options(
+            setting.is_some_and(|s| s.mercury_card_enabled),
+            setting.is_some_and(|s| s.mercury_ach_debit_enabled),
+        );
         if stripes.iter().any(|c| c.tenant_id == tenant && c.write) {
             runtime.register(
                 "stripe",
@@ -137,13 +145,17 @@ pub fn engine(
 pub fn transport(tenant: &str) -> Result<Providers> {
     let settings: Vec<Settings> = json("TENANT_FINANCIAL_SETTINGS_JSON")?;
     let setting = settings.iter().find(|s| s.tenant_id == tenant);
-    Providers::new(
+    Ok(Providers::new(
         tenant,
         json("STRIPE_CONNECTIONS_JSON")?,
         json("MERCURY_CONNECTIONS_JSON")?,
         !setting.map(|s| s.sandbox).unwrap_or(true),
         setting.and_then(|s| s.mercury_destination.clone()),
-    )
+    )?
+    .with_mercury_payment_options(
+        setting.is_some_and(|s| s.mercury_card_enabled),
+        setting.is_some_and(|s| s.mercury_ach_debit_enabled),
+    ))
 }
 
 pub fn register_services(

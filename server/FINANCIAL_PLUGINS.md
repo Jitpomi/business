@@ -58,6 +58,10 @@ tenant to preserve the current website URLs. Configure each Stripe endpoint with
 that tenant's secret. The scheduler Worker now requires `BILLING_TENANT_ID` and its
 matching `BILLING_TICK_SECRET`; run separately configured schedulers as needed.
 The template intentionally omits a tenant UUID: set the intended tenant before deployment.
+Mercury settings `mercury_card_enabled` and `mercury_ach_debit_enabled` default to
+false. Virtual bank-transfer instructions work independently of Stripe. Opting into
+card acceptance requires a connected Stripe account within Mercury; that is a
+Mercury feature requirement, not a requirement for using the Mercury plugin.
 
 Old global billing merchant, payment mode, webhook and mail variables no longer
 configure the runtime. Replace them with the tenant entries; do not leave deployment
@@ -89,8 +93,10 @@ Before upgrading an existing canonical database:
    application with least-privilege runtime credentials, then re-enable schedulers.
    Reconcile pre-existing uncertain claims with the relevant provider before retries.
 
-No existing development or production database was migrated during this refactor.
-Tests migrate only generated disposable databases. Rollback after accepting new writes
+On 2026-11-15, `business_native_dev` was explicitly backed up, restore-verified
+and migrated while its hosted writer was suspended. All 127 existing entities and
+relations, their original attributes and every model count were verified unchanged.
+`business_dev` (the older model) and production were not migrated. Rollback after accepting new writes
 requires a planned data migration or restoring a verified backup; retaining old fields
 alone does not make an old binary compatible with newly created customer records.
 
@@ -116,4 +122,7 @@ integer USD cents. Mercury's built-in adapter supports manual invoice flows, not
 methods or automatic collection. Public account-link handlers retain their existing
 sandbox-only activation guard. Stripe and Mercury sandbox/live certification remains
 separate: the earlier Stripe end-to-end run stopped at portal authentication and
-Mercury access was blocked by its IP restriction. Do not treat those runs as passing.
+Mercury access was blocked by its IP restriction. Those earlier runs were not passing.
+On 2026-11-15 the full Stripe sandbox acceptance test passed through the new plugins,
+including the portal and account workflows. Mercury billing preflight still returned
+HTTP 401 before creating any billing records; it remains uncertified.

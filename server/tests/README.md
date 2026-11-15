@@ -58,3 +58,13 @@ state transitions using synthetic provider observations. It does not certify
 Stripe/Mercury connectivity or live billing. Run it separately from the explicit
 provider-and-mail acceptance test because those tests configure process-global
 environment variables differently.
+
+Mercury's billing-plugin acceptance test is explicitly gated:
+`BUSINESS_ENV_FILE=/private/dev-operator.env BILLING_TEST_ENV=/private/billing-sandbox.env MERCURY_WAIT_FOR_PAYMENT=true cargo test --locked --test billing mercury_manual_invoice_payment_receipt_and_reminder -- --ignored --nocapture --test-threads=1`.
+It preflights sandbox destination access before creating anything, uses no Stripe
+connection, issues a synthetic USD 1 invoice, checks accepted reminder delivery,
+and waits up to ten minutes for payment through the sandbox's hosted experience.
+Only an observed provider-paid state can produce the receipt assertion. A timeout,
+permission error or unsupported sandbox payment flow is a failure, never a pass.
+The generated local billing database is deleted afterward; provider test records
+remain as evidence and must not be confused with real customer work.
