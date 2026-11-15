@@ -46,8 +46,14 @@ allowlist entry. No token permissions were expanded.
 The next run passed preflight, created a synthetic USD 1 customer/invoice through
 the Mercury plugin with no Stripe connection, reconciled the provider response,
 and accepted one reminder while suppressing its replay. The hosted invoice and PDF
-were verified. The hosted payment form is ready for user submission; payment/receipt
-certification remains pending. The generated test graph was briefly quiesced,
+were verified. The user subsequently authorized submission of the USD 1 sandbox
+Pay With Mercury payment and its terms. Mercury confirmed submission and generated
+a receipt matching the amount and invoice. The authoritative invoice API returned
+`Processing`, not `Paid`. A separate real sandbox acceptance test verified normalized
+processing state, the preserved accepted-reminder record, zero reminder/receipt
+candidates and zero new notifications. Final settled-payment/application-receipt
+certification remains pending provider settlement; the invoice was not forced paid.
+The generated test graph was briefly quiesced,
 exported, restored into a separate disposable database and count-verified, then the
 verification database was removed. This private checkpoint preserves the pending
 invoice and notice bindings if the interactive payment takes longer than the test

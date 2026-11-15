@@ -76,3 +76,11 @@ and a fresh `BILLING_TEST_REPORT` output path. It restores only into a newly gen
 UUID database and reuses the original tenant/invoice bindings and accepted-reminder
 record. It does not create another provider customer or invoice, or send the initial
 reminder again. Only fresh Mercury-paid observation can advance receipt verification.
+
+Use the separately gated `mercury_processing_payment_suppresses_notices` test with
+`MERCURY_RESUME_CHECKPOINT` to verify a real provider `Processing` state without
+creating a customer/invoice or sending notifications. A processing-only pass does
+not certify final `Paid` settlement or application receipt delivery. The payer's
+success screen and provider-generated receipt are not substitutes for invoice API
+settlement state. The full test reports state changes and fails explicitly if paid
+settlement is not observed in its bounded window.
