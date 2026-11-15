@@ -124,5 +124,9 @@ sandbox-only activation guard. Stripe and Mercury sandbox/live certification rem
 separate: the earlier Stripe end-to-end run stopped at portal authentication and
 Mercury access was blocked by its IP restriction. Those earlier runs were not passing.
 On 2026-11-15 the full Stripe sandbox acceptance test passed through the new plugins,
-including the portal and account workflows. Mercury billing preflight still returned
-HTTP 401 before creating any billing records; it remains uncertified.
+including the portal and account workflows. Mercury billing preflight initially returned HTTP 401 before creating records.
+After the user approved adding the exact test-egress IP to the existing sandbox
+allowlist, preflight, customer/invoice creation, normalized reconciliation, hosted
+invoice/PDF and reminder replay checks passed without a Stripe connection. The
+hosted payment step is awaiting user submission; payment/receipt certification
+remains pending. A restore-tested private checkpoint preserves the pending test.

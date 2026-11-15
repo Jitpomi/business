@@ -11,7 +11,27 @@ async fn mercury_manual_invoice_payment_receipt_and_reminder() -> Result<()> {
     let secrets: HashMap<String, String> =
         dotenvy::from_path_iter(std::env::var("BILLING_TEST_ENV")?)?
             .collect::<std::result::Result<_, _>>()?;
-    let tenant = uuid::Uuid::new_v4().to_string();
+    let checkpoint = std::env::var("MERCURY_RESUME_CHECKPOINT")
+        .ok()
+        .map(std::path::PathBuf::from);
+    let saved: Option<serde_json::Value> = checkpoint
+        .as_ref()
+        .map(|dir| -> Result<_> {
+            Ok(serde_json::from_slice(&std::fs::read(
+                dir.join("run.json"),
+            )?)?)
+        })
+        .transpose()?;
+    let tenant = if let Some(saved) = &saved {
+        uuid::Uuid::parse_str(
+            saved["tenant"]
+                .as_str()
+                .context("Missing checkpoint tenant")?,
+        )?
+        .to_string()
+    } else {
+        uuid::Uuid::new_v4().to_string()
+    };
     let recipient = secrets
         .get("BILLING_TEST_EMAIL")
         .context("Missing test recipient")?;
@@ -40,7 +60,29 @@ async fn mercury_manual_invoice_payment_receipt_and_reminder() -> Result<()> {
         .await?,
     );
     let name = format!("business_backend_test_{}", uuid::Uuid::new_v4().simple());
-    database::install(&driver, &name).await?;
+    if let (Some(dir), Some(saved)) = (&checkpoint, &saved) {
+        let original = saved["database"]
+            .as_str()
+            .context("Missing checkpoint database")?;
+        let suffix = original
+            .strip_prefix("business_backend_test_")
+            .context("Only generated test checkpoints can be resumed")?;
+        uuid::Uuid::parse_str(suffix)?;
+        ensure!(
+            !driver.databases().contains(&name).await?,
+            "Generated resume target already exists"
+        );
+        driver
+            .databases()
+            .import_from_file(
+                &name,
+                std::fs::read_to_string(dir.join(format!("{original}.tql")))?,
+                dir.join(format!("{original}.typedb")),
+            )
+            .await?;
+    } else {
+        database::install(&driver, &name).await?;
+    }
     let engine = server::plugins::configuration::engine(
         Arc::new(TypeDBState {
             driver: driver.clone(),
@@ -49,15 +91,20 @@ async fn mercury_manual_invoice_payment_receipt_and_reminder() -> Result<()> {
         &tenant,
     )?;
     let result=async {
+        if saved.is_none() {
         let customer=uuid::Uuid::new_v4();let buyer=uuid::Uuid::new_v4();let plan=uuid::Uuid::new_v4();let now=chrono::Utc::now().timestamp();
         let tx=driver.transaction(&name,TransactionType::Write).await?;
         tx.query(format!(r#"insert $t isa tenant,has tenant_id "{tenant}",has name "TEST Mercury plugin",has status "active",has revision "initial";$b isa tenant,has tenant_id "{buyer}",has name "TEST buyer",has status "active",has revision "initial";$c isa bill_customer,has bill_key "{customer}",has name "TEST ONLY Mercury plugin",has bill_email "{recipient}",has bill_policy "manual",has bill_choice "manual",has bill_provider "mercury",has bill_bindings "{{}}",has bill_method_plugin "",has bill_payment_method "",has bill_consent "",has bill_revision "initial";(merchant:$t,buyer:$b,customer:$c) isa bill_account;$p isa bill_plan,has bill_key "{plan}",has name "TEST ONLY Mercury plugin invoice",has bill_amount 100,has bill_due_days 0,has bill_anchor {now},has bill_next {now},has bill_sequence 0,has bill_interval "once",has bill_status "active";(customer:$c,plan:$p) isa bill_plan_owner;"#)).await?;tx.commit().await?;
         ensure!(engine.enqueue_due(now).await?==1,"Invoice occurrence missing");
+        }
         let rows=engine.read(format!("{} (merchant:$t,customer:$c) isa bill_account;(customer:$c,plan:$p) isa bill_plan_owner;(plan:$p,invoice:$i) isa bill_invoice_owner;fetch {{'id':$i.bill_key}};",engine.prefix())).await?;
         let id=rows[0]["id"].as_str().context("Missing invoice")?;
-        engine.issue(id).await?;engine.reconcile(id).await?;
-        ensure!(engine.notify_invoice(id).await?==1,"Initial reminder missing");
-        ensure!(engine.notify_invoice(id).await?==0,"Duplicate reminder");
+        if let Some(saved)=&saved {ensure!(saved["invoice_id"]==id,"Checkpoint invoice mismatch");}
+        else {
+            engine.issue(id).await?;engine.reconcile(id).await?;
+            ensure!(engine.notify_invoice(id).await?==1,"Initial reminder missing");
+            ensure!(engine.notify_invoice(id).await?==0,"Duplicate reminder");
+        }
         let invoice=engine.read(format!("{} fetch {{'external':$i.bill_external_id,'url':$i.bill_url,'status':$i.bill_status}};",engine.invoice_match(id)?)).await?;
         ensure!(invoice[0]["status"]=="open","Expected unpaid invoice");
         println!("Mercury sandbox invoice ready: {}",invoice[0]["url"].as_str().unwrap_or(""));
