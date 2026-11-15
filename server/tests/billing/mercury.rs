@@ -3,6 +3,14 @@ use super::*;
 #[tokio::test]
 #[ignore = "Approved Mercury sandbox and test mailbox; creates a disposable DB and a synthetic USD 1 invoice; payment must be completed in sandbox UI"]
 async fn mercury_manual_invoice_payment_receipt_and_reminder() -> Result<()> {
+    run(false).await
+}
+#[tokio::test]
+#[ignore = "Verified Mercury checkpoint and real sandbox processing payment; no provider creation or notification sends"]
+async fn mercury_processing_payment_suppresses_notices() -> Result<()> {
+    run(true).await
+}
+async fn run(processing_only: bool) -> Result<()> {
     dotenvy::from_path(std::env::var("BUSINESS_ENV_FILE")?)?;
     ensure!(
         std::env::var("TYPEDB_DB")? == "business_dev",
@@ -14,6 +22,10 @@ async fn mercury_manual_invoice_payment_receipt_and_reminder() -> Result<()> {
     let checkpoint = std::env::var("MERCURY_RESUME_CHECKPOINT")
         .ok()
         .map(std::path::PathBuf::from);
+    ensure!(
+        !processing_only || checkpoint.is_some(),
+        "Processing verification requires an existing test checkpoint"
+    );
     let saved: Option<serde_json::Value> = checkpoint
         .as_ref()
         .map(|dir| -> Result<_> {
@@ -109,19 +121,39 @@ async fn mercury_manual_invoice_payment_receipt_and_reminder() -> Result<()> {
         ensure!(invoice[0]["status"]=="open","Expected unpaid invoice");
         println!("Mercury sandbox invoice ready: {}",invoice[0]["url"].as_str().unwrap_or(""));
         if let Ok(path)=std::env::var("BILLING_TEST_REPORT") {std::fs::write(path,serde_json::to_vec_pretty(&json!({"phase":"awaiting_sandbox_payment","database":name,"tenant":tenant,"invoice_id":id,"invoice":invoice[0]}))?)?;}
+        if processing_only {
+            engine.reconcile(id).await?;
+            let current=engine.read(format!("{} fetch {{'status':$i.bill_status}};",engine.invoice_match(id)?)).await?;
+            ensure!(current.len()==1&&current[0]["status"]=="processing","Mercury is not processing; do not treat it as unpaid or paid");
+            ensure!(engine.notification_candidates().await?.is_empty(),"Processing payment became a reminder/receipt candidate");
+            ensure!(engine.notify_invoice(id).await?==0,"Processing payment triggered a notification");
+            let notices=engine.read(format!("{} (invoice:$i,notice:$n) isa bill_notice_owner;fetch {{'key':$n.bill_key,'status':$n.bill_status}};",engine.invoice_match(id)?)).await?;
+            ensure!(notices.len()==1&&notices[0]["key"]==format!("{id}-reminder-0")&&notices[0]["status"].as_str().is_some_and(|s|s.starts_with("accepted:")),"Original reminder missing or premature receipt created");
+            if let Ok(path)=std::env::var("BILLING_TEST_REPORT") {std::fs::write(path,serde_json::to_vec_pretty(&json!({"phase":"processing_checks_passed","invoice_id":id,"payment_status":"Processing","reminder_and_receipt_candidates":0,"new_notifications":0,"notices":notices,"settled_payment_and_receipt":"not_verified"}))?)?;}
+            println!("Verified real Mercury Processing state, preserved reminder acceptance, no new reminder and no premature receipt.");
+            return Ok(());
+        }
         ensure!(std::env::var("MERCURY_WAIT_FOR_PAYMENT").as_deref()==Ok("true"),"Invoice/reminder verified; set MERCURY_WAIT_FOR_PAYMENT=true to verify a real sandbox payment and receipt");
         let mut paid=false;
+        let mut observed=String::new();
         for _ in 0..60 {
             engine.reconcile(id).await?;
             let row=engine.read(format!("{} fetch {{'status':$i.bill_status}};",engine.invoice_match(id)?)).await?;
-            if row[0]["status"]=="paid" {paid=true;break;}
+            let status=row[0]["status"].as_str().context("Missing observed invoice status")?;
+            if observed!=status {
+                observed=status.to_owned();
+                println!("Mercury invoice API state: {status}");
+                if let Ok(path)=std::env::var("BILLING_TEST_REPORT") {std::fs::write(path,serde_json::to_vec_pretty(&json!({"phase":"awaiting_settlement","database":name,"tenant":tenant,"invoice_id":id,"invoice":invoice[0],"observed_status":status,"settled_payment_and_receipt":"not_verified"}))?)?;}
+            }
+            if status=="paid" {paid=true;break;}
             tokio::time::sleep(std::time::Duration::from_secs(10)).await;
         }
-        ensure!(paid,"Sandbox payment not observed; receipt phase not verified");
+        ensure!(paid,"Mercury invoice remains {observed}; settlement and receipt phase not verified");
         ensure!(engine.notify_invoice(id).await?==1,"Receipt missing");
         let repeated=engine.tick().await?;
         ensure!(repeated["errors"]==0&&repeated["notices"]==0&&repeated["issued"]==0,"Replay duplicated effects");
-        if let Ok(path)=std::env::var("BILLING_TEST_REPORT") {std::fs::write(path,serde_json::to_vec_pretty(&json!({"phase":"passed","invoice":invoice[0],"payment":"paid_observed_from_mercury","reminder":"accepted_once","receipt":"accepted_once","repeat_tick":repeated}))?)?;}
+        let mut final_invoice=invoice[0].clone();final_invoice["status"]=json!("paid");
+        if let Ok(path)=std::env::var("BILLING_TEST_REPORT") {std::fs::write(path,serde_json::to_vec_pretty(&json!({"phase":"passed","invoice":final_invoice,"payment":"paid_observed_from_mercury","reminder":"accepted_once","receipt":"accepted_once","repeat_tick":repeated}))?)?;}
         Ok::<_,anyhow::Error>(())
     }.await;
     driver.databases().get(&name).await?.delete().await?;

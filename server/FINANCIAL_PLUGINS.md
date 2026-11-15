@@ -128,5 +128,9 @@ including the portal and account workflows. Mercury billing preflight initially 
 After the user approved adding the exact test-egress IP to the existing sandbox
 allowlist, preflight, customer/invoice creation, normalized reconciliation, hosted
 invoice/PDF and reminder replay checks passed without a Stripe connection. The
-hosted payment step is awaiting user submission; payment/receipt certification
-remains pending. A restore-tested private checkpoint preserves the pending test.
+authorized USD 1 hosted payment was submitted and Mercury generated a matching
+receipt, while the invoice API reported `Processing`. A real sandbox test verified
+that this state preserves the initial reminder and produces neither another reminder
+nor a premature settlement receipt. Final `Paid` reconciliation and the application
+receipt remain pending provider settlement. A restore-tested private checkpoint
+preserves the original invoice for later verification.
