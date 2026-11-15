@@ -37,10 +37,21 @@ provider acceptance does not prove inbox delivery.
 
 Mercury's registered service checks passed account/customer/invoice list and detail
 reads. Transactions were denied; a direct baseline read reported an IP restriction.
-The new billing-plugin acceptance test failed closed at the destination-account
-preflight with HTTP 401, before creating a database, customer or invoice. Its payment,
-receipt and reminder phases are not certified. Sandbox dashboard access is needed
-to resolve the restriction and complete the hosted payment step.
+The first billing-plugin acceptance test failed closed at destination-account
+preflight with HTTP 401, before creating a database, customer or invoice. After
+sandbox sign-in, the browser and test runner were found to use different egress
+IPs. The user approved adding only the exact test IP while retaining the existing
+allowlist entry. No token permissions were expanded.
+
+The next run passed preflight, created a synthetic USD 1 customer/invoice through
+the Mercury plugin with no Stripe connection, reconciled the provider response,
+and accepted one reminder while suppressing its replay. The hosted invoice and PDF
+were verified. The hosted payment form is ready for user submission; payment/receipt
+certification remains pending. The generated test graph was briefly quiesced,
+exported, restored into a separate disposable database and count-verified, then the
+verification database was removed. This private checkpoint preserves the pending
+invoice and notice bindings if the interactive payment takes longer than the test
+wait window. Existing development and production records were not changed.
 
 Mercury card and ACH debit options now default to false. Card acceptance can be
 explicitly enabled for a tenant that has connected Stripe within Mercury; basic
@@ -50,7 +61,8 @@ bank-transfer invoicing does not require that connection.
 
 The development-only `database_backup` executable supports `inspect`, `export`,
 `restore-verify` and `verify-preserved`. Pass an explicit `business_native_dev` or
-`business_dev` target. Export to a pre-created private directory under `umask 077`.
+`business_dev` target, or an explicitly named `business_backend_test_<UUID>`
+checkpoint. Export to a pre-created private directory under `umask 077`.
 It refuses an existing manifest and never overwrites a database. Restore verification
 uses a new UUID target and deletes only that generated target. Preservation verification
 checks existing IDs, original attribute values, model counts and upgraded schema.
