@@ -1,5 +1,6 @@
 //! Explicitly gated real sandbox workflow. No configured database is changed.
 mod account_links;
+mod mercury;
 mod portal;
 use anyhow::{ensure, Context, Result};
 use serde_json::json;

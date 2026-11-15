@@ -37,3 +37,35 @@ fn pending_bank_payment_and_unknown_states_never_look_payable() {
     assert!(status(Provider::Stripe, &json!({"status":"unexpected"})).is_err());
     assert!(safe_id("in_a/../in_b").is_err());
 }
+#[test]
+fn mercury_invoices_do_not_require_a_stripe_account() {
+    let transport = Providers::new(
+        "fixture",
+        vec![],
+        vec![],
+        false,
+        Some("11111111-1111-4111-8111-111111111111".into()),
+    )
+    .unwrap();
+    let input = InvoiceRequest {
+        id: "invoice".into(),
+        customer: "customer".into(),
+        provider: Provider::Mercury,
+        mode: Mode::Manual,
+        amount: 123,
+        description: "Work".into(),
+        issued: 1800000000,
+        due: 1800000000,
+    };
+    let bank_transfer = transport.mercury_invoice_body(&input).unwrap();
+    assert_eq!(bank_transfer["creditCardEnabled"], false);
+    assert_eq!(bank_transfer["achDebitEnabled"], false);
+    assert_eq!(bank_transfer["sendEmailOption"], "DontSend");
+    assert_eq!(bank_transfer["lineItems"][0]["unitPrice"], json!(1.23));
+    let enabled = transport
+        .with_mercury_payment_options(true, true)
+        .mercury_invoice_body(&input)
+        .unwrap();
+    assert_eq!(enabled["creditCardEnabled"], true);
+    assert_eq!(enabled["achDebitEnabled"], true);
+}

@@ -17,6 +17,8 @@ pub struct Providers {
     mercury_token: Option<String>,
     pub connected_account: Option<String>,
     destination: Option<String>,
+    mercury_card_enabled: bool,
+    mercury_ach_debit_enabled: bool,
 }
 impl Providers {
     pub fn new(
@@ -67,7 +69,14 @@ impl Providers {
             stripe_token: stripe.map(|c| c.token),
             mercury_token: mercury.map(|c| c.token),
             destination,
+            mercury_card_enabled: false,
+            mercury_ach_debit_enabled: false,
         })
+    }
+    pub fn with_mercury_payment_options(mut self, card: bool, ach_debit: bool) -> Self {
+        self.mercury_card_enabled = card;
+        self.mercury_ach_debit_enabled = ach_debit;
+        self
     }
     pub async fn stripe(
         &self,
@@ -219,22 +228,31 @@ impl Providers {
         }
         anyhow::bail!("History too large; provider review required")
     }
+    fn mercury_invoice_body(&self, input: &InvoiceRequest) -> Result<Value> {
+        ensure!(
+            input.mode == Mode::Manual,
+            "Mercury API does not implement saved-card autopay"
+        );
+        let destination = self
+            .destination
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("Missing Mercury destination"))?;
+        uuid::Uuid::parse_str(destination)?;
+        let amount: serde_json::Number =
+            format!("{}.{:02}", input.amount / 100, input.amount % 100).parse()?;
+        Ok(
+            json!({"customerId":input.customer,"invoiceNumber":format!("JIT-{}",input.id),"destinationAccountId":destination,"currencyCode":"USD","invoiceDate":date(input.issued)?,"dueDate":date(input.due)?,"ccEmails":[],"achDebitEnabled":self.mercury_ach_debit_enabled,"creditCardEnabled":self.mercury_card_enabled,"useRealAccountNumber":false,"sendEmailOption":"DontSend","lineItems":[{"name":input.description,"quantity":1,"unitPrice":amount}]}),
+        )
+    }
     pub async fn invoice(&self, input: &InvoiceRequest) -> Result<Value> {
         match input.provider {
             Provider::Mercury => {
-                ensure!(
-                    input.mode == Mode::Manual,
-                    "Mercury API does not implement saved-card autopay"
-                );
-                let destination = self
-                    .destination
-                    .as_deref()
-                    .ok_or_else(|| anyhow::anyhow!("Missing Mercury destination"))?;
-                uuid::Uuid::parse_str(destination)?;
-                // Serialize a decimal JSON number from integer cents; do not calculate money in f64.
-                let amount: serde_json::Number =
-                    format!("{}.{:02}", input.amount / 100, input.amount % 100).parse()?;
-                self.mercury(Method::POST,"/ar/invoices",Some(json!({"customerId":input.customer,"invoiceNumber":format!("JIT-{}",input.id),"destinationAccountId":destination,"currencyCode":"USD","invoiceDate":date(input.issued)?,"dueDate":date(input.due)?,"ccEmails":[],"achDebitEnabled":false,"creditCardEnabled":true,"useRealAccountNumber":false,"sendEmailOption":"DontSend","lineItems":[{"name":input.description,"quantity":1,"unitPrice":amount}]}))).await
+                self.mercury(
+                    Method::POST,
+                    "/ar/invoices",
+                    Some(self.mercury_invoice_body(input)?),
+                )
+                .await
             }
             Provider::Stripe => {
                 // Keep advancement disabled. Business checks current consent at the due date
