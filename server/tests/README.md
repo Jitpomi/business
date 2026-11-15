@@ -68,3 +68,11 @@ Only an observed provider-paid state can produce the receipt assertion. A timeou
 permission error or unsupported sandbox payment flow is a failure, never a pass.
 The generated local billing database is deleted afterward; provider test records
 remain as evidence and must not be confused with real customer work.
+
+For an interactive Mercury payment, save a verified test checkpoint while its writer
+is quiesced and copy the awaiting-payment report to `run.json` in that directory.
+Resume the same acceptance test with `MERCURY_RESUME_CHECKPOINT=/private/checkpoint-directory`
+and a fresh `BILLING_TEST_REPORT` output path. It restores only into a newly generated
+UUID database and reuses the original tenant/invoice bindings and accepted-reminder
+record. It does not create another provider customer or invoice, or send the initial
+reminder again. Only fresh Mercury-paid observation can advance receipt verification.
