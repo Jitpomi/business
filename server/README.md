@@ -68,6 +68,14 @@ POST `/data` with `x-service-method: read` or `write` and only
 hidden by the model. The publicly served `/queries/data/*.tql` files are examples
 for the browser, not an authorization registry; `/data-client.js` sends queries.
 
+The data executor returns 400 for malformed requests, 422 for unsupported query
+constructs and 403 for absent or denied schema permissions. In particular, an
+attribute update without `dog.security.update` permission is forbidden and makes
+no data changes. The executor retains TypeDB enforcement and transaction rollback;
+Business does not classify errors by matching messages or maintain another RBAC
+policy. Invalid declared policies/internal failures remain private server errors.
+A 503 reporting an unknown commit outcome requires reconciliation before retry.
+
 `/health` is public. API execution has a per-process active budget
 (`BUSINESS_ACTIVE_REQUESTS`, 1–32), 32 waiting slots and a five-second admission
 deadline. Overload returns 503 without starting the operation.
@@ -257,7 +265,7 @@ References: [Mercury invoicing](https://docs.mercury.com/docs/invoicing),
 [full invoice updates](https://docs.mercury.com/reference/updateinvoice),
 [sandbox setup](https://docs.mercury.com/docs/using-mercury-sandbox).
 
-This application uses published dog-typedb 0.3.4, dog-auth 0.3.1, and other DogRS 0.3.0 crates, dog-transport HTTP hosted by
+This application uses published dog-typedb 0.3.5, dog-auth 0.3.1, and other DogRS 0.3.0 crates, dog-transport HTTP hosted by
 Axum, and TypeDB 3.13.6 (the driver version required by dog-typedb).
 
 Development and production use the same code, TLS validation, auth strategy and

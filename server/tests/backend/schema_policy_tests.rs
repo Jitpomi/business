@@ -247,10 +247,24 @@ async fn schema_policy_real_http_migration() -> Result<()> {
             let (status,value)=call(&client,&base,"tenant-a","read",a,&query).await?;
             ensure!(status==200,"{name} failed: {value}"); answers(&value)?;
         }
+        // Caller errors remain explicit; data permissions remain schema-owned.
+        for (method,query,expected) in [
+            ("read","not a TypeQL query",400),
+            ("read","match $r isa resource;fetch {$r.*};",422),
+            ("write","match $r isa resource,has resource_id 'files';update $r has name 'must-not-change';fetch {'name':$r.name};",403),
+            ("read","match $r isa resource;delete $r;",422),
+        ] {
+            let (status,error)=call(&client,&base,"tenant-a",method,a,query).await?;
+            ensure!(status==expected,"Expected {expected}, got {status}: {error}");
+            ensure!(error["message"].as_str().is_some_and(|m|m!="Internal server error"),"Caller rejection was opaque");
+            ensure!(!error.to_string().contains("must-not-change"),"Query literal leaked");
+        }
+        let unchanged=trusted.read(json!({"query":"match $r isa resource,has resource_id 'files';fetch {'name':$r.name};"})).await?;
+        ensure!(unchanged["ok"]["answers"][0]["data"]["name"]=="Files","Denied update changed an existing resource");
         // A rejected later revision update must undo the graph creation.
         bindings["resource_id"]=json!("rollback-resource");
         let rollback=render("create-resource",&bindings,&alice["user"]).replace("update $t has revision", "update $t has name");
-        ensure!(call(&client,&base,"tenant-a","write",a,&rollback).await?.0>=400,"Unsupported update accepted");
+        ensure!(call(&client,&base,"tenant-a","write",a,&rollback).await?.0==403,"Missing update permission must be forbidden");
         let persisted=trusted.read(json!({"query":"match $r isa resource,has resource_id 'rollback-resource'; fetch {'id':$r.resource_id};"})).await?;
         ensure!(persisted["ok"]["answers"].as_array().unwrap().is_empty(),"Earlier graph write committed after failure");
         let denied_query=render("create-resource",&bindings,&bob["user"]);
