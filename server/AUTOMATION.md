@@ -233,3 +233,5 @@ billing configuration before completing this cutover.
 Rolling an old binary back while new writes continue is unsafe. Stop writers and
 review the preserved database/connection state before any rollback. The additive
 schema itself does not require deleting or rewriting existing business data.
+
+Development deployment evidence: [November 15 cutover](ops/development-automation-cutover-2026-11-15.md).
