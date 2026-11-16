@@ -30,6 +30,18 @@ pub const ASSETS: &[(&str, &str)] = &[
         include_str!("../../../public/queries/data/billing-policy.tql"),
     ),
     (
+        "billing-select-plugin",
+        include_str!("../../../public/queries/data/billing-select-plugin.tql"),
+    ),
+    (
+        "billing-select-method",
+        include_str!("../../../public/queries/data/billing-select-method.tql"),
+    ),
+    (
+        "billing-grant-consent",
+        include_str!("../../../public/queries/data/billing-grant-consent.tql"),
+    ),
+    (
         "billing-stop-automatic",
         include_str!("../../../public/queries/data/billing-stop-automatic.tql"),
     ),
