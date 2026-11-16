@@ -21,7 +21,7 @@ pub fn target(name: &str) -> Result<()> {
     ensure!(
         matches!(
             name,
-            "business_dev" | "business_native_dev" | "business_prod"
+            "business_dev" | "business_native_dev" | "business_native_dev_v2" | "business_prod"
         ) || name
             .strip_prefix("business_backend_test_")
             .is_some_and(|s| uuid::Uuid::parse_str(s).is_ok()),
@@ -59,8 +59,8 @@ pub async fn install(driver: &TypeDBDriver, name: &str) -> Result<()> {
     for source in [
         SCHEMA,
         FUNCTIONS,
-        SCHEMA_POLICY,
         BILLING,
+        SCHEMA_POLICY,
         ACCOUNT_LINKS,
         crate::automation::store::SCHEMA,
     ] {
@@ -146,3 +146,48 @@ pub async fn bootstrap(
 mod tests;
 
 pub mod snapshot;
+
+/// Complete canonical schema for import into a new, never-overwritten database.
+pub fn import_schema() -> String {
+    let mut schema = String::from("define\n");
+    for source in [
+        SCHEMA,
+        FUNCTIONS,
+        BILLING,
+        SCHEMA_POLICY,
+        ACCOUNT_LINKS,
+        crate::automation::store::SCHEMA,
+    ] {
+        schema.push_str(
+            source
+                .trim_start()
+                .strip_prefix("define")
+                .expect("Canonical define source"),
+        );
+        schema.push('\n');
+    }
+    schema
+}
+
+/// Runtime requires the completed native model; older offline import tools may
+/// still inspect the previous canonical model without starting a new service.
+pub async fn verify_runtime(driver: &TypeDBDriver, name: &str) -> Result<()> {
+    verify(driver, name).await?;
+    let schema = driver.databases().get(name).await?.schema().await?;
+    ensure!(["entity bill_saved_method","fun create_invitation","fun request_identity","fun scope_visible_tenant"].iter().all(|part|schema.contains(part)),"Native account/payment model migration required; startup will not migrate or reset the database");
+    let tx = driver.transaction(name, TransactionType::Read).await?;
+    let versions=documents(&tx,"match $t label bootstrap_record;let $version=get_meta('jitpomi.model.version',$t);fetch {'version':$version};").await?;
+    ensure!(
+        versions
+            .first()
+            .is_some_and(|row| row["version"] == "native-accounts-v2"),
+        "Complete native account/payment migration required before startup"
+    );
+    let rows=documents(&tx,"match $l isa account_invitation;not {$l has invitation_valid_until $until;};reduce $n=count;fetch {'count':$n};").await?;
+    tx.close().await?;
+    ensure!(
+        rows[0]["count"] == 0,
+        "Backfill original invitation expiries before starting the service"
+    );
+    Ok(())
+}

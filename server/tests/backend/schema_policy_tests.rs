@@ -98,8 +98,8 @@ async fn schema_policy_real_http_migration() -> Result<()> {
         let tx=driver.transaction(&database,TransactionType::Schema).await?;
         tx.query(SCHEMA).await.context("base schema")?;
         tx.query(FUNCTIONS).await.context("domain functions")?;
-        tx.query(SCHEMA_POLICY).await.context("schema policy batch")?;
         tx.query(BILLING).await.context("native billing model")?;
+        tx.query(SCHEMA_POLICY).await.context("schema policy batch")?;
         tx.commit().await?;
         let state=Arc::new(server::typedb::TypeDBState{driver:driver.clone(),database:database.clone()});
         let trusted=dog_typedb::TypeDBAdapter::new(state.clone());
@@ -119,6 +119,18 @@ async fn schema_policy_real_http_migration() -> Result<()> {
         let dave=login(&client,&base,"tenant-b","dave@example.com").await?;
         for user in [&alice,&bob,&carol,&dave] { ensure!(user.pointer("/user/password").is_none(), "Credential leaked"); }
         let a=alice["accessToken"].as_str().unwrap(); let b=bob["accessToken"].as_str().unwrap(); let c=carol["accessToken"].as_str().unwrap(); let d=dave["accessToken"].as_str().unwrap();
+        // Discovery uses schema functions with server-owned context, without
+        // granting graph access to other companies or other people's identities.
+        let profile=include_str!("../../public/queries/data/account-profile.tql");
+        for (tenant,token,email,owner) in [("tenant-a",a,"alice@example.com",true),("tenant-a",b,"bob@example.com",false),("tenant-b",d,"dave@example.com",true)] {
+            let (status,body)=call(&client,&base,tenant,"read",token,profile).await?;
+            ensure!(status==200,"Native account profile: {body}");
+            let rows=answers(&body)?;
+            ensure!(rows.len()==1 && rows[0]["data"]["email"]==email && rows[0]["data"]["owner"]==owner && rows[0]["data"]["companies"].as_array().is_some_and(|x|x.len()==1),"Profile exposed wrong identity or companies: {body}");
+        }
+        ensure!(call(&client,&base,"tenant-b","read",a,profile).await?.0>=400,"Discovery accepted a foreign tenant");
+        let forged=profile.replace("request_account()","request_account('tenant-b','dave',2026-01-01T00:00:00)");
+        ensure!(call(&client,&base,"tenant-a","read",a,&forged).await?.0>=400,"Discovery accepted caller-selected identity/clock");
         // Arbitrary frontend query, absent from every asset: no query registry.
         let raw="match $r isa resource; fetch {'id':$r.resource_id};";
         let customers=include_str!("../../public/queries/data/billing-customers.tql");
@@ -128,7 +140,7 @@ async fn schema_policy_real_http_migration() -> Result<()> {
         }
         for query in [
             "match $c isa bill_customer; fetch {'secret':$c.bill_stripe_id};",
-            "match $c isa bill_customer,has bill_consent $secret; fetch {'secret':$secret};",
+            "match $i isa bill_invoice,has bill_external_id $secret; fetch {'secret':$secret};",
             "match $c isa bill_customer; update $c has bill_choice 'automatic'; fetch {'id':$c.bill_key};",
             "match $c isa bill_customer; delete $c;",
         ] {

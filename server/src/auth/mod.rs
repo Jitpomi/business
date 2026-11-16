@@ -457,3 +457,8 @@ pub fn local_link(person_variable: &str, subject: &str) -> Result<String> {
     let q = |s: &str| serde_json::to_string(s).unwrap();
     Ok(format!("(identity:{person_variable}) isa external_identity,has auth_binding_key {},has auth_issuer 'urn:jitpomi:local',has auth_subject {};",q(&binding_key("urn:jitpomi:local",subject)),q(subject)))
 }
+
+mod invitations;
+
+mod account_lifecycle;
+pub use account_lifecycle::AccountLifecycle;

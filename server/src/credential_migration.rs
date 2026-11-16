@@ -78,7 +78,9 @@ pub async fn migrate(driver: &TypeDBDriver, name: &str) -> Result<usize> {
         let end = SCHEMA[start..].find("entity service_account").unwrap() + start;
         tx.query(format!("define {}", &SCHEMA[start..end])).await?;
     }
-    tx.query(crate::database::ACCOUNT_LINKS).await?;
+    if !schema.contains("entity account_invitation") {
+        tx.query(crate::database::ACCOUNT_LINKS).await?;
+    }
     if legacy {
         tx.query("redefine person owns password_hash @card(0..1);")
             .await?;

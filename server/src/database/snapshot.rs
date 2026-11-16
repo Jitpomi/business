@@ -57,3 +57,159 @@ pub async fn records(driver: &TypeDBDriver, name: &str) -> Result<BTreeMap<Strin
     tx.close().await?;
     Ok(records)
 }
+
+/// Portable proof includes relation role bindings. TypeDB import remaps internal
+/// IDs, so compare full logical graphs rather than treating an IID as a user ID.
+pub async fn graph(
+    driver: &TypeDBDriver,
+    name: &str,
+    ignore: &[&str],
+) -> Result<BTreeMap<String, usize>> {
+    use sha2::{Digest, Sha256};
+    use std::collections::{BTreeSet, HashMap, HashSet};
+    use typeql::{
+        query::{schema::SchemaQuery, QueryStructure},
+        schema::definable::{type_::CapabilityBase, Definable},
+    };
+    #[derive(Default)]
+    struct Type {
+        kind: String,
+        abstract_: bool,
+        parent: Option<String>,
+        roles: BTreeSet<String>,
+    }
+    #[derive(Default)]
+    struct Node {
+        type_: String,
+        attributes: Value,
+        roles: BTreeMap<String, Vec<String>>,
+    }
+    let schema = driver.databases().get(name).await?.schema().await?;
+    let mut types: BTreeMap<String, Type> = BTreeMap::new();
+    for query in typeql::parse_queries(&schema)? {
+        let QueryStructure::Schema(SchemaQuery::Define(define)) = query.structure else {
+            anyhow::bail!("Unexpected schema export")
+        };
+        for definition in define.definables {
+            if let Definable::TypeDeclaration(t) = definition {
+                let entry = types.entry(t.label.to_string()).or_default();
+                if let Some(kind) = t.kind {
+                    entry.kind = kind.to_string();
+                }
+                entry.abstract_ |= t
+                    .annotations
+                    .iter()
+                    .any(|a| matches!(a, typeql::Annotation::Abstract(_)));
+                for capability in t.capabilities {
+                    match capability.base {
+                        CapabilityBase::Sub(s) => {
+                            entry.parent = Some(s.supertype_label.to_string())
+                        }
+                        CapabilityBase::Relates(r) => {
+                            entry.roles.insert(r.related.to_string());
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+    let tx = driver.transaction(name, TransactionType::Read).await?;
+    let mut nodes: HashMap<String, Node> = HashMap::new();
+    for (label, t) in &types {
+        if t.abstract_ || !matches!(t.kind.as_str(), "entity" | "relation") {
+            continue;
+        }
+        for row in crate::database::documents(
+            &tx,
+            &format!("match $x isa! {label};fetch {{'iid':iid($x),'attributes':{{$x.*}}}};"),
+        )
+        .await?
+        {
+            let mut attributes = row["attributes"].clone();
+            for attribute in ignore {
+                attributes
+                    .as_object_mut()
+                    .ok_or_else(|| anyhow::anyhow!("Invalid attributes"))?
+                    .remove(*attribute);
+            }
+            nodes.insert(
+                row["iid"]
+                    .as_str()
+                    .ok_or_else(|| anyhow::anyhow!("Missing IID"))?
+                    .into(),
+                Node {
+                    type_: label.clone(),
+                    attributes,
+                    roles: BTreeMap::new(),
+                },
+            );
+        }
+    }
+    for (label, t) in &types {
+        if t.abstract_ || t.kind != "relation" {
+            continue;
+        }
+        let mut roles = t.roles.clone();
+        let mut parent = t.parent.as_deref();
+        let mut visited = HashSet::new();
+        while let Some(p) = parent {
+            anyhow::ensure!(visited.insert(p), "Cyclic type hierarchy");
+            let Some(ancestor) = types.get(p) else {
+                break;
+            };
+            roles.extend(ancestor.roles.iter().cloned());
+            parent = ancestor.parent.as_deref();
+        }
+        for role in roles {
+            let role = role.rsplit(':').next().unwrap();
+            for row in crate::database::documents(&tx,&format!("match $r isa! {label},links({role}:$p);fetch {{'relation':iid($r),'player':iid($p)}};")).await?{
+    nodes.get_mut(row["relation"].as_str().unwrap()).ok_or_else(||anyhow::anyhow!("Missing relation"))?.roles.entry(role.into()).or_default().push(row["player"].as_str().unwrap().into());
+   }
+        }
+    }
+    tx.close().await?;
+    fn digest(
+        id: &str,
+        nodes: &HashMap<String, Node>,
+        cache: &mut HashMap<String, String>,
+        visiting: &mut HashSet<String>,
+    ) -> Result<String> {
+        if let Some(value) = cache.get(id) {
+            return Ok(value.clone());
+        }
+        anyhow::ensure!(
+            visiting.insert(id.into()),
+            "Cyclic relation graph requires preservation review"
+        );
+        let node = nodes
+            .get(id)
+            .ok_or_else(|| anyhow::anyhow!("Missing role player"))?;
+        let mut roles = BTreeMap::new();
+        for (role, players) in &node.roles {
+            let mut keys = Vec::new();
+            for player in players {
+                keys.push(digest(player, nodes, cache, visiting)?);
+            }
+            keys.sort();
+            roles.insert(role, keys);
+        }
+        let value = format!(
+            "{:x}",
+            Sha256::digest(serde_json::to_vec(
+                &json!({"type":node.type_,"attributes":node.attributes,"roles":roles})
+            )?)
+        );
+        visiting.remove(id);
+        cache.insert(id.into(), value.clone());
+        Ok(value)
+    }
+    let mut result = BTreeMap::new();
+    let mut cache = HashMap::new();
+    for id in nodes.keys() {
+        *result
+            .entry(digest(id, &nodes, &mut cache, &mut HashSet::new())?)
+            .or_insert(0) += 1;
+    }
+    Ok(result)
+}

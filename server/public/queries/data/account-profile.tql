@@ -1,0 +1,4 @@
+match let $email,$tenant,$owner=request_account();
+fetch {"email":$email,"tenant_id":$tenant,"owner":$owner,
+  "companies":[match let $id,$name in request_companies();
+    fetch {"id":$id,"domain":$name};]};

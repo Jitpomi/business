@@ -14,12 +14,26 @@ async fn call(
     tenant: &str,
     token: &str,
     path: &str,
-    data: Value,
+    mut data: Value,
 ) -> Result<(u16, Value)> {
     let mut req = Request::post(path)
         .header("content-type", "application/json")
         .header("x-tenant-id", tenant)
         .header("x-gateway-secret", GATEWAY);
+    if path == "/data" {
+        req = req.header(
+            "x-service-method",
+            if data["_write"] == true {
+                "write"
+            } else {
+                "read"
+            },
+        );
+        data.as_object_mut().unwrap().remove("_write");
+    }
+    if path == "/authentication" && data["operation"] == "invitation" {
+        req = req.header("x-service-method", "account");
+    }
     if !token.is_empty() {
         req = req.header("authorization", format!("Bearer {token}"));
     }
@@ -64,11 +78,10 @@ pub async fn check(e: &Engine) -> Result<()> {
     .await?;
     ensure!(s == 200, "Owner login {s}");
     let owner = login["accessToken"].as_str().unwrap();
-    let (s, invite) = call(
+    let (s, invite) = native_invitation(
         &r,
         &e.merchant,
         owner,
-        "/portal",
         json!({"action":"invite","name":"TEST invited company","email":"new-links@example.com"}),
     )
     .await?;
@@ -79,11 +92,10 @@ pub async fn check(e: &Engine) -> Result<()> {
     );
     let customer = invite["customer_id"].as_str().unwrap();
     let buyer = invite["tenant_id"].as_str().unwrap();
-    let (s, renew) = call(
+    let (s, renew) = native_invitation(
         &r,
         &e.merchant,
         owner,
-        "/portal",
         json!({"action":"renew_invite","customer_id":customer}),
     )
     .await?;
@@ -103,7 +115,10 @@ pub async fn check(e: &Engine) -> Result<()> {
     let accept = json!({"action":"accept","token":renew["token"],"password":PASSWORD});
     let (s, result) = call(&r, "account", "", "/onboarding", accept.clone()).await?;
     if s != 200 {
-        let diagnostic = e.public_account_action("invite", &accept).await;
+        let diagnostic =
+            server::auth::AccountLifecycle::new(e.state.clone(), &e.merchant, e.runtime.clone())?
+                .public_account_action("invite", &accept)
+                .await;
         anyhow::bail!("Accept failed {s}: {result}; {diagnostic:?}");
     }
     ensure!(
@@ -121,11 +136,10 @@ pub async fn check(e: &Engine) -> Result<()> {
     ensure!(s == 200, "New account login failed {s}");
     let buyer_token = login["accessToken"].as_str().unwrap();
     ensure!(
-        call(
+        native_invitation(
             &r,
             &e.merchant,
             buyer_token,
-            "/portal",
             json!({"action":"invite","name":"denied","email":"denied@example.com"})
         )
         .await?
@@ -176,7 +190,7 @@ pub async fn check(e: &Engine) -> Result<()> {
             &r,
             buyer,
             buyer_token,
-            "/portal",
+            "/financial",
             json!({"action":"payment_methods","customer_id":customer})
         )
         .await?
@@ -197,7 +211,7 @@ pub async fn check(e: &Engine) -> Result<()> {
     );
     ensure!(call(&r,"account","","/authentication",json!({"strategy":"account","email":"new-links@example.com","password":"new-sandbox-link-password"})).await?.0==200,"New password fails");
     // A second company invitation must verify the existing password, never replace it.
-    let (_,existing)=call(&r,&e.merchant,owner,"/portal",json!({"action":"invite","name":"TEST existing identity","email":"owner-links@example.com"})).await?;
+    let (_,existing)=native_invitation(&r,&e.merchant,owner,json!({"action":"invite","name":"TEST existing identity","email":"owner-links@example.com"})).await?;
     ensure!(call(&r,"account","","/onboarding",json!({"action":"accept","token":existing["token"],"password":"wrong-but-long-password"})).await?.0==400,"Existing identity was taken over");
     ensure!(
         call(
@@ -224,7 +238,7 @@ pub async fn check(e: &Engine) -> Result<()> {
         e.prefix()
     ))
     .await?;
-    let (_,alternate)=call(&r,&e.merchant,owner,"/portal",json!({"action":"invite","name":"TEST alternate identity","email":"alternate-links@example.com"})).await?;
+    let (_,alternate)=native_invitation(&r,&e.merchant,owner,json!({"action":"invite","name":"TEST alternate identity","email":"alternate-links@example.com"})).await?;
     let (s, accepted) = call(
         &r,
         "account",
@@ -252,7 +266,7 @@ pub async fn check(e: &Engine) -> Result<()> {
     // A contact can accept an invitation without replacing their existing identity.
     let contact = uuid::Uuid::new_v4();
     e.write(format!(r#"{} insert $u isa person,has identity_id "{contact}",has name "Existing contact",has email "contact-links@example.com",has status "active";fetch {{"done":true}};"#,e.prefix())).await?;
-    let (_,invite_contact)=call(&r,&e.merchant,owner,"/portal",json!({"action":"invite","name":"TEST existing contact","email":"contact-links@example.com"})).await?;
+    let (_,invite_contact)=native_invitation(&r,&e.merchant,owner,json!({"action":"invite","name":"TEST existing contact","email":"contact-links@example.com"})).await?;
     ensure!(
         call(
             &r,
@@ -277,20 +291,18 @@ pub async fn check(e: &Engine) -> Result<()> {
         s == 200 && contact_login["user"]["id"] == contact.to_string(),
         "Contact identity was replaced"
     );
-    let (_, revoked) = call(
+    let (_, revoked) = native_invitation(
         &r,
         &e.merchant,
         owner,
-        "/portal",
         json!({"action":"invite","name":"TEST revoked","email":"revoked-links@example.com"}),
     )
     .await?;
     ensure!(
-        call(
+        native_invitation(
             &r,
             &e.merchant,
             owner,
-            "/portal",
             json!({"action":"revoke_invite","customer_id":revoked["customer_id"]})
         )
         .await?
@@ -309,15 +321,14 @@ pub async fn check(e: &Engine) -> Result<()> {
         .0 == 400,
         "Revoked link accepted"
     );
-    let (_, expired) = call(
+    let (_, expired) = native_invitation(
         &r,
         &e.merchant,
         owner,
-        "/portal",
         json!({"action":"invite","name":"TEST expired","email":"expired-links@example.com"}),
     )
     .await?;
-    e.write(format!(r#"{} $l isa account_invitation,has invitation_id {};update $l has invitation_expires 1;fetch {{"done":true}};"#,e.prefix(),expired["invitation_id"])).await?;
+    e.write(format!(r#"{} $l isa account_invitation,has invitation_id {};update $l has invitation_expires 1,has invitation_valid_until 1970-01-01T00:00:01;fetch {{"done":true}};"#,e.prefix(),expired["invitation_id"])).await?;
     ensure!(
         call(
             &r,
@@ -360,4 +371,69 @@ pub async fn check(e: &Engine) -> Result<()> {
     ensure!(legacy?.0 == 401, "Legacy gateway configuration accepted");
     println!("Verified invitation renewal, acceptance, replay protection, tenant permissions, generic recovery, reset race, password change and session revocation.");
     Ok(())
+}
+
+// Integration driver for public TypeQL and authentication plugin requests. This
+// intentionally exercises native authorization rather than seeding domain state.
+async fn native_invitation(
+    r: &axum::Router,
+    tenant: &str,
+    token: &str,
+    data: Value,
+) -> Result<(u16, Value)> {
+    let q = |v: &str| serde_json::to_string(v).unwrap();
+    let revision = uuid::Uuid::new_v4().to_string();
+    let invitation = uuid::Uuid::new_v4().to_string();
+    let action = data["action"].as_str().unwrap();
+    let customer;
+    let buyer;
+    let mut query;
+    if action == "invite" {
+        customer = uuid::Uuid::new_v4().to_string();
+        buyer = uuid::Uuid::new_v4().to_string();
+        let name = data["name"].as_str().unwrap();
+        let email = data["email"].as_str().unwrap();
+        query=format!("match $t isa tenant,has tenant_id {};put $b isa tenant,has tenant_id {},has name {},has status 'active',has revision {};$c isa bill_customer,has bill_key {},has name {},has bill_email {},has bill_customer_claim {},has bill_policy 'customer',has bill_choice 'manual',has bill_provider 'stripe',has bill_bindings '{{}}',has bill_method_plugin '',has bill_payment_method '',has bill_consent '',has bill_revision {};(merchant:$t,buyer:$b,customer:$c) isa bill_account;",q(tenant),q(&buyer),q(name),q(&revision),q(&customer),q(name),q(email),q(&format!("{tenant}:{email}")),q(&revision));
+    } else {
+        customer = data["customer_id"].as_str().unwrap().into();
+        let(status,out)=call(r,tenant,token,"/data",json!({"query":format!("match $c isa bill_customer,has bill_key {}; (customer:$c,buyer:$b) isa bill_account;$b isa tenant;fetch {{'buyer':$b.tenant_id,'revision':$b.revision}};",q(&customer))})).await?;
+        if status != 200 {
+            return Ok((status, out));
+        }
+        let rows = out["ok"]["answers"].as_array().unwrap();
+        if rows.len() != 1 {
+            return Ok((403, json!({})));
+        }
+        buyer = rows[0]["data"]["buyer"].as_str().unwrap().into();
+        query=format!("match $c isa bill_customer,has bill_key {};$b isa tenant,has tenant_id {},has revision {};(buyer:$b,customer:$c) isa bill_account;update $b has revision {};",q(&customer),q(&buyer),rows[0]["data"]["revision"],q(&revision));
+    }
+    if action != "revoke_invite" {
+        query+=&format!("match $c has bill_email $email_attr;let $email=$email_attr;let $now=request_now();let $until=$now+P2D;put $l isa account_invitation,has invitation_id {},has invitation_target {},has invitation_email == $email,has invitation_revision {},has invitation_expires {},has invitation_valid_until == $until,has invitation_used false;",q(&invitation),q(&buyer),q(&revision),chrono::Utc::now().timestamp()+172800);
+    }
+    query += "fetch {'id':$c.bill_key};";
+    let (status, out) = call(
+        r,
+        tenant,
+        token,
+        "/data",
+        json!({"query":query,"_write":true}),
+    )
+    .await?;
+    if status != 200 {
+        return Ok((status, out));
+    }
+    if action == "revoke_invite" {
+        return Ok((200, json!({"revoked":true})));
+    }
+    let (status, mut out) = call(
+        r,
+        tenant,
+        token,
+        "/authentication",
+        json!({"operation":"invitation","invitation_id":invitation}),
+    )
+    .await?;
+    out["customer_id"] = json!(customer);
+    out["tenant_id"] = json!(buyer);
+    Ok((status, out))
 }

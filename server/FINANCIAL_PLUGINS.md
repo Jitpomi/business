@@ -16,9 +16,28 @@ must not decide who owns an invoice, whether consent exists, or when to charge.
   durable claims, one-attempt collection, terminal states and normalized reconciliation.
 - `plugins`: built-in adapters, HTTP transport, signatures, provider history and raw
   provider services. Vendor payloads and credentials stop at this boundary.
-- `services::portal`: authenticates and resolves ownership before selecting a tenant
-  runtime. Existing `setup_card` / `confirm_card` actions remain aliases for generic
-  `setup_method` / `confirm_method` actions.
+- `/data`: account discovery is a frontend TypeQL query using native context
+  functions. Discovering one's companies does not widen tenant data access.
+- `services::financial`: tenant runtime metadata and provider operations (saved
+  method listing/setup and payment history), authorized by native billing policies.
+- Native TypeDB policies own customer and invitation creation, renewal/revocation,
+  payment-method choice, explicit consent and removal intent. Actor and time come
+  from the authenticated data context, not the caller.
+- Authentication plugins own credential-bearing challenges, managed-provider
+  acceptance and notification handoff. Identity/account materialisation is in
+  `auth::AccountLifecycle`; credentials stay outside TypeDB.
+- Reconciliation is an existing `billing.reconcile` automation action. There is
+  no `/portal` service, route, redirect or compatibility dispatcher.
+
+Only the financial plugin bridge can create verified-method facts. Native queries
+cannot manufacture them. Detach receives the expected external customer as well
+as the method and stable idempotency key; adapters must verify that binding and
+support safe reconciliation of a lost acknowledgement. Native removal intent is
+committed first, and a provider failure leaves the method unavailable for consent.
+Confirmation saves a method without implicitly changing a default or authorizing
+charges. Consent is a separate atomic native transaction, with server-owned
+`consent_at` and identity evidence. The older integer audit field is retained for
+historical compatibility; it does not establish authorization or policy time.
 
 Customer bindings are a private map from plugin ID to opaque external reference;
 selected methods record their plugin ID. Removed methods are namespaced by plugin.
@@ -31,7 +50,7 @@ instance under a stable ID in its tenant runtime, and inject the registry with
 `app::build_with_plugins`. Implement `NotificationPlugin` independently for email,
 SMS or another delivery system. Normal startup's composition root currently builds
 Stripe/Mercury and Resend from private environment JSON. Add other adapter factories
-there; the engine and portal need no vendor-specific branches. Never reuse a plugin
+there; the engine and public services need no vendor-specific branches. Never reuse a plugin
 ID for a different account while historical bindings still reference it.
 
 The plugin contract accepts opaque references and normalized states. Adapters must
@@ -108,7 +127,7 @@ BUSINESS_ENV_FILE=/private/development-operator.env cargo test --locked --test p
 
 The custom bank fixture runs two tenants through real TypeDB storage: scheduling,
 successful and declined collection, receipts, reminders, replay protection and
-cross-tenant rejection. It also exercises authenticated portal dispatch through the
+cross-tenant rejection. It also exercises authenticated financial-plugin dispatch through the
 injected registry. A separate test checks legacy data migration and repeatability.
 
 This demonstrates a third plugin without changes to business logic; it does not

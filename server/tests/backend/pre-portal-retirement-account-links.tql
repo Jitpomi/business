@@ -1,0 +1,10 @@
+define
+attribute invitation_id, value string;
+attribute invitation_email, value string;
+attribute invitation_target, value string;
+attribute invitation_revision, value string;
+attribute invitation_expires, value integer;
+attribute invitation_used, value boolean;
+entity account_invitation, owns invitation_id @key, owns invitation_email @card(1),
+ owns invitation_target @card(1), owns invitation_revision @card(1),
+ owns invitation_expires @card(1), owns invitation_used @card(1);

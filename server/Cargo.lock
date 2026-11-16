@@ -2379,6 +2379,7 @@ dependencies = [
  "tower 0.5.3",
  "tracing",
  "typedb-driver",
+ "typeql",
  "uuid",
 ]
 

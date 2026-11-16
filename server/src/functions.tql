@@ -159,3 +159,9 @@ fun excess_policy_access($t: tenant, $now: datetime) -> { identity, access_grant
     };
     let $eligible = grant_policy_satisfied($i, $t, $g, $now); $eligible == false;
   return { $i, $g };
+
+fun tenant_member_scope($tenant: string, $actor: string, $now: datetime, $t: tenant) -> boolean:
+  match $t has tenant_id == $tenant;
+    $i isa identity, has identity_id == $actor;
+    let $ok=active_member($i,$t,$now); $ok==true;
+  return check;

@@ -2,6 +2,10 @@
 // Any structurally safe frontend query is accepted by the schema-policy executor.
 pub const ASSETS: &[(&str, &str)] = &[
     (
+        "account-profile",
+        include_str!("../../../public/queries/data/account-profile.tql"),
+    ),
+    (
         "billing-customers",
         include_str!("../../../public/queries/data/billing-customers.tql"),
     ),

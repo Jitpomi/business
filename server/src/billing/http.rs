@@ -95,7 +95,18 @@ async fn account_action(
     // Gateway has per-IP limits; the DB additionally limits reset mail per account.
     let result = tokio::time::timeout(
         std::time::Duration::from_secs(40),
-        state.engine.public_account_action(kind, &data),
+        crate::auth::AccountLifecycle::new(
+            state.engine.state.clone(),
+            &state.engine.merchant,
+            state.engine.runtime.clone(),
+        )
+        .map_err(|_| {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({"message":"Account service unavailable"})),
+            )
+        })?
+        .public_account_action(kind, &data),
     )
     .await;
     match result {
@@ -134,7 +145,7 @@ async fn recover_account(
     }
     account_action(state, headers, data, "reset").await
 }
-/// Dynamic ingress uses the same tenant-owned connections as automation and the portal.
+/// Dynamic ingress uses the same tenant-owned connections as automation and the financial proxy.
 #[derive(Clone)]
 struct ManagedIngress {
     state: Arc<crate::typedb::TypeDBState>,
