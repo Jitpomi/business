@@ -37,8 +37,10 @@ No schema migration is needed: jobs use a new kind of private automation record.
 Stop old writers, export and restore-verify a fresh backup, rehearse backfill on a
 restored copy and verify existing business records remain unchanged. Backfill only
 adds missing revision deliveries and makes no provider calls. Keep original backups.
-Do not run old and new workers together during cutover. Rollback uses the earlier
-binary, whose poller ignores job records; quiesce new workers first.
+Quiesce writers for backup and rehearsal. During a rolling replacement, both
+versions use the same native workflow CAS and effect journal; the earlier poller
+ignores job records. Queue backfill changes no existing business attributes.
+Rollback uses the earlier binary; quiesce new workers first.
 
 The dog-queue dependency pins reviewed upstream source with graceful drain and pool
 health support. There is no copied worker or local path dependency, and no new

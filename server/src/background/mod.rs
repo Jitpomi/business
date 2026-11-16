@@ -68,7 +68,7 @@ pub async fn reconcile(store: &Store) -> Result<usize> {
             )?;
             anyhow::ensure!(!clause.is_empty(), "Invalid pending workflow");
             let query=format!("{} $r isa automation_record,has auto_tenant {},has auto_key {},has auto_revision {};not {{$existing isa automation_record,has auto_key {};}};select $t,$r;{clause}fetch {{'id':$job.auto_key}};",store.prefix(),q(&store.tenant),q(key),q(rev),q(&store.key("job",rev)));
-            match crate::storage::write(&store.state, &query).await {
+            match crate::storage::write_queue(&store.state, &query).await {
                 Ok(_) => inserted += 1,
                 Err(e) => {
                     // Reconcile a raced or uncertain commit by exact immutable ID.

@@ -53,7 +53,7 @@ async fn main() -> Result<()> {
         values(&original)? == values(&expected)?,
         "Backup restore differs; source untouched"
     );
-    let graph = snapshot::graph(&driver, &target, &["revision"]).await?;
+    let graph = snapshot::graph(&driver, &target, &[]).await?;
     let state = Arc::new(server::typedb::TypeDBState {
         driver: driver.clone(),
         database: target.clone(),
@@ -81,19 +81,12 @@ async fn main() -> Result<()> {
     }
     let after = snapshot::records(&driver, &target).await?;
     for (iid, old) in &original {
-        let mut old = old.clone();
-        let mut new = after
+        let new = after
             .get(iid)
-            .ok_or_else(|| anyhow::anyhow!("Original object missing"))?
-            .clone();
-        // The storage fence changes only tenant revision metadata.
-        if old.get("tenant_id").is_some() {
-            old.as_object_mut().unwrap().remove("revision");
-            new.as_object_mut().unwrap().remove("revision");
-        }
+            .ok_or_else(|| anyhow::anyhow!("Original object missing"))?;
         ensure!(old == new, "Original business attributes changed");
     }
-    let next_graph = snapshot::graph(&driver, &target, &["revision"]).await?;
+    let next_graph = snapshot::graph(&driver, &target, &[]).await?;
     ensure!(
         graph
             .iter()
