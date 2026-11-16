@@ -57,7 +57,7 @@ async fn real_typedb_model_and_policy_matrix() -> Result<()> {
         schema.query(FUNCTIONS).await?;
         schema.commit().await?;
         let seed = driver.transaction(&database, TransactionType::Write).await?;
-        seed.query(include_str!("fixtures.tql").replace("@@password_hash@@", &bcrypt::hash("rebuild-test-password", 4)?)).await?;
+        seed.query(include_str!("fixtures.tql")).await?;
         seed.commit().await?;
         // Schema, not application code, rejects unaccountable grants.
         for bad in [

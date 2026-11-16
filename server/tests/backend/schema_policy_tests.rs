@@ -77,6 +77,7 @@ fn answers(value: &Value) -> Result<&Vec<Value>> {
 #[ignore = "Real TypeDB, JWT and loopback HTTP; disposable database only"]
 async fn schema_policy_real_http_migration() -> Result<()> {
     dotenvy::from_path(std::env::var("BUSINESS_ENV_FILE")?)?;
+    super::support::auth()?;
     ensure!(
         std::env::var("TYPEDB_DB")? == "business_dev",
         "Development credentials only"
@@ -102,7 +103,8 @@ async fn schema_policy_real_http_migration() -> Result<()> {
         tx.commit().await?;
         let state=Arc::new(server::typedb::TypeDBState{driver:driver.clone(),database:database.clone()});
         let trusted=dog_typedb::TypeDBAdapter::new(state.clone());
-        trusted.write(json!({"query":include_str!("fixtures.tql").replace("@@password_hash@@", &bcrypt::hash("rebuild-test-password",4)?)})).await?;
+        trusted.write(json!({"query":include_str!("fixtures.tql")})).await?;
+        super::seed_accounts(&database)?;
         trusted.write(json!({"query":include_str!("billing-fixtures.tql")})).await?;
         let (app,http)=build_with_state(state,"schema-policy-test-secret-more-than-thirty-two-bytes".into())?;
         let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await?;
@@ -161,10 +163,7 @@ async fn schema_policy_real_http_migration() -> Result<()> {
         // Rotate credentials in the isolated fixture, then verify both public
         // login and per-request JWT invalidation. This is not a recovery test.
         let replacement_hash=bcrypt::hash("replacement-test-password",4)?;
-        trusted.write(json!({"query":format!(
-            "match $p isa person,has identity_id 'bob'; $credential isa password_credential,links(person:$p); update $credential has password_hash {},has credential_version 'test-rotation';",
-            serde_json::to_string(&replacement_hash)?
-        )})).await?;
+        server::auth::plugins::local::Local::configured(&database)?.rotate("bob",&replacement_hash,"test-rotation")?;
         ensure!(call(&client,&base,"tenant-a","read",b,raw).await?.0>=400,
             "Credential rotation did not invalidate the previous session");
         let stale=client.post(format!("{base}/authentication"))
@@ -287,7 +286,7 @@ async fn schema_policy_real_http_migration() -> Result<()> {
         let (status,foreign)=call(&client,&base,"tenant-b","read",d,"match $r isa resource,has resource_id 'concurrent-a'; fetch {'id':$r.resource_id};").await?;
         ensure!(status==200 && answers(&foreign)?.is_empty(),"Concurrent data crossed tenants");
         // JWT authentication still rechecks current credential versions.
-        trusted.write(json!({"query":"match $p isa person,has identity_id 'bob'; $credential isa password_credential,links(person:$p); update $credential has credential_version 'rotated';"})).await?;
+        let store=server::auth::plugins::local::Local::configured(&database)?;let account=store.lookup("bob",false)?.unwrap();store.rotate("bob",account["password"].as_str().unwrap(),"rotated")?;
         ensure!(call(&client,&base,"tenant-a","read",b,raw).await?.0>=400,"Rotated token accepted");
         ensure!(data.custom(dog_core::TenantContext::new("tenant-a"),"read",Some(json!({"query":raw})),internal).await.is_err(),"Cached internal call accepted rotated credentials");
         trusted.write(json!({"query":"match $p isa person,has identity_id 'carol'; $m isa membership,links(member:$p); update $m has end_at 2000-01-01T00:00:00;"})).await?;

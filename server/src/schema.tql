@@ -24,10 +24,6 @@ attribute reason, value string;
 attribute reviewed_at, value datetime;
 attribute review_outcome, value string @values("certified", "revoked");
 attribute revision, value string;
-attribute password_hash, value string;
-attribute credential_version, value string;
-attribute token_key, value string;
-entity auth_revocation, owns token_key @key;
 attribute bootstrap_id, value string;
 entity bootstrap_record, owns bootstrap_id @key;
 
@@ -38,14 +34,13 @@ entity identity @abstract, sub principal,
   owns status @card(1) @values("active", "suspended", "terminated");
 # People exist independently of login credentials. Email is optional contact data.
 entity person sub identity, owns email @unique @card(0..1);
-# Authentication methods attach to a person; they do not define that person.
-attribute credential_id, value string;
-attribute login_email, value string;
-relation authentication_credential @abstract, relates person @card(1),
-  owns credential_id @key, owns credential_version @card(1);
-relation password_credential sub authentication_credential,
-  owns login_email @key, owns password_hash @card(1);
-person plays authentication_credential:person;
+# External identities are non-secret references, not credentials or sessions.
+attribute auth_binding_key, value string;
+attribute auth_issuer, value string;
+attribute auth_subject, value string;
+relation external_identity, relates identity @card(1),
+  owns auth_binding_key @key, owns auth_issuer @card(1), owns auth_subject @card(1);
+identity plays external_identity:identity;
 entity service_account sub identity, owns service_name @key;
 entity tenant,
   owns tenant_id @key, owns name @card(1),

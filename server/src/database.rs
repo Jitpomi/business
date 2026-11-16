@@ -39,8 +39,8 @@ pub async fn verify(driver: &TypeDBDriver, name: &str) -> Result<()> {
         .unwrap_or("");
     ensure!(
         schema.contains("dog.security.scope") && schema.contains("scope_resource")
-        && schema.contains("relation password_credential") && schema.contains("scope_password_credential")
-        && schema.contains("credential_id") && !person.contains("owns password_hash")
+        && schema.contains("relation external_identity") && schema.contains("scope_external_identity")
+        && !schema.contains("attribute password_hash") && !schema.contains("attribute credential_version") && !schema.contains("entity auth_revocation") && !schema.contains("entity account_link") && !person.contains("owns password_hash")
         && !person.contains("owns credential_version") && schema.contains("bootstrap_record")
         && compact.contains("ownsbill_bindings@card(1..1)") && compact.contains("ownsbill_method_plugin@card(1..1)"),
         "Database is not the canonical Business model; follow the explicit schema migration guides. Startup will not migrate or reset it"
@@ -116,6 +116,14 @@ pub async fn bootstrap(
         tokio::task::spawn_blocking(move || bcrypt::hash(owner.password, bcrypt::DEFAULT_COST))
             .await??;
     let identity = uuid::Uuid::new_v4().to_string();
+    let local = crate::auth::Registry::configured(name)?.local()?;
+    let binding = crate::auth::binding_key("urn:jitpomi:local", &identity);
+    local.import(
+        &identity,
+        &owner.email.trim().to_ascii_lowercase(),
+        &hash,
+        "initial",
+    )?;
     let tenant = uuid::Uuid::new_v4().to_string();
     let q = |s: &str| serde_json::to_string(s).unwrap();
     let tx = driver.transaction(name, TransactionType::Write).await?;
@@ -127,9 +135,9 @@ pub async fn bootstrap(
     tx.query(format!(r#"insert
        $lock isa bootstrap_record,has bootstrap_id "initial";
        $t isa tenant,has tenant_id "{tenant}",has name {},has status "active",has revision "initial";
-       $i isa person,has identity_id "{identity}",has email {},has name {},has status "active"; (person:$i) isa password_credential,has credential_id "{identity}",has login_email {},has password_hash {},has credential_version "initial";
+       $i isa person,has identity_id "{identity}",has email {},has name {},has status "active"; (identity:$i) isa external_identity,has auth_binding_key "{binding}",has auth_issuer "urn:jitpomi:local",has auth_subject "{identity}";
        (tenant:$t,member:$i) isa membership,has membership_role "owner",has start_at {};
-    "#,q(&owner.tenant_name),q(&owner.email.trim().to_ascii_lowercase()),q(&owner.name),q(&owner.email.trim().to_ascii_lowercase()),q(&hash),chrono::Utc::now().naive_utc().format("%Y-%m-%dT%H:%M:%S%.6f"))).await?;
+    "#,q(&owner.tenant_name),q(&owner.email.trim().to_ascii_lowercase()),q(&owner.name),chrono::Utc::now().naive_utc().format("%Y-%m-%dT%H:%M:%S%.6f"))).await?;
     tx.commit().await?;
     Ok((tenant, identity))
 }

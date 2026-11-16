@@ -11,3 +11,5 @@ pub mod events;
 pub mod managed;
 pub mod migration;
 pub mod runtime;
+
+pub mod secret_store;

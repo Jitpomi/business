@@ -34,6 +34,6 @@ async fn main() -> anyhow::Result<()> {
         "Backup is stale; export and restore-verify a fresh backup before applying"
     );
     let count = server::credential_migration::migrate(&driver, &name).await?;
-    println!("Separated {count} password credentials; identities, memberships and password hashes preserved. Existing sessions must sign in again.");
+    println!("Evacuated {count} authentication accounts to the external plugin store; identity and business history preserved. Existing platform sessions must sign in again.");
     Ok(())
 }

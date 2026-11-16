@@ -14,7 +14,19 @@ pub fn configure(
     state: Arc<crate::typedb::TypeDBState>,
     registry: Arc<crate::finance::TenantRegistry>,
 ) -> anyhow::Result<()> {
-    builder.register_service("authentication", auth);
+    let plugins: Arc<crate::auth::Registry> = builder
+        .get("authentication.plugins")
+        .ok_or_else(|| anyhow::anyhow!("Authentication plugins missing"))?;
+    builder.register_service(
+        "authentication",
+        Arc::new(
+            authentication::authentication_service::PluginAuthentication {
+                auth,
+                plugins,
+                state: state.clone(),
+            },
+        ),
+    );
     authentication::authentication_shared::register_hooks(builder)?;
     builder.register_service("data", Arc::new(data::DataService::new(state.clone())));
     let authentication: Arc<dog_auth::AuthenticationService<BusinessParams>> = builder

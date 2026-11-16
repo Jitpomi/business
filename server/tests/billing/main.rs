@@ -16,6 +16,7 @@ use typedb_driver::TransactionType;
 #[ignore = "Requires approved development TypeDB, Stripe TEST key and approved Resend test recipient; creates only a disposable database and synthetic provider records"]
 async fn scheduled_payment_receipt_and_decline_reminder() -> Result<()> {
     dotenvy::from_path(std::env::var("BUSINESS_ENV_FILE")?)?;
+    support::auth()?;
     ensure!(
         std::env::var("TYPEDB_DB")? == "business_dev",
         "Development credentials required"
@@ -185,6 +186,7 @@ async fn scheduled_payment_receipt_and_decline_reminder() -> Result<()> {
 #[ignore = "Real development TypeDB; disposable database only; no provider calls or email"]
 async fn account_and_invoice_workflow_without_provider_effects() -> Result<()> {
     dotenvy::from_path(std::env::var("BUSINESS_ENV_FILE")?)?;
+    support::auth()?;
     ensure!(
         std::env::var("TYPEDB_DB")? == "business_dev",
         "Development credentials only"
@@ -262,3 +264,6 @@ async fn account_and_invoice_workflow_without_provider_effects() -> Result<()> {
     driver.databases().get(&name).await?.delete().await?;
     result
 }
+
+#[path = "../support/mod.rs"]
+mod support;

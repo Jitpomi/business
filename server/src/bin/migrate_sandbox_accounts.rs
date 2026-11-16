@@ -68,9 +68,17 @@ async fn run() -> Result<()> {
     .await?
     .is_empty()
     {
-        let copied=documents(&check,"match $p isa person;$credential isa password_credential,links(person:$p),has credential_version \"migration-v1\";fetch {'id':$p.identity_id,'hash':$credential.password_hash};").await?;
+        let copied=documents(&check,"match $p isa person;$link isa external_identity,links(identity:$p),has auth_issuer 'urn:jitpomi:local';fetch {'id':$p.identity_id,'subject':$link.auth_subject};").await?;
+        let store = server::auth::plugins::local::Local::configured(TARGET)?;
+
         let source = d.transaction(SOURCE, TransactionType::Read).await?;
         for person in &copied {
+            let Some(account) = store.lookup(s(person, "subject")?, false)? else {
+                continue;
+            };
+            if account["version"] != "migration-v1" {
+                continue;
+            }
             let original = documents(
                 &source,
                 &format!(
@@ -80,7 +88,7 @@ async fn run() -> Result<()> {
             )
             .await?;
             ensure!(
-                original.len() == 1 && original[0]["hash"] == person["hash"],
+                original.len() == 1 && original[0]["hash"] == account["password"],
                 "Password preservation check failed"
             );
         }
@@ -179,7 +187,14 @@ async fn run() -> Result<()> {
         if aliases.contains_key(&id) {
             continue;
         }
-        out.query(format!(r#"insert $u isa person,has identity_id {},has name {},has email {},has status "active"; (person:$u) isa password_credential,has credential_id {},has login_email {},has password_hash {},has credential_version "migration-v1";"#,q(&id),q(s(u,"email")?),q(s(u,"email")?),q(&id),q(s(u,"email")?),q(s(u,"password")?))).await?;
+        server::auth::plugins::local::Local::configured(TARGET)?.import(
+            &id,
+            s(u, "email")?,
+            s(u, "password")?,
+            "migration-v1",
+        )?;
+        let link = server::auth::local_link("$u", &id)?;
+        out.query(format!(r#"insert $u isa person,has identity_id {},has name {},has email {},has status "active";{link}"#,q(&id),q(s(u,"email")?),q(s(u,"email")?))).await?;
     }
     let mut seen = BTreeSet::new();
     for u in &members {

@@ -1,18 +1,13 @@
-//! Shared durable token revocation. A key constraint arbitrates concurrent refresh consumption.
+//! Local-plugin session state is durable and outside the business graph.
 use anyhow::Result;
 use dog_auth::core::TokenStore;
-use dog_typedb::TypeDBAdapter;
-use serde_json::json;
 use sha2::{Digest, Sha256};
-use std::sync::Arc;
-pub struct TypeDbTokenStore {
-    adapter: TypeDBAdapter,
+pub struct LocalTokenStore {
+    store: std::sync::Arc<dyn super::accounts::LocalAccounts>,
 }
-impl TypeDbTokenStore {
-    pub fn new(state: Arc<crate::typedb::TypeDBState>) -> Self {
-        Self {
-            adapter: TypeDBAdapter::new(state),
-        }
+impl LocalTokenStore {
+    pub fn new(store: std::sync::Arc<dyn super::accounts::LocalAccounts>) -> Self {
+        Self { store }
     }
     fn key(issuer: &str, jti: &str) -> String {
         let mut hash = Sha256::new();
@@ -21,46 +16,21 @@ impl TypeDbTokenStore {
         hash.update(jti);
         format!("{:x}", hash.finalize())
     }
-    async fn exists(&self, key: &str) -> Result<bool> {
-        let out=self.adapter.read(json!({"query":format!(r#"match $t isa auth_revocation, has token_key "{key}"; fetch {{ "key": $t.token_key }};"#)})).await?;
-        let rows = out
-            .pointer("/ok/answers")
-            .and_then(|v| v.as_array())
-            .ok_or_else(|| anyhow::anyhow!("Invalid token lookup response"))?;
-        Ok(!rows.is_empty())
+}
+#[async_trait::async_trait]
+impl TokenStore for LocalTokenStore {
+    async fn is_revoked(&self, issuer: &str, jti: &str) -> Result<bool> {
+        self.store.revoked(&Self::key(issuer, jti))
     }
-    async fn consume(&self, issuer: &str, jti: &str, expires: i64) -> Result<bool> {
+    async fn revoke(&self, issuer: &str, jti: &str, expires: i64) -> Result<()> {
+        self.store.revoke(&Self::key(issuer, jti), expires)?;
+        Ok(())
+    }
+    async fn consume_refresh(&self, issuer: &str, jti: &str, expires: i64) -> Result<bool> {
         if expires <= chrono::Utc::now().timestamp() {
             return Ok(false);
         }
-        let key = Self::key(issuer, jti);
-        if self.exists(&key).await? {
-            return Ok(false);
-        }
-        let result=self.adapter.write(json!({"query":format!(r#"insert $t isa auth_revocation, has token_key "{key}";"#)})).await;
-        match result {
-            Ok(_) => Ok(true),
-            Err(error) => {
-                if self.exists(&key).await? {
-                    Ok(false)
-                } else {
-                    Err(error)
-                }
-            }
-        }
-    }
-}
-#[async_trait::async_trait]
-impl TokenStore for TypeDbTokenStore {
-    async fn is_revoked(&self, issuer: &str, jti: &str) -> Result<bool> {
-        self.exists(&Self::key(issuer, jti)).await
-    }
-    async fn revoke(&self, issuer: &str, jti: &str, expires_at: i64) -> Result<()> {
-        self.consume(issuer, jti, expires_at).await?;
-        Ok(())
-    }
-    async fn consume_refresh(&self, issuer: &str, jti: &str, expires_at: i64) -> Result<bool> {
-        self.consume(issuer, jti, expires_at).await
+        self.store.revoke(&Self::key(issuer, jti), expires)
     }
 }
 #[cfg(test)]

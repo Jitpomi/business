@@ -214,6 +214,7 @@ async fn two_tenants_complete_billing_using_independent_plugins() -> Result<()> 
     use server::{billing::engine::Engine, database, typedb::TypeDBState};
     use typedb_driver::TransactionType;
     dotenvy::from_path(std::env::var("BUSINESS_ENV_FILE")?)?;
+    support::auth()?;
     ensure!(
         std::env::var("TYPEDB_DB")? == "business_dev",
         "Development credentials only"
@@ -243,7 +244,8 @@ async fn two_tenants_complete_billing_using_independent_plugins() -> Result<()> 
             let engine=Engine::new(state.clone(),&tenant,Arc::new(runtime))?;
             let identity=uuid::Uuid::new_v4();let email=format!("{tenant}@example.invalid");let password_hash=bcrypt::hash("plugin-owner-test-password",4)?;
             let tx=driver.transaction(&name,TransactionType::Write).await?;
-            tx.query(format!(r#"insert $t isa tenant,has tenant_id "{tenant}",has name "Plugin tenant",has status "active",has revision "initial";$u isa person,has identity_id "{identity}",has email "{email}",has name "Owner",has status "active"; (person:$u) isa password_credential,has credential_id "{identity}",has login_email "{email}",has password_hash "{password_hash}",has credential_version "initial";(tenant:$t,member:$u) isa membership,has membership_role "owner",has start_at 2020-01-01T00:00:00;"#)).await?;tx.commit().await?;
+            let auth_link_0=server::auth::local_link("$u",&identity.to_string())?;server::auth::plugins::local::Local::configured(&name)?.import(&identity.to_string(),&email.to_string(),&password_hash.to_string(),"initial")?;
+tx.query(format!(r#"insert $t isa tenant,has tenant_id "{tenant}",has name "Plugin tenant",has status "active",has revision "initial";$u isa person,has identity_id "{identity}",has email "{email}",has name "Owner",has status "active"; {auth_link_0}(tenant:$t,member:$u) isa membership,has membership_role "owner",has start_at 2020-01-01T00:00:00;"#)).await?;tx.commit().await?;
             for label in ["success","decline"] {
                 let customer=uuid::Uuid::new_v4();let buyer=uuid::Uuid::new_v4();let plan=uuid::Uuid::new_v4();let now=chrono::Utc::now().timestamp()-10;
                 engine.write(format!(r#"{} insert $buyer isa tenant,has tenant_id "{buyer}",has name "Buyer",has status "active",has revision "initial";
@@ -297,6 +299,7 @@ async fn explicit_migration_preserves_legacy_work_and_is_repeatable() -> Result<
     use server::database;
     use typedb_driver::TransactionType;
     dotenvy::from_path(std::env::var("BUSINESS_ENV_FILE")?)?;
+    support::auth()?;
     ensure!(
         std::env::var("TYPEDB_DB")? == "business_dev",
         "Development credentials only"
@@ -368,3 +371,6 @@ async fn portal_call(
     let bytes = axum::body::to_bytes(response.into_body(), 1000000).await?;
     Ok((status, serde_json::from_slice(&bytes)?))
 }
+
+#[path = "../support/mod.rs"]
+mod support;

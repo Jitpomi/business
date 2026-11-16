@@ -36,6 +36,7 @@ fn tool(command: &str, database: &str, owner: bool) -> Result<()> {
 #[ignore = "Real TypeDB and actual database/server executables; generated disposable target and non-admin runtime credentials only"]
 async fn canonical_tools_and_server_end_to_end() -> Result<()> {
     dotenvy::from_path(std::env::var("BUSINESS_ENV_FILE")?)?;
+    super::support::auth()?;
     ensure!(
         std::env::var("TYPEDB_DB")? == "business_dev",
         "Development credential source required"

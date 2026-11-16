@@ -7,7 +7,7 @@ Human first. Simple first. Local first.
 ## Structure and responsibilities
 
 - `src/app.rs` composes the same application used by the executable and integration tests.
-- `src/auth/` uses dog-auth/dog-auth-local for credentials, JWT verification and persisted revocation. People are independent of authentication: zero or many credential relationships can belong to one person. Each protected call checks the specific credential and its version, the person and tenant membership. See [identity and credential migration](docs/identity-credentials.md).
+- `src/auth/` uses dog-auth/dog-auth-local for credentials, JWT verification and persisted revocation. People are independent of authentication. Provider plugins own credentials and account lifecycle outside TypeDB; the graph holds issuer/subject identity links and enforces tenant access through schema policies and TypeQL functions. See [identity and credential migration](docs/identity-credentials.md).
 - `src/services/data/` exposes only custom `read` and `write`. The frontend sends complete TypeQL. Hooks validate the transport envelope and bind freshly verified scope; dog-typedb's schema-policy executor enforces the model. There is no per-query registry.
 - `src/schema.tql`, `src/functions.tql`, `src/schema-policy.tql` and `src/billing.tql` define identities, membership, ownership, grants, reviews and domain rules. Security functions and annotations are not replaced with Rust domain switches.
 - Provider resources have `_service`, `_shared`, `_hooks` and `_schema` modules; common provider hooks live in `hooks/`, credentials in `auth-<provider>/`, and HTTP in adapters. Providers do not query TypeDB.

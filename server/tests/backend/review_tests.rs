@@ -10,6 +10,7 @@ use typedb_driver::TransactionType;
 #[ignore = "Real TypeDB; disposable database; concurrent review reproduction"]
 async fn concurrent_review_reproduction() -> Result<()> {
     dotenvy::from_path(std::env::var("BUSINESS_ENV_FILE")?)?;
+    super::support::auth()?;
     ensure!(
         std::env::var("TYPEDB_DB")? == "business_dev",
         "Development credentials only"
@@ -31,7 +32,8 @@ async fn concurrent_review_reproduction() -> Result<()> {
         tx.commit().await?;
         let state = Arc::new(server::typedb::TypeDBState { driver: driver.clone(), database: database.clone() });
         let trusted = dog_typedb::TypeDBAdapter::new(state.clone());
-        trusted.write(json!({"query": include_str!("fixtures.tql").replace("@@password_hash@@", &bcrypt::hash("rebuild-test-password", 4)?)})).await?;
+        trusted.write(json!({"query": include_str!("fixtures.tql")})).await?;
+        super::seed_accounts(&database)?;
         let (app, http) = build_with_state(state, "focused-review-test-secret-more-than-thirty-two-bytes".into())?;
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
         let base = format!("http://{}", listener.local_addr()?);

@@ -88,7 +88,13 @@ fn compose(
     builder.set("tenant.plugins", registry.clone());
     let auth = crate::auth::strategies(&mut builder, state.clone())?;
     crate::services::configure(&mut builder, auth.clone(), state, registry)?;
+    let authentication_requirements = crate::auth::requirements::configure(&mut builder)?;
     let app = builder.build();
+    for service in authentication_requirements {
+        app.service(&service).map_err(|_| {
+            anyhow::anyhow!("Authentication requirement names an unregistered service")
+        })?;
+    }
     auth.setup(app.clone());
     let http = app.clone().into_service(
         dog_transport::HttpOptions::default()
@@ -174,4 +180,22 @@ pub fn build_with_connectors(
     builder.set("auth.jwt.secret", jwt_secret);
     builder.set("typedb", state);
     compose(builder, registry, Some(catalog))
+}
+
+/// Hosts can supply provider plugins without changing data or financial services.
+pub fn build_with_authentication(
+    state: Arc<crate::typedb::TypeDBState>,
+    jwt_secret: String,
+    finance: Arc<crate::finance::TenantRegistry>,
+    authentication: Arc<crate::auth::Registry>,
+) -> Result<Backend> {
+    anyhow::ensure!(
+        jwt_secret.trim().len() >= 32,
+        "JWT secret must contain at least 32 bytes"
+    );
+    let mut builder = dog_core::DogAppBuilder::new();
+    builder.set("typedb", state);
+    builder.set("auth.jwt.secret", jwt_secret);
+    builder.set("authentication.plugins", authentication);
+    compose(builder, finance, None)
 }

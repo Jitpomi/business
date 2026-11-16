@@ -46,11 +46,11 @@ impl RuntimeSource for Managed {
             let Ok(connector) = self.catalog.get(&c.connector) else {
                 continue;
             };
-            let secrets = if c.sealed.is_empty() {
+            let secrets = if c.secret_ref.is_empty() {
                 serde_json::Value::Null
             } else {
                 self.vault
-                    .open(&format!("{tenant}/{}/{}", c.id, c.revision), &c.sealed)?
+                    .open(&format!("{tenant}/{}/{}", c.id, c.revision), &c.secret_ref)?
             };
             let ctx = Invocation {
                 tenant: tenant.into(),

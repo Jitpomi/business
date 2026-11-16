@@ -1,6 +1,6 @@
 mod admission;
 pub mod app;
-mod auth;
+pub mod auth;
 pub mod billing;
 mod config;
 pub mod database;
