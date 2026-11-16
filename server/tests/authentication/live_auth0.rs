@@ -21,7 +21,7 @@ async fn browser_auth0_proofs_enforce_native_multitenant_policies() -> Result<()
     let config: Vec<Config> = serde_json::from_str(include_str!(
         "../../../deploy/auth0/development-provider.json"
     ))?;
-    let _ = rustls::crypto::ring::default_provider().install_default();
+    server::tls::initialize();
     let plugin = Arc::new(Oidc::new(config[0].clone())?);
     let verified_owner = plugin.verify(&owner).await?;
     let verified_outsider = plugin.verify(&outsider).await?;

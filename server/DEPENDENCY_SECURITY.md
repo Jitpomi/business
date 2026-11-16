@@ -1,21 +1,34 @@
 # Dependency security validation
 
-The November 2026 update refreshes the registry lockfile and upgrades bundled
-SQLite through rusqlite 0.43. It removes the known vulnerability and unsoundness
-findings without changing the authentication schema, credential format, native
-TypeDB RBAC, tenant plugin ownership or payment idempotency keys. Existing auth
-stores and database checkpoints remain outside source control and are retained.
+Verified 16 November 2026. The active application graph has zero reported
+vulnerability, unsoundness, yanked or unmaintained findings. CI rejects all four
+classes without advisory ignores or target filtering.
 
-CI audits the lockfile and rejects vulnerabilities, unsoundness findings and
-yanked dependencies. No advisory is ignored. RustSec still reports the
-unmaintained `rustls-pemfile` 2.2.0 dependency through TypeDB's driver and tonic
-0.12. The current upstream TypeDB driver also uses this tonic series. There is
-no patched pemfile release; removing the warning requires an upstream driver/
-transport migration. We retain verified TLS and the compatible database protocol
-and do not substitute a local crypto/transport fork or disable TLS to hide it.
+Business pins JITPOMI's reviewed TypeDB driver compatibility commit `548a885`
+through its root Cargo patch. It selects matching protocol commit `2644e0d`.
+These branches retain the exact upstream 3.13.6 Rust source and unchanged 3.13.4
+protobuf definitions, migrating their Tonic/Prost transport to maintained 0.14.
+Certificate roots, hostname verification and authentication injection remain;
+there is no custom TLS/cryptography implementation. The native schema, RBAC,
+credential formats, plugin ownership and payment idempotency keys are unchanged.
+No data migration or live credential-store rewrite is required.
 
-Verify with `cargo audit --deny unsound --deny yanked`, the ordinary Rust and
-frontend checks, then the explicit synthetic native-policy and provider replay
-suites. Replay existing Stripe/Mercury checkpoint IDs; do not create replacement
-invoices or force provider payment status. The canonical consent and migration
-acceptance guides describe those operator workflows.
+HTTP TLS setup is explicit and shared by application and standalone plugin
+entrypoints. The OIDC client initializes its provider without requiring a database
+or payment plugin to have run first. Existing host-selected providers are retained;
+a separate-process regression verifies independent construction and idempotence.
+
+The source branches are explicitly JITPOMI-maintained, not upstream releases.
+Their JITPOMI-MAINTENANCE.md documents provenance, validation and replacement.
+The driver removes the unused normal async-std dependency, matching the prior
+registry package, and preserves the C client's sync feature at its own boundary.
+The pin must be replaced only by an equivalent maintained upstream release that
+passes the same TLS, native policy, Auth0, migration and provider acceptance tests.
+Cargo root patches are workspace scoped; this does not claim to change already
+published DogRS crates or constitute a new crates.io release.
+
+Verify with `cargo audit --deny unsound --deny yanked --deny unmaintained`, Rust
+and frontend checks, then the explicit native-policy, credential preservation,
+consent, two-tenant plugin and provider replay suites described in tests/README.md.
+Replay retained Stripe/Mercury IDs; do not replace invoices, force settlement or
+repeat notices. Existing data stores and migration checkpoints remain retained.

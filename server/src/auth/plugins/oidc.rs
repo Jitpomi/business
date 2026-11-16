@@ -56,6 +56,7 @@ pub struct Oidc {
 }
 impl Oidc {
     pub fn new(config: Config) -> Result<Self> {
+        crate::tls::initialize();
         for value in [&config.issuer, &config.jwks_uri]
             .into_iter()
             .chain(config.account_url.as_ref())

@@ -31,7 +31,7 @@ async fn main() -> Result<()> {
     }
     let worker =
         automation.map(|template| server::automation::runtime::spawn_all((*template).clone()));
-    axum::serve(listener, router)
+    let served = axum::serve(listener, router)
         .with_graceful_shutdown(async {
             #[cfg(unix)]
             {
@@ -48,10 +48,10 @@ async fn main() -> Result<()> {
                 let _ = tokio::signal::ctrl_c().await;
             }
         })
-        .await?;
+        .await;
     if let Some(worker) = worker {
-        worker.abort();
-        let _ = worker.await;
+        worker.shutdown().await?;
     }
+    served?;
     Ok(())
 }

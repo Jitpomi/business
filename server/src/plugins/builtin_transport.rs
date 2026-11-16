@@ -90,7 +90,7 @@ impl Providers {
                 "Invalid Mercury token"
             );
         }
-        let _ = rustls::crypto::ring::default_provider().install_default();
+        crate::tls::initialize();
         Ok(Self {
             http: Client::builder()
                 .https_only(true)

@@ -34,7 +34,7 @@ impl StripeHttp {
             .timeout(std::time::Duration::from_secs(25))
     }
     pub fn new() -> Result<Self> {
-        let _ = rustls::crypto::ring::default_provider().install_default();
+        crate::tls::initialize();
         Ok(Self {
             http: Self::client_builder().build()?,
         })

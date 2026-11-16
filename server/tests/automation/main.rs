@@ -105,6 +105,8 @@ impl Connector for Recorder {
 #[tokio::test]
 #[ignore = "Development credentials, disposable database only; no external payment or mail calls"]
 async fn durable_workflows_preserve_tenant_boundaries_and_uncertain_writes() -> Result<()> {
+    let _environment =
+        environment::Environment::capture(&["AUTOMATION_ENABLED", "AUTOMATION_MASTER_KEY_B64"]);
     dotenvy::from_path(std::env::var("BUSINESS_ENV_FILE")?)?;
     support::auth()?;
     ensure!(std::env::var("TYPEDB_DB")? == "business_dev");
@@ -144,7 +146,7 @@ tx.query(format!(r#"insert $t isa tenant,has tenant_id "{tenant}",has name "Auto
  // A shared-secret trigger cannot cross tenants or replay different payloads.
  let trigger=e.trigger("crm-events","scheduled",true).await?;let token=trigger["token"].as_str().unwrap();ensure!(e.event("crm-events","wrong","event",Value::Null).await.is_err());
  let event=e.event("crm-events",token,"event",json!({"event":1})).await?;ensure!(e.event("crm-events",token,"event",json!({"event":1})).await?["id"]==event["id"]);ensure!(e.event("crm-events",token,"event",json!({"event":2})).await.is_err());
- let driven=e.enqueue("scheduled","worker-driven",Value::Null).await?;let driven_id=driven["id"].as_str().unwrap().to_owned();let worker=server::automation::runtime::spawn_all(e.clone());let outcome=tokio::time::timeout(std::time::Duration::from_secs(30),async{loop{if e.store.get("run",&driven_id).await?.unwrap().value["status"]=="completed"{break Ok::<_,anyhow::Error>(());}tokio::time::sleep(std::time::Duration::from_millis(500)).await;}}).await;worker.abort();let _=worker.await;outcome??;
+ let driven=e.enqueue("scheduled","worker-driven",Value::Null).await?;let driven_id=driven["id"].as_str().unwrap().to_owned();let worker=server::automation::runtime::spawn_all(e.clone());let outcome=tokio::time::timeout(std::time::Duration::from_secs(30),async{loop{if e.store.get("run",&driven_id).await?.unwrap().value["status"]=="completed"{break Ok::<_,anyhow::Error>(());}tokio::time::sleep(std::time::Duration::from_millis(500)).await;}}).await;worker.shutdown().await?;outcome??;
  // Real authentication and schema-policy ingress must not expose or forge records.
  std::env::set_var("AUTOMATION_ENABLED","true");std::env::set_var("AUTOMATION_MASTER_KEY_B64","AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=");
  let (_,http)=server::app::build_with_plugins(state.clone(),"automation-test-signing-secret-with-at-least-32-bytes".into(),Arc::new(server::finance::TenantRegistry::default()))?;
@@ -156,7 +158,7 @@ tx.query(format!(r#"insert $t isa tenant,has tenant_id "{tenant}",has name "Auto
  let(status,_)=call(&router,&tenant,jwt,"/automation",Some(json!({"action":"connect","id":"http-api","connector":"http","config":{"origin":"https://example.com"},"secrets":{"bearer":"PRIVATE-HTTP-TOKEN"},"tenant_id":other}))).await?;ensure!(status>=400,"Body tenant override accepted");
  let(status,connected)=call(&router,&tenant,jwt,"/automation",Some(json!({"action":"connect","id":"owner-http","connector":"http","config":{"origin":"https://example.com"},"secrets":{"bearer":"PRIVATE-HTTP-TOKEN"}}))).await?;ensure!(status<300,"Owner connection failed: {connected}");ensure!(!connected.to_string().contains("PRIVATE-HTTP-TOKEN")&&!connected.to_string().contains("secret_ref"));
  let revoked=e.enqueue("scheduled","revoked-owner",Value::Null).await?;let tx=driver.transaction(&db,typedb_driver::TransactionType::Write).await?;tx.query(format!("match $u isa person,has identity_id \"{owner}\";$t isa tenant,has tenant_id \"{tenant}\";$m isa membership,links(tenant:$t,member:$u);update $m has membership_role \"member\";")).await?;tx.commit().await?;ensure!(e.advance(revoked["id"].as_str().unwrap()).await?["status"]=="blocked");ensure!(call(&router,&tenant,jwt,"/automation",None).await?.0>=400,"Revoked owner retained automation access");
- std::env::remove_var("AUTOMATION_ENABLED");std::env::remove_var("AUTOMATION_MASTER_KEY_B64");
+
  Ok::<_,anyhow::Error>(())
  }.await;
     if driver.databases().contains(&db).await? {
@@ -412,3 +414,6 @@ async fn additive_install_checks_backup_and_preserves_existing_work() -> Result<
 
 #[path = "../support/mod.rs"]
 mod support;
+
+#[path = "../support/environment.rs"]
+mod environment;

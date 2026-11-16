@@ -316,8 +316,7 @@ async fn run(phase: &str) -> Result<()> {
         save(&root.join(format!("{phase}-report.json")),&json!({"phase":phase,"passed":true,"invoice":observed[0],"notices":after,"tenant_connections":"Mercury + independent Resend","execution":"native data -> authenticated automation API -> durable worker -> financial/notification plugins","provider_paid_and_application_receipt":phase=="paid"||phase=="paid-manual"}))?;
         println!("Mercury managed {phase} checks passed; provider status {status}; checkpoint retained");Ok::<_,anyhow::Error>(())
     }.await;
-    worker.abort();
-    let _ = worker.await;
+    worker.shutdown().await?;
     let folder = root
         .join("checkpoint")
         .join(format!("{phase}-{}", uuid::Uuid::new_v4().simple()));

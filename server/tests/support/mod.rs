@@ -1,5 +1,8 @@
 //! Explicit, private, process-local account storage for integration tests.
 pub fn auth() -> anyhow::Result<()> {
+    // The HTTP test client enables rustls-no-provider. Its process must choose
+    // its own provider, independently of the database driver's TLS internals.
+    server::tls::initialize();
     static DIRECTORY: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
     if DIRECTORY.get().is_none() {
         let dir = tempfile::tempdir()?;

@@ -253,6 +253,7 @@ async fn notification_plugin_is_independent_of_financial_connections() -> Result
 #[tokio::test]
 #[ignore = "Development TypeDB, generated disposable database; third bank/mail plugins, no external provider or email calls"]
 async fn two_tenants_complete_billing_using_independent_plugins() -> Result<()> {
+    let _environment = environment::Environment::capture(&["BILLING_ENABLED"]);
     use server::{billing::engine::Engine, database, typedb::TypeDBState};
     use typedb_driver::TransactionType;
     dotenvy::from_path(std::env::var("BUSINESS_ENV_FILE")?)?;
@@ -470,6 +471,7 @@ async fn account_profile(
 #[tokio::test]
 #[ignore = "Real development TypeDB; disposable graph, no payment or mail calls"]
 async fn account_discovery_and_financial_metadata_enforce_tenant_scope() -> Result<()> {
+    let _environment = environment::Environment::capture(&["BILLING_ENABLED"]);
     use server::{billing::engine::Engine, database, typedb::TypeDBState};
     dotenvy::from_path(std::env::var("BUSINESS_ENV_FILE")?)?;
     support::auth()?;
@@ -548,3 +550,6 @@ mod retirement;
 mod payment_fixture;
 
 mod consent_migration;
+
+#[path = "../support/environment.rs"]
+mod environment;

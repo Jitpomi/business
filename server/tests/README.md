@@ -138,3 +138,13 @@ binaries with `--ignored --test-threads=1`. These groups use generated test
 databases and isolated provider fixtures. Run real-provider billing phases
 separately according to the Stripe and Mercury acceptance guides, reusing their
 checkpoint IDs. A missing operator input is a setup failure, not a passing test.
+
+The acceptance suites run serially because they configure process-local plugin
+profiles. Tests that change gateway, billing or automation settings capture and
+restore their original values on scope exit, including error paths. Do not remove
+the runtime gateway check or rely on another test to select an HTTP TLS provider.
+
+Automation pollers return an owned Worker handle. Call `shutdown().await` to
+stop new polls and finish the current poll before exporting or deleting a fixture.
+The server drains its HTTP requests and worker on shutdown. Do not replace this
+with task abortion, a sleep, repeated deletion, or replaying an uncertain effect.
