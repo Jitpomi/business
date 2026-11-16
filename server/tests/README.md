@@ -96,16 +96,23 @@ runs complete billing workflows through the automation connector and independent
 resolved bank/mail capabilities for two tenants. Neither sends a real payment or
 email. Real Stripe/Mercury acceptance remains separately gated.
 
-## Independent identities and credentials
+## Authentication plugins and identity links
 
-`backend/identity_tests.rs` exercises people without credentials, multiple local
-logins for one person, per-credential JWT invalidation, shared tenant membership,
-private credential records and rejected public mutations (verified against stored
-state). It also migrates a legacy fixture, checks existing records/passwords and
-sign-in, and proves migration repeatability. The billing account acceptance also
-covers alternate-login invitation acceptance and a contact receiving their first
-credential without replacing their identity.
+`authentication/` verifies signed asymmetric API tokens against a local HTTPS IdP,
+issuer/audience/token-type/expiry rejection, authentication proof requirements,
+explicit two-proof linking and TypeDB tenant isolation. It also verifies private
+external account persistence and migration of encrypted plugin credentials out of
+graph payloads. These tests do not claim live Auth0 configuration.
+
+`backend/identity_tests.rs` exercises people without login accounts, multiple
+external accounts for one person, per-account session invalidation, shared tenant
+membership and protected identity links. Migration fixtures cover both older
+credential models, pending recovery and revocations. Billing account acceptance
+retains invitation/recovery races and first-account contact onboarding. Integration
+tests explicitly enable a private temporary local-account plugin store; runtime
+never enables it implicitly.
 
 ```sh
+BUSINESS_ENV_FILE=/private/dev.env cargo test --locked --test authentication -- --ignored --test-threads=1
 BUSINESS_ENV_FILE=/private/dev.env cargo test --locked --test backend identity_tests -- --ignored --test-threads=1
 ```

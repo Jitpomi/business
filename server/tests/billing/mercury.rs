@@ -12,6 +12,7 @@ async fn mercury_processing_payment_suppresses_notices() -> Result<()> {
 }
 async fn run(processing_only: bool) -> Result<()> {
     dotenvy::from_path(std::env::var("BUSINESS_ENV_FILE")?)?;
+    super::support::auth()?;
     ensure!(
         std::env::var("TYPEDB_DB")? == "business_dev",
         "Development credentials only"

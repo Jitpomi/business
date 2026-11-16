@@ -105,6 +105,7 @@ impl Connector for Recorder {
 #[ignore = "Development credentials, disposable database only; no external payment or mail calls"]
 async fn durable_workflows_preserve_tenant_boundaries_and_uncertain_writes() -> Result<()> {
     dotenvy::from_path(std::env::var("BUSINESS_ENV_FILE")?)?;
+    support::auth()?;
     ensure!(std::env::var("TYPEDB_DB")? == "business_dev");
     let driver = Arc::new(
         dog_typedb::TypeDBDriverFactory::connect(
@@ -120,10 +121,11 @@ async fn durable_workflows_preserve_tenant_boundaries_and_uncertain_writes() -> 
  server::database::install(&driver,&db).await?;
  let state=Arc::new(server::typedb::TypeDBState{driver:driver.clone(),database:db.clone()});
  let owner=uuid::Uuid::new_v4().to_string();let tenant=uuid::Uuid::new_v4().to_string();let other=uuid::Uuid::new_v4().to_string();
- let password_hash=bcrypt::hash("automation-owner-test-password",4)?;let tx=driver.transaction(&db,typedb_driver::TransactionType::Write).await?;tx.query(format!(r#"insert $t isa tenant,has tenant_id "{tenant}",has name "Automation test",has status "active",has revision "initial";$b isa tenant,has tenant_id "{other}",has name "Other tenant",has status "active",has revision "initial";$u isa person,has identity_id "{owner}",has email "automation@example.invalid",has name "Owner",has status "active"; (person:$u) isa password_credential,has credential_id "{owner}",has login_email "automation@example.invalid",has password_hash "{password_hash}",has credential_version "initial";(tenant:$t,member:$u) isa membership,has membership_role "owner",has start_at 2020-01-01T00:00:00;"#)).await?;tx.commit().await?;
+ let password_hash=bcrypt::hash("automation-owner-test-password",4)?;let tx=driver.transaction(&db,typedb_driver::TransactionType::Write).await?;let auth_link_0=server::auth::local_link("$u",&owner.to_string())?;server::auth::plugins::local::Local::configured(&db)?.import(&owner.to_string(),"automation@example.invalid",&password_hash.to_string(),"initial")?;
+tx.query(format!(r#"insert $t isa tenant,has tenant_id "{tenant}",has name "Automation test",has status "active",has revision "initial";$b isa tenant,has tenant_id "{other}",has name "Other tenant",has status "active",has revision "initial";$u isa person,has identity_id "{owner}",has email "automation@example.invalid",has name "Owner",has status "active"; {auth_link_0}(tenant:$t,member:$u) isa membership,has membership_role "owner",has start_at 2020-01-01T00:00:00;"#)).await?;tx.commit().await?;
  let recorder=Arc::new(Recorder{calls:AtomicUsize::new(0)});let mut catalog=Catalog::default();catalog.register(recorder.clone())?;
- let e=Engine{store:Store::new(state.clone(),&tenant)?,catalog:Arc::new(catalog),vault:Vault::new("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")?};
- let public=e.connect("crm","recorder",json!({}),json!({"token":"DO-NOT-LEAK"})).await?;ensure!(!public.to_string().contains("sealed")&&!public.to_string().contains("DO-NOT-LEAK"));e.verify_connection("crm").await?;
+ let e=Engine{store:Store::new(state.clone(),&tenant)?,catalog:Arc::new(catalog),vault:Vault::with_store("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",server::automation::secret_store::Files::configured()?)?};
+ let public=e.connect("crm","recorder",json!({}),json!({"token":"DO-NOT-LEAK"})).await?;ensure!(!public.to_string().contains("secret_ref")&&!public.to_string().contains("DO-NOT-LEAK"));e.verify_connection("crm").await?;
  let b=Store::new(state.clone(),&other)?;ensure!(b.get("connection","crm").await?.is_none());ensure!(b.owner(&owner).await.is_err());
  let page=e.store.page("connection",None,1).await?;ensure!(page.len()==1);let cursor=page[0]["key"].as_str().unwrap();ensure!(e.store.page("connection",Some(cursor),1).await?.is_empty());ensure!(b.page("connection",Some(cursor),1).await.is_err(),"Pagination accepted another tenant's cursor");
  let w=Workflow{id:"onboarding".into(),revision:String::new(),name:"Onboarding".into(),enabled:true,steps:vec![Step::Transform{id:"mapped".into(),value:json!({"customer":{"$ref":"input/customer"}})},Step::Approval{id:"review".into()},Step::Action{id:"deliver".into(),connection:"crm".into(),action:"send".into(),input:json!({"$ref":"steps/mapped"})},Step::Delay{id:"pause".into(),seconds:0},Step::Transform{id:"done".into(),value:json!(true)}]};
@@ -147,11 +149,11 @@ async fn durable_workflows_preserve_tenant_boundaries_and_uncertain_writes() -> 
  let (_,http)=server::app::build_with_plugins(state.clone(),"automation-test-signing-secret-with-at-least-32-bytes".into(),Arc::new(server::finance::TenantRegistry::default()))?;
  let router=server::app::router(http);ensure!(call(&router,&tenant,"","/automation",None).await?.0>=400);
  let(status,login)=call(&router,&tenant,"","/authentication",Some(json!({"strategy":"local","email":"automation@example.invalid","password":"automation-owner-test-password"}))).await?;ensure!(status==200,"Login failed: {status} {login}");let jwt=login["accessToken"].as_str().unwrap();
- let(status,listing)=call(&router,&tenant,jwt,"/automation",None).await?;ensure!(status==200,"Automation listing failed: {listing}");ensure!(!listing.to_string().contains("sealed")&&!listing.to_string().contains("DO-NOT-LEAK"));ensure!(call(&router,&other,jwt,"/automation",None).await?.0>=400);
- let(status,data)=call(&router,&tenant,jwt,"/data",Some(json!({"query":"match $r isa automation_record; fetch {'secret':$r.auto_payload};"}))).await?;ensure!(status>=400||(!data.to_string().contains("DO-NOT-LEAK")&&!data.to_string().contains("sealed")),"Generic data exposed automation credentials");
+ let(status,listing)=call(&router,&tenant,jwt,"/automation",None).await?;ensure!(status==200,"Automation listing failed: {listing}");ensure!(!listing.to_string().contains("secret_ref")&&!listing.to_string().contains("DO-NOT-LEAK"));ensure!(call(&router,&other,jwt,"/automation",None).await?.0>=400);
+ let(status,data)=call(&router,&tenant,jwt,"/data",Some(json!({"query":"match $r isa automation_record; fetch {'secret':$r.auto_payload};"}))).await?;ensure!(status>=400||(!data.to_string().contains("DO-NOT-LEAK")&&!data.to_string().contains("secret_ref")),"Generic data exposed automation credentials");
  let forged=format!("insert $r isa automation_record,has auto_key \"{tenant}/run/forged\",has auto_tenant \"{tenant}\",has auto_kind \"run\",has auto_payload \"{{}}\",has auto_revision \"forged\",has auto_status \"queued\",has auto_when 0;fetch {{'key':$r.auto_key}};");ensure!(call(&router,&tenant,jwt,"/data",Some(json!({"query":forged}))).await?.0>=400,"Generic data forged a run");ensure!(e.store.get("run","forged").await?.is_none());
  let(status,_)=call(&router,&tenant,jwt,"/automation",Some(json!({"action":"connect","id":"http-api","connector":"http","config":{"origin":"https://example.com"},"secrets":{"bearer":"PRIVATE-HTTP-TOKEN"},"tenant_id":other}))).await?;ensure!(status>=400,"Body tenant override accepted");
- let(status,connected)=call(&router,&tenant,jwt,"/automation",Some(json!({"action":"connect","id":"owner-http","connector":"http","config":{"origin":"https://example.com"},"secrets":{"bearer":"PRIVATE-HTTP-TOKEN"}}))).await?;ensure!(status<300,"Owner connection failed: {connected}");ensure!(!connected.to_string().contains("PRIVATE-HTTP-TOKEN")&&!connected.to_string().contains("sealed"));
+ let(status,connected)=call(&router,&tenant,jwt,"/automation",Some(json!({"action":"connect","id":"owner-http","connector":"http","config":{"origin":"https://example.com"},"secrets":{"bearer":"PRIVATE-HTTP-TOKEN"}}))).await?;ensure!(status<300,"Owner connection failed: {connected}");ensure!(!connected.to_string().contains("PRIVATE-HTTP-TOKEN")&&!connected.to_string().contains("secret_ref"));
  let revoked=e.enqueue("scheduled","revoked-owner",Value::Null).await?;let tx=driver.transaction(&db,typedb_driver::TransactionType::Write).await?;tx.query(format!("match $u isa person,has identity_id \"{owner}\";$t isa tenant,has tenant_id \"{tenant}\";$m isa membership,links(tenant:$t,member:$u);update $m has membership_role \"member\";")).await?;tx.commit().await?;ensure!(e.advance(revoked["id"].as_str().unwrap()).await?["status"]=="blocked");ensure!(call(&router,&tenant,jwt,"/automation",None).await?.0>=400,"Revoked owner retained automation access");
  std::env::remove_var("AUTOMATION_ENABLED");std::env::remove_var("AUTOMATION_MASTER_KEY_B64");
  Ok::<_,anyhow::Error>(())
@@ -281,6 +283,7 @@ fn builtin_connections_validate_without_fabricating_proxy_identities() -> Result
 #[ignore = "Development TypeDB, real backup and installer binaries against a disposable database"]
 async fn additive_install_checks_backup_and_preserves_existing_work() -> Result<()> {
     dotenvy::from_path(std::env::var("BUSINESS_ENV_FILE")?)?;
+    support::auth()?;
     ensure!(std::env::var("TYPEDB_DB")? == "business_dev");
     let driver = Arc::new(
         dog_typedb::TypeDBDriverFactory::connect(
@@ -405,3 +408,6 @@ async fn additive_install_checks_backup_and_preserves_existing_work() -> Result<
     driver.databases().get(&db).await?.delete().await?;
     result
 }
+
+#[path = "../support/mod.rs"]
+mod support;

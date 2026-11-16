@@ -35,7 +35,14 @@ pub async fn check(e: &Engine) -> Result<()> {
     std::env::set_var("BUSINESS_GATEWAY_SECRET", GATEWAY);
     let hash = bcrypt::hash(PASSWORD, 4)?;
     let id = uuid::Uuid::new_v4();
-    e.write(format!(r#"{} insert $u isa person,has identity_id "{id}",has email "owner-links@example.com",has name "TEST owner",has status "active"; (person:$u) isa password_credential,has credential_id "{id}",has login_email "owner-links@example.com",has password_hash "{hash}",has credential_version "fixture";(tenant:$t,member:$u) isa membership,has membership_role "owner",has start_at 2020-01-01T00:00:00;fetch {{"done":true}};"#,e.prefix())).await?;
+    let auth_link_0 = server::auth::local_link("$u", &id.to_string())?;
+    server::auth::plugins::local::Local::configured(&e.state.database)?.import(
+        &id.to_string(),
+        "owner-links@example.com",
+        &hash.to_string(),
+        "fixture",
+    )?;
+    e.write(format!(r#"{} insert $u isa person,has identity_id "{id}",has email "owner-links@example.com",has name "TEST owner",has status "active"; {auth_link_0}(tenant:$t,member:$u) isa membership,has membership_role "owner",has start_at 2020-01-01T00:00:00;fetch {{"done":true}};"#,e.prefix())).await?;
     let (_, http) = server::app::build_with_state(
         e.state.clone(),
         "account-links-sandbox-signing-secret-long-enough".into(),
@@ -95,7 +102,10 @@ pub async fn check(e: &Engine) -> Result<()> {
     );
     let accept = json!({"action":"accept","token":renew["token"],"password":PASSWORD});
     let (s, result) = call(&r, "account", "", "/onboarding", accept.clone()).await?;
-    ensure!(s == 200, "Accept failed {s}: {result}");
+    if s != 200 {
+        let diagnostic = e.public_account_action("invite", &accept).await;
+        anyhow::bail!("Accept failed {s}: {result}; {diagnostic:?}");
+    }
     ensure!(
         call(&r, "account", "", "/onboarding", accept).await?.0 == 400,
         "Invitation replay accepted"
@@ -146,10 +156,11 @@ pub async fn check(e: &Engine) -> Result<()> {
     let token = "f".repeat(64);
     let key = format!("{:x}", Sha256::digest(token.as_bytes()));
     let expiry = chrono::Utc::now().timestamp() + 1800;
-    let person=e.read("match $u isa person,has email 'new-links@example.com';$credential isa password_credential,links(person:$u);fetch {'id':$u.identity_id,'credential':$credential.credential_id,'version':$credential.credential_version};".into()).await?;
-    let target = person[0]["credential"].as_str().unwrap();
-    let version = person[0]["version"].as_str().unwrap();
-    e.write(format!(r#"{} insert $l isa account_link,has token_key "{key}",has email "new-links@example.com",has link_kind "reset",has link_target "{target}",has link_version "{version}",has link_expires {expiry},has link_used false;fetch {{"done":true}};"#,e.prefix())).await?;
+    let store = server::auth::plugins::local::Local::configured(&e.state.database)?;
+    let account = store.lookup("new-links@example.com", true)?.unwrap();
+    let target = account["subject"].as_str().unwrap();
+    let version = account["version"].as_str().unwrap();
+    store.issue(&key,&json!({"kind":"reset","email":"new-links@example.com","target":target,"version":version,"expires":expiry}))?;
     let reset = json!({"action":"reset","token":token,"password":"new-sandbox-link-password","confirm_password":"new-sandbox-link-password"});
     let (a, b) = tokio::join!(
         call(&r, "account", "", "/recovery", reset.clone()),
@@ -201,7 +212,18 @@ pub async fn check(e: &Engine) -> Result<()> {
         "Existing identity cannot join"
     );
     // An alternate login belongs to the same person, not a new identity.
-    e.write(format!(r#"{} $u isa person,has identity_id "{id}";insert (person:$u) isa password_credential,has credential_id "alternate-owner-login",has login_email "alternate-links@example.com",has password_hash "{hash}",has credential_version "alternate";fetch {{"done":true}};"#,e.prefix())).await?;
+    let auth_link_1 = server::auth::local_link("$u", "alternate-owner-login")?;
+    server::auth::plugins::local::Local::configured(&e.state.database)?.import(
+        "alternate-owner-login",
+        "alternate-links@example.com",
+        &hash.to_string(),
+        "alternate",
+    )?;
+    e.write(format!(
+        r#"{} $u isa person,has identity_id "{id}";insert {auth_link_1}fetch {{"done":true}};"#,
+        e.prefix()
+    ))
+    .await?;
     let (_,alternate)=call(&r,&e.merchant,owner,"/portal",json!({"action":"invite","name":"TEST alternate identity","email":"alternate-links@example.com"})).await?;
     let (s, accepted) = call(
         &r,
@@ -295,11 +317,7 @@ pub async fn check(e: &Engine) -> Result<()> {
         json!({"action":"invite","name":"TEST expired","email":"expired-links@example.com"}),
     )
     .await?;
-    let expired_key = format!(
-        "{:x}",
-        Sha256::digest(expired["token"].as_str().unwrap().as_bytes())
-    );
-    e.write(format!(r#"{} $l isa account_link,has token_key "{expired_key}";update $l has link_expires 1;fetch {{"done":true}};"#,e.prefix())).await?;
+    e.write(format!(r#"{} $l isa account_invitation,has invitation_id {};update $l has invitation_expires 1;fetch {{"done":true}};"#,e.prefix(),expired["invitation_id"])).await?;
     ensure!(
         call(
             &r,

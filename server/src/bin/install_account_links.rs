@@ -18,7 +18,7 @@ async fn main() -> Result<()> {
     let target = "business_native_dev";
     server::database::verify(&driver, target).await?;
     let schema = driver.databases().get(target).await?.schema().await?;
-    if schema.contains("entity account_link") {
+    if schema.contains("entity account_invitation") {
         println!("Account-link schema already installed; no change.");
         return Ok(());
     }

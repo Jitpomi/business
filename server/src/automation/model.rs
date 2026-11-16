@@ -21,7 +21,7 @@ pub struct Connection {
     pub connector: String,
     pub revision: String,
     pub config: Value,
-    pub sealed: String,
+    pub secret_ref: String,
     pub enabled: bool,
     pub verified: bool,
     #[serde(default)]

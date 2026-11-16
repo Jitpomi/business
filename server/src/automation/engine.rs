@@ -45,7 +45,7 @@ impl Engine {
         );
         let revision = uuid::Uuid::new_v4().to_string();
         let context = format!("{}/{id}/{revision}", self.store.tenant);
-        let sealed = if secrets.is_null() {
+        let secret_ref = if secrets.is_null() {
             String::new()
         } else {
             self.vault.seal(&context, &secrets)?
@@ -55,7 +55,7 @@ impl Engine {
             connector: kind.into(),
             revision,
             config,
-            sealed,
+            secret_ref,
             enabled: true,
             verified: false,
             verification: None,
@@ -73,12 +73,12 @@ impl Engine {
             .await?
             .ok_or_else(|| anyhow::anyhow!("Connection unavailable"))?;
         let c: Connection = serde_json::from_value(r.value.clone())?;
-        let secrets = if c.sealed.is_empty() {
+        let secrets = if c.secret_ref.is_empty() {
             Value::Null
         } else {
             self.vault.open(
                 &format!("{}/{}/{}", self.store.tenant, c.id, c.revision),
-                &c.sealed,
+                &c.secret_ref,
             )?
         };
         Ok((r, c, secrets))

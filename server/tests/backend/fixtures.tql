@@ -2,11 +2,11 @@
 insert
 $t isa tenant, has tenant_id "tenant-a", has name "A", has status "active", has revision "initial";
 $other isa tenant, has tenant_id "tenant-b", has name "B", has status "active", has revision "initial";
-$alice isa person, has identity_id "alice", has name "Alice", has status "active", has email "alice@example.com"; (person:$alice) isa password_credential,has credential_id "alice",has login_email "alice@example.com",has password_hash "@@password_hash@@",has credential_version "initial";
-$bob isa person, has identity_id "bob", has name "Bob", has status "active", has email "bob@example.com"; (person:$bob) isa password_credential,has credential_id "bob",has login_email "bob@example.com",has password_hash "@@password_hash@@",has credential_version "initial";
-$carol isa person, has identity_id "carol", has name "Carol", has status "active", has email "carol@example.com"; (person:$carol) isa password_credential,has credential_id "carol",has login_email "carol@example.com",has password_hash "@@password_hash@@",has credential_version "initial";
+$alice isa person, has identity_id "alice", has name "Alice", has status "active", has email "alice@example.com"; (identity:$alice) isa external_identity,has auth_binding_key "7ed06536d9520c2bd8636dd152c9ecd81a6b4cd8894465b02867b51fa1802ea1",has auth_issuer "urn:jitpomi:local",has auth_subject "alice";
+$bob isa person, has identity_id "bob", has name "Bob", has status "active", has email "bob@example.com"; (identity:$bob) isa external_identity,has auth_binding_key "c66d7ed347e6fe8ed4810dc092adb83db26d07931c8bed6acd1475ffe650e6bf",has auth_issuer "urn:jitpomi:local",has auth_subject "bob";
+$carol isa person, has identity_id "carol", has name "Carol", has status "active", has email "carol@example.com"; (identity:$carol) isa external_identity,has auth_binding_key "4884ddf63cff32e7b96690aa51ca6a52ba73ba7cd06aea2be7e18978555c3608",has auth_issuer "urn:jitpomi:local",has auth_subject "carol";
 $bot isa service_account, has identity_id "bot", has name "Bot", has status "active", has service_name "deploy-bot";
-$dave isa person, has identity_id "dave", has name "Dave", has status "active", has email "dave@example.com"; (person:$dave) isa password_credential,has credential_id "dave",has login_email "dave@example.com",has password_hash "@@password_hash@@",has credential_version "initial";
+$dave isa person, has identity_id "dave", has name "Dave", has status "active", has email "dave@example.com"; (identity:$dave) isa external_identity,has auth_binding_key "5a578c1b933c0ca033bf7bc6dc371fb9e6c7e30b2bf4668ed31266158da427a8",has auth_issuer "urn:jitpomi:local",has auth_subject "dave";
 (tenant:$t,member:$alice) isa membership, has membership_role "owner", has start_at 2025-01-01T00:00:00;
 (tenant:$t,member:$bob) isa membership, has membership_role "member", has start_at 2025-01-01T00:00:00;
 (tenant:$t,member:$carol) isa membership, has membership_role "admin", has start_at 2025-01-01T00:00:00;

@@ -1,8 +1,5 @@
 define
 # Security policy declarations belong to the model, not a registry of queries.
-attribute password_hash @meta("dog.security.hidden", "true");
-attribute credential_version @meta("dog.security.hidden", "true");
-attribute token_key @meta("dog.security.hidden", "true");
 attribute name, value string @regex("\S[\s\S]{0,119}");
 attribute reason, value string @regex("\S[\s\S]{0,1023}");
 attribute description, value string @regex("\S[\s\S]{0,1023}");
@@ -38,12 +35,12 @@ fun request_now($tenant: string, $actor: string, $now: datetime) -> datetime @me
   return first $time;
 fun scope_tenant($tenant: string, $actor: string, $now: datetime, $t: tenant) -> boolean:
   match $t has tenant_id == $tenant;
-    $i isa person, has identity_id == $actor;
+    $i isa identity, has identity_id == $actor;
     let $ok=active_member($i,$t,$now); $ok==true;
   return check;
 fun request_manage($tenant: string, $actor: string, $now: datetime, $t: tenant) -> boolean @meta("dog.security.context", "true"):
   match let $scoped=scope_tenant($tenant,$actor,$now,$t); $scoped==true;
-    $i isa person, has identity_id == $actor;
+    $i isa identity, has identity_id == $actor;
     let $ok=can_manage_access($i,$t,$now); $ok==true;
   return check;
 fun scope_identity($tenant: string, $actor: string, $now: datetime, $i: identity) -> boolean:
@@ -61,13 +58,13 @@ fun scope_resource($tenant: string, $actor: string, $now: datetime, $r: resource
 fun read_resource($tenant: string, $actor: string, $now: datetime, $r: resource) -> boolean:
   match $t isa tenant; let $scoped=scope_tenant($tenant,$actor,$now,$t); $scoped==true;
     let $owned=scope_resource($tenant,$actor,$now,$r); $owned==true;
-    $i isa person, has identity_id == $actor;
+    $i isa identity, has identity_id == $actor;
     { let $admin_allowed=can_manage_access($i,$t,$now); $admin_allowed==true; }
     or { let $permission_allowed=is_permitted($i,$t,$r,"read",$now); $permission_allowed==true; };
   return check;
 fun request_permitted($tenant: string, $actor: string, $now: datetime, $r: resource, $action: string) -> boolean @meta("dog.security.context", "true"):
   match $t isa tenant; let $scoped=scope_tenant($tenant,$actor,$now,$t); $scoped==true;
-    $i isa person, has identity_id == $actor;
+    $i isa identity, has identity_id == $actor;
     let $ok=is_permitted($i,$t,$r,$action,$now); $ok==true;
   return check;
 fun scope_team($tenant: string, $actor: string, $now: datetime, $team: team) -> boolean:
@@ -112,7 +109,7 @@ fun scope_grant($tenant: string, $actor: string, $now: datetime, $g: access_gran
 fun read_grant($tenant: string, $actor: string, $now: datetime, $g: access_grant) -> boolean:
   match let $scoped=scope_grant($tenant,$actor,$now,$g); $scoped==true;
     $g links(tenant:$t); $t isa tenant;
-    $i isa person, has identity_id == $actor;
+    $i isa identity, has identity_id == $actor;
     { let $admin_allowed=request_manage($tenant,$actor,$now,$t); $admin_allowed==true; }
     or { $g links(grantee:$i); }
     or { $g links(grantee:$team); $team isa team;
@@ -195,7 +192,7 @@ fun create_review($tenant: string, $actor: string, $now: datetime, $review: acce
 # They are schema code, not registered query strings or application handlers.
 fun request_paths($tenant: string, $actor: string, $now: datetime, $r: resource, $action: string) -> {access_grant,string} @meta("dog.security.context", "true"):
   match $t isa tenant; let $ok=scope_tenant($tenant,$actor,$now,$t); $ok==true;
-    $i isa person, has identity_id == $actor;
+    $i isa identity, has identity_id == $actor;
     let $g,$source in matching_access_paths($i,$t,$r,$action,$now);
   return {$g,$source};
 fun request_missing($tenant: string, $actor: string, $now: datetime, $t: tenant) -> {identity,resource,string} @meta("dog.security.context", "true"):
@@ -220,17 +217,17 @@ fun request_role($tenant: string, $actor: string, $now: datetime, $target: ident
   return check;
 fun request_reviewable($tenant: string, $actor: string, $now: datetime, $g: access_grant) -> boolean @meta("dog.security.context", "true"):
   match $t isa tenant; let $ok=scope_tenant($tenant,$actor,$now,$t); $ok==true;
-    $i isa person, has identity_id == $actor;
+    $i isa identity, has identity_id == $actor;
     let $review=can_review_grant($i,$t,$g,$now); $review==true;
   return check;
 
-# Credential records are server-owned, including their existence and ownership.
-fun scope_password_credential($tenant: string, $actor: string, $now: datetime, $c: authentication_credential) -> boolean:
-  match $c links (person: $p); $p isa person;
+# Identity links are only changed through trusted, proof-checked account operations.
+fun scope_external_identity($tenant: string, $actor: string, $now: datetime, $c: external_identity) -> boolean:
+  match $c links (identity: $p); $p isa identity;
     $tenant != ""; $actor != ""; $now > 1900-01-01T00:00:00;
     let $denied = false;
   return first $denied;
-relation authentication_credential @meta("dog.security.scope", "scope_password_credential") @meta("dog.security.read", "scope_password_credential");
-relation password_credential @meta("dog.security.scope", "scope_password_credential") @meta("dog.security.read", "scope_password_credential");
-attribute credential_id @meta("dog.security.hidden", "true");
-attribute login_email @meta("dog.security.hidden", "true");
+relation external_identity @meta("dog.security.scope", "scope_external_identity") @meta("dog.security.read", "scope_external_identity");
+attribute auth_binding_key @meta("dog.security.hidden", "true");
+attribute auth_issuer @meta("dog.security.hidden", "true");
+attribute auth_subject @meta("dog.security.hidden", "true");
