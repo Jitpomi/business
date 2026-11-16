@@ -95,3 +95,17 @@ real authentication, schema policy, the polling worker, backup and installer too
 runs complete billing workflows through the automation connector and independently
 resolved bank/mail capabilities for two tenants. Neither sends a real payment or
 email. Real Stripe/Mercury acceptance remains separately gated.
+
+## Independent identities and credentials
+
+`backend/identity_tests.rs` exercises people without credentials, multiple local
+logins for one person, per-credential JWT invalidation, shared tenant membership,
+private credential records and rejected public mutations (verified against stored
+state). It also migrates a legacy fixture, checks existing records/passwords and
+sign-in, and proves migration repeatability. The billing account acceptance also
+covers alternate-login invitation acceptance and a contact receiving their first
+credential without replacing their identity.
+
+```sh
+BUSINESS_ENV_FILE=/private/dev.env cargo test --locked --test backend identity_tests -- --ignored --test-threads=1
+```

@@ -223,3 +223,14 @@ fun request_reviewable($tenant: string, $actor: string, $now: datetime, $g: acce
     $i isa person, has identity_id == $actor;
     let $review=can_review_grant($i,$t,$g,$now); $review==true;
   return check;
+
+# Credential records are server-owned, including their existence and ownership.
+fun scope_password_credential($tenant: string, $actor: string, $now: datetime, $c: authentication_credential) -> boolean:
+  match $c links (person: $p); $p isa person;
+    $tenant != ""; $actor != ""; $now > 1900-01-01T00:00:00;
+    let $denied = false;
+  return first $denied;
+relation authentication_credential @meta("dog.security.scope", "scope_password_credential") @meta("dog.security.read", "scope_password_credential");
+relation password_credential @meta("dog.security.scope", "scope_password_credential") @meta("dog.security.read", "scope_password_credential");
+attribute credential_id @meta("dog.security.hidden", "true");
+attribute login_email @meta("dog.security.hidden", "true");

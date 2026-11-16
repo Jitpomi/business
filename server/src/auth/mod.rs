@@ -23,17 +23,28 @@ struct Resolver {
 impl Resolver {
     async fn lookup(&self, attribute: &str, value: &str, tenant: &str) -> Result<Option<Value>> {
         ensure!(
-            matches!(attribute, "email" | "identity_id"),
+            matches!(attribute, "login_email" | "credential_id"),
             "Invalid credential selector"
         );
         let q = |v: &str| serde_json::to_string(v).unwrap();
+        let credential_type = if attribute == "login_email" {
+            "password_credential"
+        } else {
+            "authentication_credential"
+        };
+        let secret_projection = if attribute == "login_email" {
+            r#", "email":$credential.login_email,"password":$credential.password_hash"#
+        } else {
+            ""
+        };
         let query = format!(
             r#"match
-          $i isa person, has {attribute} {}, has identity_id $id;
+          $i isa person, has identity_id $id;
+          $credential isa {credential_type}, links (person: $i), has {attribute} {};
           $t isa tenant, has tenant_id {}, has tenant_id $tenant;
           let $active=active_member($i,$t,{}); $active==true;
-          fetch {{"id":$id,"tenant_id":$tenant,"email":$i.email,
-             "password":$i.password_hash,"credential_version":$i.credential_version}};"#,
+          fetch {{"id":$id,"tenant_id":$tenant,"credential_id":$credential.credential_id,
+             "credential_version":$credential.credential_version{secret_projection}}};"#,
             q(value),
             q(tenant),
             now()
@@ -56,18 +67,21 @@ impl LocalEntityResolver<BusinessParams> for Resolver {
     ) -> Result<Option<Value>> {
         let email = email.trim().to_ascii_lowercase();
         if !self.discover {
-            return self.lookup("email", &email, &ctx.tenant.tenant_id.0).await;
+            return self
+                .lookup("login_email", &email, &ctx.tenant.tenant_id.0)
+                .await;
         }
         // Account sign-in discovers a membership privately. The local strategy
         // verifies the password before returning any identity or company details.
         let query = format!(
             r#"match
-            $i isa person, has email {}, has identity_id $id;
-            $t isa tenant, has tenant_id $tenant;
+            $i isa person, has identity_id $id;
+            $credential isa password_credential, links (person: $i), has login_email {};
+          $t isa tenant, has tenant_id $tenant;
             let $active=active_member($i,$t,{}); $active==true;
-            select $i,$t,$id,$tenant; distinct; sort $tenant; limit 1;
-            fetch {{"id":$id,"tenant_id":$tenant,"email":$i.email,
-              "password":$i.password_hash,"credential_version":$i.credential_version}};"#,
+            select $i,$credential,$t,$id,$tenant; distinct; sort $tenant; limit 1;
+            fetch {{"id":$id,"tenant_id":$tenant,"email":$credential.login_email,"credential_id":$credential.credential_id,
+              "password":$credential.password_hash,"credential_version":$credential.credential_version}};"#,
             serde_json::to_string(&email)?,
             now()
         );
@@ -92,7 +106,7 @@ impl AuthenticationStrategy<BusinessParams> for Local {
     ) -> Result<AuthenticationResult> {
         let mut result = self.0.authenticate(request, params, ctx, auth).await?;
         result["accessToken"] = json!(auth.create_access_token(json!({
-            "sub":result["user"]["id"],"credential_version":result["user"]["credential_version"]
+            "sub":result["user"]["id"],"credential_id":result["user"]["credential_id"],"credential_version":result["user"]["credential_version"]
         }),None).await?);
         Ok(result)
     }
@@ -115,17 +129,24 @@ impl AuthenticationStrategy<BusinessParams> for Jwt {
             .pointer("/payload/sub")
             .and_then(Value::as_str)
             .ok_or_else(|| DogError::not_authenticated("Missing identity").into_anyhow())?;
+        let credential_id = result
+            .pointer("/payload/credential_id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                DogError::not_authenticated("Missing credential; sign in again").into_anyhow()
+            })?;
         let mut person = self
             .resolver
-            .lookup("identity_id", id, &ctx.tenant.tenant_id.0)
+            .lookup("credential_id", credential_id, &ctx.tenant.tenant_id.0)
             .await?
             .ok_or_else(|| {
                 DogError::not_authenticated("Inactive identity or membership").into_anyhow()
             })?;
-        if result
-            .pointer("/payload/credential_version")
-            .and_then(Value::as_str)
-            != person.get("credential_version").and_then(Value::as_str)
+        if person["id"].as_str() != Some(id)
+            || result
+                .pointer("/payload/credential_version")
+                .and_then(Value::as_str)
+                != person.get("credential_version").and_then(Value::as_str)
         {
             return Err(
                 DogError::not_authenticated("Credentials changed; sign in again").into_anyhow(),

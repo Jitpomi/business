@@ -35,7 +35,7 @@ pub async fn check(e: &Engine) -> Result<()> {
     std::env::set_var("BUSINESS_GATEWAY_SECRET", GATEWAY);
     let hash = bcrypt::hash(PASSWORD, 4)?;
     let id = uuid::Uuid::new_v4();
-    e.write(format!(r#"{} insert $u isa person,has identity_id "{id}",has email "owner-links@example.com",has name "TEST owner",has password_hash "{hash}",has credential_version "fixture",has status "active";(tenant:$t,member:$u) isa membership,has membership_role "owner",has start_at 2020-01-01T00:00:00;fetch {{"done":true}};"#,e.prefix())).await?;
+    e.write(format!(r#"{} insert $u isa person,has identity_id "{id}",has email "owner-links@example.com",has name "TEST owner",has status "active"; (person:$u) isa password_credential,has credential_id "{id}",has login_email "owner-links@example.com",has password_hash "{hash}",has credential_version "fixture";(tenant:$t,member:$u) isa membership,has membership_role "owner",has start_at 2020-01-01T00:00:00;fetch {{"done":true}};"#,e.prefix())).await?;
     let (_, http) = server::app::build_with_state(
         e.state.clone(),
         "account-links-sandbox-signing-secret-long-enough".into(),
@@ -146,8 +146,8 @@ pub async fn check(e: &Engine) -> Result<()> {
     let token = "f".repeat(64);
     let key = format!("{:x}", Sha256::digest(token.as_bytes()));
     let expiry = chrono::Utc::now().timestamp() + 1800;
-    let person=e.read("match $u isa person,has email 'new-links@example.com';fetch {'id':$u.identity_id,'version':$u.credential_version};".into()).await?;
-    let target = person[0]["id"].as_str().unwrap();
+    let person=e.read("match $u isa person,has email 'new-links@example.com';$credential isa password_credential,links(person:$u);fetch {'id':$u.identity_id,'credential':$credential.credential_id,'version':$credential.credential_version};".into()).await?;
+    let target = person[0]["credential"].as_str().unwrap();
     let version = person[0]["version"].as_str().unwrap();
     e.write(format!(r#"{} insert $l isa account_link,has token_key "{key}",has email "new-links@example.com",has link_kind "reset",has link_target "{target}",has link_version "{version}",has link_expires {expiry},has link_used false;fetch {{"done":true}};"#,e.prefix())).await?;
     let reset = json!({"action":"reset","token":token,"password":"new-sandbox-link-password","confirm_password":"new-sandbox-link-password"});
@@ -199,6 +199,61 @@ pub async fn check(e: &Engine) -> Result<()> {
         .await?
         .0 == 200,
         "Existing identity cannot join"
+    );
+    // An alternate login belongs to the same person, not a new identity.
+    e.write(format!(r#"{} $u isa person,has identity_id "{id}";insert (person:$u) isa password_credential,has credential_id "alternate-owner-login",has login_email "alternate-links@example.com",has password_hash "{hash}",has credential_version "alternate";fetch {{"done":true}};"#,e.prefix())).await?;
+    let (_,alternate)=call(&r,&e.merchant,owner,"/portal",json!({"action":"invite","name":"TEST alternate identity","email":"alternate-links@example.com"})).await?;
+    let (s, accepted) = call(
+        &r,
+        "account",
+        "",
+        "/onboarding",
+        json!({"action":"accept","token":alternate["token"],"password":PASSWORD}),
+    )
+    .await?;
+    ensure!(
+        s == 200,
+        "Alternate login cannot accept invitation: {accepted}"
+    );
+    let (s, alias) = call(
+        &r,
+        "account",
+        "",
+        "/authentication",
+        json!({"strategy":"account","email":"alternate-links@example.com","password":PASSWORD}),
+    )
+    .await?;
+    ensure!(
+        s == 200 && alias["user"]["id"] == id.to_string(),
+        "Alternate login created a new identity"
+    );
+    // A contact can accept an invitation without replacing their existing identity.
+    let contact = uuid::Uuid::new_v4();
+    e.write(format!(r#"{} insert $u isa person,has identity_id "{contact}",has name "Existing contact",has email "contact-links@example.com",has status "active";fetch {{"done":true}};"#,e.prefix())).await?;
+    let (_,invite_contact)=call(&r,&e.merchant,owner,"/portal",json!({"action":"invite","name":"TEST existing contact","email":"contact-links@example.com"})).await?;
+    ensure!(
+        call(
+            &r,
+            "account",
+            "",
+            "/onboarding",
+            json!({"action":"accept","token":invite_contact["token"],"password":PASSWORD})
+        )
+        .await?
+        .0 == 200,
+        "Existing contact cannot accept invitation"
+    );
+    let (s, contact_login) = call(
+        &r,
+        "account",
+        "",
+        "/authentication",
+        json!({"strategy":"account","email":"contact-links@example.com","password":PASSWORD}),
+    )
+    .await?;
+    ensure!(
+        s == 200 && contact_login["user"]["id"] == contact.to_string(),
+        "Contact identity was replaced"
     );
     let (_, revoked) = call(
         &r,

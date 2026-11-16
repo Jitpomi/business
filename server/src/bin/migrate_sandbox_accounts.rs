@@ -68,7 +68,7 @@ async fn run() -> Result<()> {
     .await?
     .is_empty()
     {
-        let copied=documents(&check,"match $p isa person,has credential_version \"migration-v1\";fetch {'id':$p.identity_id,'hash':$p.password_hash};").await?;
+        let copied=documents(&check,"match $p isa person;$credential isa password_credential,links(person:$p),has credential_version \"migration-v1\";fetch {'id':$p.identity_id,'hash':$credential.password_hash};").await?;
         let source = d.transaction(SOURCE, TransactionType::Read).await?;
         for person in &copied {
             let original = documents(
@@ -179,7 +179,7 @@ async fn run() -> Result<()> {
         if aliases.contains_key(&id) {
             continue;
         }
-        out.query(format!(r#"insert $u isa person,has identity_id {},has name {},has email {},has password_hash {},has credential_version "migration-v1",has status "active";"#,q(&id),q(s(u,"email")?),q(s(u,"email")?),q(s(u,"password")?))).await?;
+        out.query(format!(r#"insert $u isa person,has identity_id {},has name {},has email {},has status "active"; (person:$u) isa password_credential,has credential_id {},has login_email {},has password_hash {},has credential_version "migration-v1";"#,q(&id),q(s(u,"email")?),q(s(u,"email")?),q(&id),q(s(u,"email")?),q(s(u,"password")?))).await?;
     }
     let mut seen = BTreeSet::new();
     for u in &members {

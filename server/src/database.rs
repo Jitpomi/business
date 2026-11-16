@@ -32,7 +32,19 @@ pub fn target(name: &str) -> Result<()> {
 pub async fn verify(driver: &TypeDBDriver, name: &str) -> Result<()> {
     let schema = driver.databases().get(name).await?.schema().await?;
     let compact: String = schema.chars().filter(|c| !c.is_whitespace()).collect();
-    ensure!(schema.contains("dog.security.scope")&&schema.contains("scope_resource")&&schema.contains("credential_version")&&schema.contains("bootstrap_record")&&compact.contains("ownsbill_bindings@card(1..1)")&&compact.contains("ownsbill_method_plugin@card(1..1)"),"Database is not the canonical Business model; provision a new target or follow the explicit financial-plugin migration guide. Startup will not migrate or reset it");
+    let person = schema
+        .split("entity person")
+        .nth(1)
+        .and_then(|s| s.split(';').next())
+        .unwrap_or("");
+    ensure!(
+        schema.contains("dog.security.scope") && schema.contains("scope_resource")
+        && schema.contains("relation password_credential") && schema.contains("scope_password_credential")
+        && schema.contains("credential_id") && !person.contains("owns password_hash")
+        && !person.contains("owns credential_version") && schema.contains("bootstrap_record")
+        && compact.contains("ownsbill_bindings@card(1..1)") && compact.contains("ownsbill_method_plugin@card(1..1)"),
+        "Database is not the canonical Business model; follow the explicit schema migration guides. Startup will not migrate or reset it"
+    );
     Ok(())
 }
 pub async fn install(driver: &TypeDBDriver, name: &str) -> Result<()> {
@@ -115,9 +127,9 @@ pub async fn bootstrap(
     tx.query(format!(r#"insert
        $lock isa bootstrap_record,has bootstrap_id "initial";
        $t isa tenant,has tenant_id "{tenant}",has name {},has status "active",has revision "initial";
-       $i isa person,has identity_id "{identity}",has email {},has name {},has password_hash {},has credential_version "initial",has status "active";
+       $i isa person,has identity_id "{identity}",has email {},has name {},has status "active"; (person:$i) isa password_credential,has credential_id "{identity}",has login_email {},has password_hash {},has credential_version "initial";
        (tenant:$t,member:$i) isa membership,has membership_role "owner",has start_at {};
-    "#,q(&owner.tenant_name),q(&owner.email.trim().to_ascii_lowercase()),q(&owner.name),q(&hash),chrono::Utc::now().naive_utc().format("%Y-%m-%dT%H:%M:%S%.6f"))).await?;
+    "#,q(&owner.tenant_name),q(&owner.email.trim().to_ascii_lowercase()),q(&owner.name),q(&owner.email.trim().to_ascii_lowercase()),q(&hash),chrono::Utc::now().naive_utc().format("%Y-%m-%dT%H:%M:%S%.6f"))).await?;
     tx.commit().await?;
     Ok((tenant, identity))
 }

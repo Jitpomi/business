@@ -36,7 +36,16 @@ entity identity @abstract, sub principal,
   owns identity_id @key,
   owns name @card(1),
   owns status @card(1) @values("active", "suspended", "terminated");
-entity person sub identity, owns email @key, owns password_hash @card(1), owns credential_version @card(1);
+# People exist independently of login credentials. Email is optional contact data.
+entity person sub identity, owns email @unique @card(0..1);
+# Authentication methods attach to a person; they do not define that person.
+attribute credential_id, value string;
+attribute login_email, value string;
+relation authentication_credential @abstract, relates person @card(1),
+  owns credential_id @key, owns credential_version @card(1);
+relation password_credential sub authentication_credential,
+  owns login_email @key, owns password_hash @card(1);
+person plays authentication_credential:person;
 entity service_account sub identity, owns service_name @key;
 entity tenant,
   owns tenant_id @key, owns name @card(1),

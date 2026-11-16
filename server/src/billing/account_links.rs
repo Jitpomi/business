@@ -109,7 +109,7 @@ impl Engine {
             let address = email(data)?;
             let answer = json!({"requested":true,"message":"If you have an account, we’ll email you a link to reset your password. Check your inbox and spam folder."});
             let at = datetime();
-            let people=self.read(format!("match $u isa person,has email {},has status 'active';$b isa tenant;let $ok=active_member($u,$b,{at});$ok==true;select $u;distinct;fetch {{'id':$u.identity_id,'version':$u.credential_version}};",q(&address))).await?;
+            let people=self.read(format!("match $u isa person,has status 'active';$credential isa password_credential,links(person:$u),has login_email {};$b isa tenant;let $ok=active_member($u,$b,{at});$ok==true;select $u,$credential;distinct;fetch {{'id':$u.identity_id,'version':$credential.credential_version,'credential':$credential.credential_id}};",q(&address))).await?;
             if people.len() != 1 {
                 return Ok(answer);
             }
@@ -121,7 +121,7 @@ impl Engine {
             let secret = token();
             let key = digest(&secret);
             let expires = now() + 1800;
-            let result=self.write(format!(r#"{} $u isa person,has identity_id {},has credential_version {};not {{$recent isa account_link,has email {},has link_kind "reset",has link_expires $expiry;$expiry>{cutoff};}};select $t,$u;distinct;insert $l isa account_link,has token_key "{key}",has email {},has link_kind "reset",has link_target {},has link_version {},has link_expires {expires},has link_used false;fetch {{"done":true}};"#,self.prefix(),q(field(&people[0],"id")?),q(field(&people[0],"version")?),q(&address),q(&address),q(field(&people[0],"id")?),q(field(&people[0],"version")?))).await;
+            let result=self.write(format!(r#"{} $u isa person,has identity_id {};$credential isa password_credential,links(person:$u),has credential_id {},has credential_version {};not {{$recent isa account_link,has email {},has link_kind "reset",has link_expires $expiry;$expiry>{cutoff};}};select $t,$u;distinct;insert $l isa account_link,has token_key "{key}",has email {},has link_kind "reset",has link_target {},has link_version {},has link_expires {expires},has link_used false;fetch {{"done":true}};"#,self.prefix(),q(field(&people[0],"id")?),q(field(&people[0],"credential")?),q(field(&people[0],"version")?),q(&address),q(&address),q(field(&people[0],"credential")?),q(field(&people[0],"version")?))).await;
             if result.is_ok() {
                 let _ = self.send_link(&address, &secret, "reset").await;
             }
@@ -147,33 +147,46 @@ impl Engine {
             ensure!(data["confirm_password"] == password, "Passwords must match");
             let hashed = hash(password).await?;
             let version = uuid::Uuid::new_v4().to_string();
-            self.write(format!(r#"{} {link_scope} $u isa person,has identity_id {},has email {},has status "active",has credential_version {};select $t,$l,$u;distinct;update $l has link_used true;$u has password_hash {},has credential_version "{version}";fetch {{"reset":true}};"#,self.prefix(),q(target),q(address),q(field(l,"version")?),q(&hashed))).await?;
+            self.write(format!(r#"{} {link_scope} $u isa person,has status "active";$credential isa password_credential,links(person:$u),has credential_id {},has login_email {},has credential_version {};select $t,$l,$u,$credential;distinct;update $l has link_used true;$credential has password_hash {},has credential_version "{version}";fetch {{"reset":true}};"#,self.prefix(),q(target),q(address),q(field(l,"version")?),q(&hashed))).await?;
             return Ok(json!({"reset":true}));
         }
         ensure!(kind == "invite", "Action unavailable");
         let at = datetime();
-        let existing=self.read(format!("match $u isa person,has email {};fetch {{'id':$u.identity_id,'hash':$u.password_hash,'version':$u.credential_version,'status':$u.status}};",q(address))).await?;
-        let person = if let Some(u) = existing.first() {
+        let existing=self.read(format!("match {{$login isa password_credential,links(person:$u),has login_email {};}} or {{$u isa person,has email {};not {{$existing isa authentication_credential,links(person:$u);}};}};fetch {{'id':$u.identity_id,'status':$u.status,'credentials':[match $credential isa password_credential,links(person:$u),has login_email {};fetch {{'hash':$credential.password_hash,'version':$credential.credential_version,'credential':$credential.credential_id,'login':$credential.login_email}};]}};",q(address),q(address),q(address))).await?;
+        ensure!(existing.len() <= 1, "Ambiguous identity");
+        let mut person = String::new();
+        let mut create = String::new();
+        if let Some(u) = existing.first() {
             ensure!(u["status"] == "active", "Account unavailable");
-            let hashed = field(u, "hash")?.to_owned();
-            ensure!(
-                tokio::task::spawn_blocking(move || bcrypt::verify(password, &hashed)).await??,
-                "Use your existing account password"
-            );
-            format!(
-                "$u isa person,has identity_id {},has credential_version {},has status 'active';",
-                q(field(u, "id")?),
-                q(field(u, "version")?)
-            )
+            let credentials = u["credentials"]
+                .as_array()
+                .ok_or_else(|| anyhow::anyhow!("Missing credentials"))?;
+            ensure!(credentials.len() <= 1, "Ambiguous credential");
+            if let Some(credential) = credentials.first() {
+                let hashed = field(credential, "hash")?.to_owned();
+                ensure!(
+                    tokio::task::spawn_blocking(move || bcrypt::verify(password, &hashed))
+                        .await??,
+                    "Use your existing account password"
+                );
+                person = format!("$u isa person,has identity_id {},has status 'active';$credential isa password_credential,links(person:$u),has credential_id {},has credential_version {};",q(field(u,"id")?),q(field(credential,"credential")?),q(field(credential,"version")?));
+            } else {
+                // The invitation proves control of the contact address. Add credentials
+                // to that existing person without replacing identity or memberships.
+                ensure!(credentials.is_empty(), "Use an existing account login");
+                let hashed = hash(password).await?;
+                person = format!("$u isa person,has identity_id {},has status 'active';not {{(person:$u) isa authentication_credential;}};",q(field(u,"id")?));
+                create = format!("insert (person:$u) isa password_credential,has credential_id {},has login_email {},has password_hash {},has credential_version {};",q(&uuid::Uuid::new_v4().to_string()),q(address),q(&hashed),q(&uuid::Uuid::new_v4().to_string()));
+            }
         } else {
-            String::new()
-        };
-        let create = if existing.is_empty() {
-            let hashed = hash(field(data, "password")?.to_owned()).await?;
-            format!("insert $u isa person,has identity_id {},has email {},has name {},has password_hash {},has credential_version {},has status 'active';",q(&uuid::Uuid::new_v4().to_string()),q(address),q(address),q(&hashed),q(&uuid::Uuid::new_v4().to_string()))
+            let hashed = hash(password).await?;
+            create = format!("insert $u isa person,has identity_id {},has email {},has name {},has status 'active';(person:$u) isa password_credential,has credential_id {},has login_email {},has password_hash {},has credential_version {};",q(&uuid::Uuid::new_v4().to_string()),q(address),q(address),q(&uuid::Uuid::new_v4().to_string()),q(address),q(&hashed),q(&uuid::Uuid::new_v4().to_string()));
+        }
+        let membership_absent = if existing.is_empty() {
+            format!("not {{(tenant:$b,member:$member) isa membership;$member isa person,has email {};}};",q(address))
         } else {
-            String::new()
+            "not {(tenant:$b,member:$u) isa membership;};".to_owned()
         };
-        self.write(format!(r#"{} {link_scope} $b isa tenant,has tenant_id {},has status "active",has revision {};{person} not {{(tenant:$b,member:$member) isa membership;$member isa person,has email {};}};{create} update $l has link_used true;insert (tenant:$b,member:$u) isa membership,has membership_role "owner",has start_at {at};fetch {{"email":$u.email}};"#,self.prefix(),q(target),q(field(l,"version")?),q(address))).await
+        self.write(format!(r#"{} {link_scope} $b isa tenant,has tenant_id {},has status "active",has revision {};{person} {membership_absent}{create} update $l has link_used true;insert (tenant:$b,member:$u) isa membership,has membership_role "owner",has start_at {at};fetch {{"email":{}}};"#,self.prefix(),q(target),q(field(l,"version")?),q(address))).await
     }
 }

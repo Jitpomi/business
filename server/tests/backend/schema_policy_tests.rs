@@ -162,7 +162,7 @@ async fn schema_policy_real_http_migration() -> Result<()> {
         // login and per-request JWT invalidation. This is not a recovery test.
         let replacement_hash=bcrypt::hash("replacement-test-password",4)?;
         trusted.write(json!({"query":format!(
-            "match $p isa person,has identity_id 'bob'; update $p has password_hash {},has credential_version 'test-rotation';",
+            "match $p isa person,has identity_id 'bob'; $credential isa password_credential,links(person:$p); update $credential has password_hash {},has credential_version 'test-rotation';",
             serde_json::to_string(&replacement_hash)?
         )})).await?;
         ensure!(call(&client,&base,"tenant-a","read",b,raw).await?.0>=400,
@@ -287,7 +287,7 @@ async fn schema_policy_real_http_migration() -> Result<()> {
         let (status,foreign)=call(&client,&base,"tenant-b","read",d,"match $r isa resource,has resource_id 'concurrent-a'; fetch {'id':$r.resource_id};").await?;
         ensure!(status==200 && answers(&foreign)?.is_empty(),"Concurrent data crossed tenants");
         // JWT authentication still rechecks current credential versions.
-        trusted.write(json!({"query":"match $p isa person,has identity_id 'bob'; update $p has credential_version 'rotated';"})).await?;
+        trusted.write(json!({"query":"match $p isa person,has identity_id 'bob'; $credential isa password_credential,links(person:$p); update $credential has credential_version 'rotated';"})).await?;
         ensure!(call(&client,&base,"tenant-a","read",b,raw).await?.0>=400,"Rotated token accepted");
         ensure!(data.custom(dog_core::TenantContext::new("tenant-a"),"read",Some(json!({"query":raw})),internal).await.is_err(),"Cached internal call accepted rotated credentials");
         trusted.write(json!({"query":"match $p isa person,has identity_id 'carol'; $m isa membership,links(member:$p); update $m has end_at 2000-01-01T00:00:00;"})).await?;

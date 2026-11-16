@@ -243,7 +243,7 @@ async fn two_tenants_complete_billing_using_independent_plugins() -> Result<()> 
             let engine=Engine::new(state.clone(),&tenant,Arc::new(runtime))?;
             let identity=uuid::Uuid::new_v4();let email=format!("{tenant}@example.invalid");let password_hash=bcrypt::hash("plugin-owner-test-password",4)?;
             let tx=driver.transaction(&name,TransactionType::Write).await?;
-            tx.query(format!(r#"insert $t isa tenant,has tenant_id "{tenant}",has name "Plugin tenant",has status "active",has revision "initial";$u isa person,has identity_id "{identity}",has email "{email}",has name "Owner",has password_hash "{password_hash}",has credential_version "initial",has status "active";(tenant:$t,member:$u) isa membership,has membership_role "owner",has start_at 2020-01-01T00:00:00;"#)).await?;tx.commit().await?;
+            tx.query(format!(r#"insert $t isa tenant,has tenant_id "{tenant}",has name "Plugin tenant",has status "active",has revision "initial";$u isa person,has identity_id "{identity}",has email "{email}",has name "Owner",has status "active"; (person:$u) isa password_credential,has credential_id "{identity}",has login_email "{email}",has password_hash "{password_hash}",has credential_version "initial";(tenant:$t,member:$u) isa membership,has membership_role "owner",has start_at 2020-01-01T00:00:00;"#)).await?;tx.commit().await?;
             for label in ["success","decline"] {
                 let customer=uuid::Uuid::new_v4();let buyer=uuid::Uuid::new_v4();let plan=uuid::Uuid::new_v4();let now=chrono::Utc::now().timestamp()-10;
                 engine.write(format!(r#"{} insert $buyer isa tenant,has tenant_id "{buyer}",has name "Buyer",has status "active",has revision "initial";
