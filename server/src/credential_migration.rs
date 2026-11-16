@@ -5,7 +5,6 @@ use serde_json::json;
 use typedb_driver::{TransactionType, TypeDBDriver};
 pub async fn migrate(driver: &TypeDBDriver, name: &str) -> Result<usize> {
     target(name)?;
-    evacuate_plugin_secrets(driver, name).await?;
     let schema = driver.databases().get(name).await?.schema().await?;
     ensure!(
         schema.contains("entity person") && schema.contains("scope_identity"),
@@ -13,6 +12,7 @@ pub async fn migrate(driver: &TypeDBDriver, name: &str) -> Result<usize> {
     );
     let _ = actor_policy_updates(&schema)?;
     if !schema.contains("attribute password_hash") {
+        evacuate_plugin_secrets(driver, name).await?;
         crate::database::verify(driver, name).await?;
         return Ok(0);
     }
@@ -71,6 +71,7 @@ pub async fn migrate(driver: &TypeDBDriver, name: &str) -> Result<usize> {
     for record in &revoked {
         store.revoke(&field(record, "key")?, i64::MAX)?;
     }
+    evacuate_plugin_secrets(driver, name).await?;
     let tx = driver.transaction(name, TransactionType::Schema).await?;
     if !schema.contains("relation external_identity") {
         let start = SCHEMA.find("attribute auth_binding_key").unwrap();

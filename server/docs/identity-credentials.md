@@ -157,8 +157,9 @@ No running development or production database is changed by startup.
    preserve original person IDs. No business access history is reset.
 6. Configure the chosen authentication plugins and deploy the matching binary.
    Verify sign-in, protected data queries, invitation/recovery behavior, account
-   linking and worker restart before reopening writes. Existing platform sessions
-   require sign-in again.
+   linking and worker restart before reopening writes. Switching to the managed
+   provider requires sign-in there; old local sessions without an account reference
+   are rejected. Verifiable local sessions retain their revocation state.
 
 The migration is repeatable but spans database/store transactions: keep writers
 stopped until every phase completes. If interrupted, retain the original backup,
