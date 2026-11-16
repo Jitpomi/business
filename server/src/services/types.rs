@@ -53,5 +53,11 @@ pub fn actor(ctx: &dog_core::TenantContext, p: &BusinessParams) -> anyhow::Resul
     if !p.authenticated || u["tenant_id"].as_str() != Some(&ctx.tenant_id.0) {
         return Err(dog_core::DogError::not_authenticated("Company access changed").into_anyhow());
     }
-    Ok(uuid::Uuid::parse_str(u["id"].as_str().unwrap_or(""))?.to_string())
+    u["id"]
+        .as_str()
+        .filter(|id| !id.is_empty() && id.len() <= 512 && !id.chars().any(char::is_control))
+        .map(str::to_owned)
+        .ok_or_else(|| {
+            dog_core::DogError::not_authenticated("Missing verified identity").into_anyhow()
+        })
 }
