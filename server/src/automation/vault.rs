@@ -21,7 +21,7 @@ impl Default for Vault {
 impl Vault {
     pub fn from_env() -> Result<Self> {
         match std::env::var("AUTOMATION_MASTER_KEY_B64") {
-            Ok(v) => Self::with_store(&v, super::secret_store::Files::configured()?),
+            Ok(v) => Self::with_store(&v, super::secret_store::configured()?),
             Err(_) => Ok(Self::default()),
         }
     }
@@ -49,7 +49,7 @@ impl Vault {
             store,
         ))
     }
-    pub fn seal(&self, context: &str, value: &serde_json::Value) -> Result<String> {
+    pub async fn seal(&self, context: &str, value: &serde_json::Value) -> Result<String> {
         let cipher = self.0.as_ref().ok_or_else(|| {
             anyhow::anyhow!("Configure the automation vault before connecting systems")
         })?;
@@ -67,14 +67,14 @@ impl Vault {
         let mut data = nonce.to_vec();
         data.extend(encrypted);
         let id = uuid::Uuid::new_v4().to_string();
-        self.1.put(&id, &STANDARD.encode(data))?;
+        self.1.put(&id, &STANDARD.encode(data)).await?;
         Ok(format!("secret:{id}"))
     }
-    pub fn open(&self, context: &str, value: &str) -> Result<serde_json::Value> {
+    pub async fn open(&self, context: &str, value: &str) -> Result<serde_json::Value> {
         let id = value.strip_prefix("secret:").ok_or_else(|| {
             anyhow::anyhow!("Inline credentials require explicit migration before use")
         })?;
-        let encrypted = self.1.get(id)?;
+        let encrypted = self.1.get(id).await?;
         self.decrypt(context, &encrypted)
     }
     fn decrypt(&self, context: &str, value: &str) -> Result<serde_json::Value> {
@@ -95,10 +95,10 @@ impl Vault {
             .map_err(|_| anyhow::anyhow!("Credential authentication failed"))?;
         Ok(serde_json::from_slice(&bytes)?)
     }
-    pub(crate) fn import_inline(&self, context: &str, value: &str) -> Result<String> {
+    pub(crate) async fn import_inline(&self, context: &str, value: &str) -> Result<String> {
         let _ = self.decrypt(context, value)?;
         let id = uuid::Uuid::new_v4().to_string();
-        self.1.put(&id, value)?;
+        self.1.put(&id, value).await?;
         Ok(format!("secret:{id}"))
     }
 }

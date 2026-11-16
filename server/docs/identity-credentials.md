@@ -131,7 +131,14 @@ Financial/notification connection secrets also stay outside TypeDB. The graph
 stores `secret_ref`, while an external `SecretStore` holds AES-GCM ciphertext bound
 to tenant, connection ID and connection revision. Runtime file storage requires an
 existing private `AUTOMATION_SECRET_STORE_DIR` and the original external
-`AUTOMATION_MASTER_KEY_B64`. Hosts can supply another secret-store adapter. Back up
+`AUTOMATION_MASTER_KEY_B64`. Hosts can supply another secret-store adapter. For ephemeral hosts, configure
+`AUTOMATION_SECRET_STORE_URL` (an HTTPS origin) and
+`AUTOMATION_SECRET_STORE_TOKEN` instead of a file directory. The asynchronous
+remote adapter uses bounded responses, fixed endpoints, no redirects and no proxy
+inheritance. `deploy/secret-store` provides an immutable ciphertext-only Cloudflare
+D1 worker: authenticated GET/PUT, primary reads, no listing/deletion or browser
+CORS. The worker has no decryption key. Keep its credential separate from the
+vault key and use a distinct store/credential per environment. Back up
 the external stores and key separately from TypeDB; losing them loses access to
 the credentials. Explicit `Vault::new` uses ephemeral memory for embedded tests;
 runtime `Vault::from_env` never silently substitutes memory for persistent secrets.
@@ -184,3 +191,25 @@ These exercise signed external tokens, invalid proof rejection, identity linking
 TypeDB tenant isolation, account recovery/races, both credential migration models,
 external encrypted-secret migration and restart recovery. They are not claims of
 live Auth0 setup, sandbox payment settlement or email delivery.
+
+
+### Auth0 development operations
+
+The development issuer is `https://jitpomi-development.us.auth0.com/` and its API
+audience is `https://business.jitpomi.com/development/api`. The browser client is
+`64TPi29GB85up7bblC30cXTiPinAFeqM`; this is a public identifier, not a credential.
+The validation callback is restricted to `http://127.0.0.1:8741/`.
+`deploy/auth0/post-login.cjs` maps provider email verification and session
+authentication methods to namespaced claims. It does not map provider roles,
+organizations or user metadata to business access. API tokens expire after 900
+seconds. No password/implicit grant is enabled on the browser client.
+
+`rehearse_credentials business_native_dev` restores an exported backup into a
+new generated test database, migrates that copy, checks business attributes and
+connection configuration, verifies repeatability, and removes the successful
+copy. Failed copies remain for inspection. It never changes the source database.
+Use private account/secret-store paths and the original vault key in its operator
+environment. `link_provider_accounts --apply` subsequently adds exact issuer/subject
+bindings from `AUTH_MIGRATION_BINDINGS_FILE`, an operator-verified import manifest.
+It requires stopped writers, existing identities and non-conflicting bindings;
+it creates no people, memberships or permissions and never matches by email.

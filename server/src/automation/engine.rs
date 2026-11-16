@@ -48,7 +48,7 @@ impl Engine {
         let secret_ref = if secrets.is_null() {
             String::new()
         } else {
-            self.vault.seal(&context, &secrets)?
+            self.vault.seal(&context, &secrets).await?
         };
         let c = Connection {
             id: id.into(),
@@ -76,10 +76,12 @@ impl Engine {
         let secrets = if c.secret_ref.is_empty() {
             Value::Null
         } else {
-            self.vault.open(
-                &format!("{}/{}/{}", self.store.tenant, c.id, c.revision),
-                &c.secret_ref,
-            )?
+            self.vault
+                .open(
+                    &format!("{}/{}/{}", self.store.tenant, c.id, c.revision),
+                    &c.secret_ref,
+                )
+                .await?
         };
         Ok((r, c, secrets))
     }

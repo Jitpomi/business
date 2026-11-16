@@ -1,0 +1,9 @@
+{
+  "name": "jitpomi-business-dev-secrets",
+  "main": "worker.js",
+  "compatibility_date": "2026-10-08",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "preview_urls": false,
+  "d1_databases": [{"binding":"SECRETS","database_name":"jitpomi-business-dev-secrets","database_id":"e2776eab-1abc-4b66-92d9-d0e442e26907"}]
+}
