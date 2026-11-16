@@ -10,6 +10,7 @@ pub type Backend = (
 );
 /// Startup only connects and verifies; provisioning is an explicit operator action.
 pub async fn build() -> Result<Backend> {
+    crate::tls::initialize();
     if let Err(error) = match std::env::var("BUSINESS_ENV_FILE") {
         Ok(path) => dotenvy::from_path(path),
         Err(_) => dotenvy::dotenv().map(|_| ()),
@@ -50,6 +51,7 @@ fn compose(
     mut registry: Arc<crate::finance::TenantRegistry>,
     connectors: Option<crate::automation::connectors::Catalog>,
 ) -> Result<Backend> {
+    crate::tls::initialize();
     let state: Arc<crate::typedb::TypeDBState> = builder
         .get("typedb")
         .ok_or_else(|| anyhow::anyhow!("TypeDB state missing"))?;

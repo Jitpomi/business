@@ -13,6 +13,11 @@ there is no custom TLS/cryptography implementation. The native schema, RBAC,
 credential formats, plugin ownership and payment idempotency keys are unchanged.
 No data migration or live credential-store rewrite is required.
 
+HTTP TLS setup is explicit and shared by application and standalone plugin
+entrypoints. The OIDC client initializes its provider without requiring a database
+or payment plugin to have run first. Existing host-selected providers are retained;
+a separate-process regression verifies independent construction and idempotence.
+
 The source branches are explicitly JITPOMI-maintained, not upstream releases.
 Their JITPOMI-MAINTENANCE.md documents provenance, validation and replacement.
 The driver removes the unused normal async-std dependency, matching the prior

@@ -2,7 +2,7 @@
 pub fn auth() -> anyhow::Result<()> {
     // The HTTP test client enables rustls-no-provider. Its process must choose
     // its own provider, independently of the database driver's TLS internals.
-    let _ = rustls::crypto::ring::default_provider().install_default();
+    server::tls::initialize();
     static DIRECTORY: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
     if DIRECTORY.get().is_none() {
         let dir = tempfile::tempdir()?;

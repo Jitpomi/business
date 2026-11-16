@@ -156,7 +156,7 @@ impl Connector for Builtin {
         if self.0 == "resend" {
             return Ok(());
         }
-        let _ = rustls::crypto::ring::default_provider().install_default();
+        crate::tls::initialize();
         let client = reqwest::Client::builder()
             .https_only(true)
             .no_proxy()

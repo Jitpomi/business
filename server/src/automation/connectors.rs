@@ -182,7 +182,7 @@ impl Http {
         }
     }
     async fn client(url: &reqwest::Url) -> Result<reqwest::Client> {
-        let _ = rustls::crypto::ring::default_provider().install_default();
+        crate::tls::initialize();
         let host = url
             .host_str()
             .ok_or_else(|| anyhow::anyhow!("Host required"))?;

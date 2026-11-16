@@ -12,7 +12,7 @@ impl Resend {
             !token.trim().is_empty() && !from.trim().is_empty(),
             "Mail credentials missing"
         );
-        let _ = rustls::crypto::ring::default_provider().install_default();
+        crate::tls::initialize();
         Ok(Self {
             http: reqwest::Client::builder()
                 .https_only(true)

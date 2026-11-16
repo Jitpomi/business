@@ -39,7 +39,7 @@ pub struct Remote {
 }
 impl Remote {
     pub fn new(endpoint: &str, token: String) -> Result<Self> {
-        let _ = rustls::crypto::ring::default_provider().install_default();
+        crate::tls::initialize();
         let endpoint = reqwest::Url::parse(endpoint)?;
         ensure!(
             endpoint.scheme() == "https"
