@@ -1,0 +1,3 @@
+match $c isa bill_customer,has bill_key @@customer_id@@;
+update $c has bill_method_plugin @@plugin_id@@;
+fetch {"id":$c.bill_key,"plugin":$c.bill_method_plugin};

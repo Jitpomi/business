@@ -293,10 +293,10 @@ async fn two_tenants_complete_billing_using_independent_plugins() -> Result<()> 
             let auth_link_0=server::auth::local_link("$u",&identity.to_string())?;server::auth::plugins::local::Local::configured(&name)?.import(&identity.to_string(),&email.to_string(),&password_hash.to_string(),"initial")?;
 tx.query(format!(r#"insert $t isa tenant,has tenant_id "{tenant}",has name "Plugin tenant",has status "active",has revision "initial";$u isa person,has identity_id "{identity}",has email "{email}",has name "Owner",has status "active"; {auth_link_0}(tenant:$t,member:$u) isa membership,has membership_role "owner",has start_at 2020-01-01T00:00:00;"#)).await?;tx.commit().await?;
             for label in ["success","decline"] {
-                let customer=uuid::Uuid::new_v4();let buyer=uuid::Uuid::new_v4();let plan=uuid::Uuid::new_v4();let now=chrono::Utc::now().timestamp()-10;
+                let customer=uuid::Uuid::new_v4();let buyer=uuid::Uuid::new_v4();let plan=uuid::Uuid::new_v4();let now=chrono::Utc::now().timestamp()-10;let grant=payment_fixture::payment_grant_fixture(&customer.to_string(),"community-bank","bank/method/one","reviewed");
                 engine.write(format!(r#"{} insert $buyer isa tenant,has tenant_id "{buyer}",has name "Buyer",has status "active",has revision "initial";
-                $c isa bill_customer,has bill_key "{customer}",has name "{label}",has bill_email "test@example.invalid",has bill_policy "customer",has bill_choice "automatic",has bill_provider "community-bank",has bill_bindings "{{}}",has bill_method_plugin "community-bank",has bill_payment_method "bank/method/one",has bill_consent "reviewed",has bill_revision "reviewed";(merchant:$t,buyer:$buyer,customer:$c) isa bill_account;
-                $p isa bill_plan,has bill_key "{plan}",has name "{label}",has bill_amount 100,has bill_due_days 0,has bill_anchor {now},has bill_next {now},has bill_sequence 0,has bill_interval "once",has bill_status "active";(customer:$c,plan:$p) isa bill_plan_owner;fetch {{"id":$p.bill_key}};"#,engine.prefix())).await?;
+                $c isa bill_customer,has bill_key "{customer}",has name "{label}",has bill_email "test@example.invalid",has bill_policy "customer",has bill_choice "automatic",has bill_provider "community-bank",has bill_bindings "{{}}",has bill_method_plugin "community-bank",has bill_payment_method "bank/method/one",has bill_consent "reviewed",has bill_revision "reviewed";(merchant:$t,buyer:$buyer,customer:$c) isa bill_account;{grant}
+                $p isa bill_plan,has bill_key "{plan}",has name "{label}",has bill_amount 100,has bill_due_days 0,has bill_anchor {now},has bill_next {now},has bill_sequence 0,has bill_interval "once",has bill_status "active";(customer:$c,plan:$p) isa bill_plan_owner;(evidence:$grant,plan:$p) isa bill_consent_plan;fetch {{"id":$p.bill_key}};"#,engine.prefix())).await?;
             }
             fixtures.push((engine,bank,mail,email));
         }
@@ -543,3 +543,8 @@ async fn account_discovery_and_financial_metadata_enforce_tenant_scope() -> Resu
 }
 
 mod retirement;
+
+#[path = "../support/payment_fixture.rs"]
+mod payment_fixture;
+
+mod consent_migration;

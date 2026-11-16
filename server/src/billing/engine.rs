@@ -1,5 +1,5 @@
 //! Durable scheduling and reconciliation. External requests never run inside a DB transaction.
-use super::billing_schema::{self as schema, Interval, Mode, Policy};
+use super::billing_schema::{self as schema, Interval, Mode};
 use crate::{
     finance::{opaque_id, InvoiceObservation, InvoiceRequest, TenantRuntime},
     typedb::TypeDBState,
@@ -14,7 +14,7 @@ pub struct Engine {
     pub merchant: String,
     pub runtime: Arc<TenantRuntime>,
 }
-pub const CUSTOMER_DATA: &str = r#""customer_id":$c.bill_key,"name":$c.name,"email":$c.bill_email,"policy":$c.bill_policy,"choice":$c.bill_choice,"manual_provider":$c.bill_provider,"bindings":$c.bill_bindings,"method_plugin":$c.bill_method_plugin,"payment_method":$c.bill_payment_method,"consent":$c.bill_consent,"revision":$c.bill_revision"#;
+pub const CUSTOMER_DATA: &str = r#""customer_id":$c.bill_key,"name":$c.name,"email":$c.bill_email,"policy":$c.bill_policy,"choice":bill_payment_choice($c),"manual_provider":$c.bill_provider,"bindings":$c.bill_bindings,"method_plugin":$c.bill_method_plugin,"payment_method":$c.bill_payment_method,"consent":bill_approved_revision($c),"revision":$c.bill_revision"#;
 impl Engine {
     pub fn new(
         state: Arc<TypeDBState>,
@@ -152,15 +152,11 @@ impl Engine {
         let now = chrono::Utc::now().timestamp();
         // Read customer settings at claim time. Revision validation below rejects a
         // preference or consent change racing the claim.
-        let rows=self.read(format!(r#"{} fetch {{{CUSTOMER_DATA},"invoice_id":$i.bill_key,"description":$i.name,"amount":$i.bill_amount,"issued":$i.bill_anchor,"due":$i.bill_next}};"#,self.invoice_match(id)?)).await?;
+        let rows=self.read(format!(r#"{} fetch {{{CUSTOMER_DATA},"invoice_id":$i.bill_key,"description":$i.name,"amount":$i.bill_amount,"issued":$i.bill_anchor,"due":$i.bill_next,"mode":bill_plan_payment_choice($c,$p)}};"#,self.invoice_match(id)?)).await?;
         ensure!(rows.len() == 1, "Invoice missing");
         let row = &rows[0];
-        let mode = schema::effective(
-            serde_json::from_value::<Policy>(row["policy"].clone())?,
-            serde_json::from_value::<Mode>(row["choice"].clone())?,
-            !string(row, "consent")?.is_empty() && row["consent"] == row["revision"],
-            !string(row, "payment_method")?.is_empty(),
-        );
+        // The native model is the sole authority; Rust only decodes its decision.
+        let mode: Mode = serde_json::from_value(row["mode"].clone())?;
         let plugin_id = if mode == Mode::Automatic {
             self.method_plugin(row)?
         } else {
@@ -263,7 +259,7 @@ impl Engine {
     /// reconciled and the customer receives a payment link; it is never recharged.
     pub async fn collect_due(&self, id: &str, now: i64) -> Result<()> {
         let rows=self.read(format!(r#"{} $i has bill_status "open",has bill_choice "automatic",has bill_provider $plugin,has bill_next $due;$due <= {now};
-   $i has bill_revision $consent;$c has bill_revision $consent,has bill_consent == $consent,has bill_choice "automatic",has bill_policy $policy;$policy!="manual";
+   $i has bill_revision $consent;$c has bill_revision $consent;let $approved=bill_plan_has_consent($c,$p);$approved==true;
    $consent!=""; $p has bill_status $plan_status;$plan_status!="paused";
    fetch {{{CUSTOMER_DATA},"external":$i.bill_external_id,"plugin":$i.bill_provider}};"#,self.invoice_match(id)?)).await?;
         if rows.is_empty() {
@@ -283,7 +279,7 @@ impl Engine {
         selected.ready()?;
         let consent = string(row, "revision")?;
         let attempted = format!("attempted:{consent}");
-        self.write(format!(r#"{} $i has bill_status "open",has bill_revision {}; $c has bill_revision {},has bill_consent {},has bill_choice "automatic",has bill_policy $policy;$policy!="manual";$p has bill_status $ps;$ps!="paused";select $t,$i;distinct;update $i has bill_revision {},has bill_updated {now};fetch {{"id":$i.bill_key}};"#,self.invoice_match(id)?,schema::quoted(consent),schema::quoted(consent),schema::quoted(consent),schema::quoted(&attempted))).await?;
+        self.write(format!(r#"{} $i has bill_status "open",has bill_revision {}; $c has bill_revision {};let $approved=bill_plan_has_consent($c,$p);$approved==true;$p has bill_status $ps;$ps!="paused";select $t,$i;distinct;update $i has bill_revision {},has bill_updated {now};fetch {{"id":$i.bill_key}};"#,self.invoice_match(id)?,schema::quoted(consent),schema::quoted(consent),schema::quoted(&attempted))).await?;
         let _result = selected
             .collect(string(row, "external")?, id, string(row, "payment_method")?)
             .await;

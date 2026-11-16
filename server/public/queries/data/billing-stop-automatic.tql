@@ -1,3 +1,4 @@
+# A new revision revokes the current grant and every pending collection claim.
 match $c isa bill_customer, has bill_key @@customer_id@@;
-update $c has bill_choice "manual";
-fetch {"id":$c.bill_key,"choice":$c.bill_choice};
+update $c has bill_revision @@request_id@@;
+fetch {"id":$c.bill_key,"choice":bill_payment_choice($c),"revision":$c.bill_revision};

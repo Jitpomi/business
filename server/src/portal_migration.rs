@@ -4,7 +4,7 @@ use crate::database::{self, documents, snapshot};
 use anyhow::{ensure, Context, Result};
 use std::{collections::BTreeSet, path::Path};
 use typedb_driver::{TransactionType, TypeDBDriver};
-fn definitions(schema: &str) -> Result<BTreeSet<String>> {
+pub(crate) fn definitions(schema: &str) -> Result<BTreeSet<String>> {
     use typeql::{
         query::{schema::SchemaQuery, QueryStructure},
         schema::definable::Definable,
@@ -52,6 +52,13 @@ pub async fn import(
     let schema = database::import_schema();
     let unknown: Vec<_> = definitions(&old)?
         .difference(&definitions(&schema)?)
+        .filter(|name| {
+            ![
+                "function:update_bill_choice",
+                "function:update_bill_consent",
+            ]
+            .contains(&name.as_str())
+        })
         .cloned()
         .collect();
     ensure!(

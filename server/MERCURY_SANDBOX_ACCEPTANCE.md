@@ -97,3 +97,14 @@ Rerun the manual paid test in another process to verify persistent connection
 secrets, durable notice claims and one receipt after restart/replay. Confirm the
 approved mailbox contains one reminder and one application receipt for that exact
 invoice reference. The provider receipt and application receipt are distinct.
+
+## Resuming after native-consent model changes
+
+Keep existing Mercury checkpoints and provider IDs. The server now requires the
+native consent schema even for manual-payment plugins. Use the explicit shadow
+migration to preserve an existing canonical test database, or restore its saved
+export into a new private test root through the canonical import path. Verify the
+complete graph before updating the saved database pointer. Never recreate a
+pending provider invoice, replace its payment key or delete the old checkpoint
+to bypass a model-version check. Mercury's manual and Processing semantics are
+unchanged; it does not gain automatic-collection capability from this migration.

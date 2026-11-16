@@ -10,13 +10,6 @@ pub enum Mode {
 }
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
-pub enum Policy {
-    Customer,
-    Manual,
-    Automatic,
-}
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
 pub enum Interval {
     Once,
     Week,
@@ -63,20 +56,6 @@ pub fn occurrence(anchor: i64, interval: Interval, sequence: u32) -> Result<Opti
         ),
     };
     Ok(next.map(|t| t.timestamp()))
-}
-/// An admin preference is not cardholder consent. Missing consent always falls
-/// back to a manual invoice; choosing automatic never fabricates a saved card.
-pub fn effective(policy: Policy, choice: Mode, consented: bool, card_ready: bool) -> Mode {
-    let requested = match policy {
-        Policy::Manual => Mode::Manual,
-        Policy::Automatic => Mode::Automatic,
-        Policy::Customer => choice,
-    };
-    if requested == Mode::Automatic && choice == Mode::Automatic && consented && card_ready {
-        Mode::Automatic
-    } else {
-        Mode::Manual
-    }
 }
 #[cfg(test)]
 #[path = "../../tests/billing/billing_schema.rs"]
