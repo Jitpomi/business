@@ -188,13 +188,45 @@ pub async fn tick(engine: &Engine) -> Result<usize> {
     }
     Ok(n)
 }
+/// Owns a poller. Explicit shutdown waits for its current poll and effects to finish.
+/// Dropping the handle requests a stop; callers retiring a database must await shutdown.
+#[must_use = "Retain the worker and await shutdown before retiring its database"]
+pub struct Worker {
+    stop: Option<tokio::sync::oneshot::Sender<()>>,
+    task: Option<tokio::task::JoinHandle<()>>,
+}
+impl Worker {
+    pub async fn shutdown(mut self) -> Result<()> {
+        if let Some(stop) = self.stop.take() {
+            let _ = stop.send(());
+        }
+        if let Some(task) = self.task.take() {
+            task.await?;
+        }
+        Ok(())
+    }
+}
+impl Drop for Worker {
+    fn drop(&mut self) {
+        if let Some(stop) = self.stop.take() {
+            let _ = stop.send(());
+        }
+    }
+}
 /// Discover tenants with due records on every poll; newly connected tenants need no restart.
-pub fn spawn_all(template: Engine) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(async move {
+pub fn spawn_all(template: Engine) -> Worker {
+    let (stop, mut stopped) = tokio::sync::oneshot::channel();
+    let task = tokio::spawn(async move {
         let mut clock = tokio::time::interval(std::time::Duration::from_secs(2));
         clock.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
-            clock.tick().await;
+            // Stop only between polls. Cancelling a query or provider mutation
+            // midway can conceal its outcome; finish and persist it first.
+            tokio::select! {
+                biased;
+                _ = &mut stopped => break,
+                _ = clock.tick() => {},
+            }
             let query=format!("match $r isa automation_record,has auto_tenant $tenant,has auto_when $when,has auto_status $status;$when <= {};{{$status == \"queued\";}} or {{$status == \"running\";}} or {{$status == \"retry\";}} or {{$status == \"waiting\";}} or {{$status == \"scheduled\";}};select $tenant;distinct;limit 1000;fetch {{'tenant':$tenant}};",now());
             let Ok(rows) = crate::storage::read(&template.store.state, &query).await else {
                 tracing::warn!("Automation discovery failed");
@@ -223,5 +255,13 @@ pub fn spawn_all(template: Engine) -> tokio::task::JoinHandle<()> {
                 })
                 .await;
         }
-    })
+    });
+    Worker {
+        stop: Some(stop),
+        task: Some(task),
+    }
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/automation_worker.rs"]
+mod worker_tests;

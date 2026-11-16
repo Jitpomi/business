@@ -597,8 +597,7 @@ async fn run(phase: &str) -> Result<()> {
         }
         Ok::<_,anyhow::Error>(())
     }.await;
-    worker.abort();
-    let _ = worker.await;
+    worker.shutdown().await?;
     save(&path, &saved)?;
     let folder = root
         .join("checkpoint")

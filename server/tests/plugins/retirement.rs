@@ -36,6 +36,8 @@ async fn website_queries_retire_portal_end_to_end() -> Result<()> {
         driver: driver.clone(),
         database: name.clone(),
     });
+    let mut worker = None;
+    let mut http_server = None;
     let result=async {
   let tenant=uuid::Uuid::new_v4().to_string();let person=uuid::Uuid::new_v4().to_string();let email="retirement-owner@example.invalid";
   let mut runtime=TenantRuntime::new(tenant.clone(),true);let bank=Arc::new(Bank{fail_detach:std::sync::atomic::AtomicBool::new(true),..Bank::default()});let mail=Arc::new(Mail::default());runtime.register("community-bank",bank.clone())?;runtime.default_financial=Some("community-bank".into());runtime.notification=Some(mail.clone());runtime.allowed_test_recipients.push("buyer@example.invalid".into());
@@ -49,8 +51,11 @@ async fn website_queries_retire_portal_end_to_end() -> Result<()> {
   let template:Arc<server::automation::engine::Engine>=app.get("automation.engine").unwrap();
   let router=server::app::router(http).merge(server::billing::http::managed_router(state.clone(),Arc::new(registry),Some(tenant.clone()))?);
   let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await?;let base=format!("http://{}",listener.local_addr()?);
-  struct Tasks(Vec<tokio::task::JoinHandle<()>>);impl Drop for Tasks{fn drop(&mut self){for t in &self.0{t.abort();}}}
-  let _tasks=Tasks(vec![tokio::spawn(async move{axum::serve(listener,router).await.unwrap();}),server::automation::runtime::spawn_all((*template).clone())]);
+  let (stop_http, stopped_http) = tokio::sync::oneshot::channel();
+  http_server = Some((stop_http, tokio::spawn(async move {
+      axum::serve(listener,router).with_graceful_shutdown(async {let _=stopped_http.await;}).await
+  })));
+  worker = Some(server::automation::runtime::spawn_all((*template).clone()));
   let request=serde_json::json!({"base":base,"tenant":tenant,"email":email,"gateway":std::env::var("BUSINESS_GATEWAY_SECRET").unwrap_or_default()});
   let output=tokio::task::spawn_blocking(move||->Result<std::process::Output>{
    use std::io::Write;
@@ -62,6 +67,13 @@ async fn website_queries_retire_portal_end_to_end() -> Result<()> {
   ensure!(bank.attempts.lock().unwrap().values().all(|n|*n==1),"Collection was repeated");
   Ok::<_,anyhow::Error>(())
  }.await;
+    if let Some((stop, server)) = http_server {
+        let _ = stop.send(());
+        server.await??;
+    }
+    if let Some(worker) = worker {
+        worker.shutdown().await?;
+    }
     driver.databases().get(&name).await?.delete().await?;
     result
 }
