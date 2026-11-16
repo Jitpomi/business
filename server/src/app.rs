@@ -21,18 +21,14 @@ pub async fn build() -> Result<Backend> {
     let mut builder = dog_core::DogAppBuilder::new();
     crate::config::config(&mut builder)?;
     crate::typedb::TypeDBState::initialize(&mut builder).await?;
-    compose(builder, crate::plugins::configuration::registry()?)
+    compose(builder, configured_registry()?, None)
 }
 /// The same composition used by the executable, tools and integration tests.
 pub fn build_with_state(
     state: Arc<crate::typedb::TypeDBState>,
     jwt_secret: String,
 ) -> Result<Backend> {
-    build_with_plugins(
-        state,
-        jwt_secret,
-        crate::plugins::configuration::registry()?,
-    )
+    build_with_plugins(state, jwt_secret, configured_registry()?)
 }
 /// Hosts can register any trusted plugin implementation without editing business services.
 pub fn build_with_plugins(
@@ -47,15 +43,48 @@ pub fn build_with_plugins(
     let mut builder = dog_core::DogAppBuilder::new();
     builder.set("auth.jwt.secret", jwt_secret);
     builder.set("typedb", state);
-    compose(builder, registry)
+    compose(builder, registry, None)
 }
 fn compose(
     mut builder: dog_core::DogAppBuilder<Value, BusinessParams>,
-    registry: Arc<crate::finance::TenantRegistry>,
+    mut registry: Arc<crate::finance::TenantRegistry>,
+    connectors: Option<crate::automation::connectors::Catalog>,
 ) -> Result<Backend> {
     let state: Arc<crate::typedb::TypeDBState> = builder
         .get("typedb")
         .ok_or_else(|| anyhow::anyhow!("TypeDB state missing"))?;
+    if std::env::var("AUTOMATION_ENABLED").as_deref() == Ok("true") {
+        let mut catalog = connectors.unwrap_or_default();
+        catalog.register(Arc::new(crate::automation::connectors::Http))?;
+        for kind in ["stripe", "mercury", "resend"] {
+            catalog.register(Arc::new(crate::automation::builtin::Builtin(kind)))?;
+        }
+        let vault = crate::automation::vault::Vault::from_env()?;
+        registry = Arc::new((*registry).clone().with_source(Arc::new(
+            crate::automation::managed::Managed {
+                state: state.clone(),
+                catalog: Arc::new(catalog.clone()),
+                vault: vault.clone(),
+            },
+        )));
+        if std::env::var("BILLING_ENABLED").as_deref() == Ok("true") {
+            catalog.register(Arc::new(crate::automation::billing::Billing {
+                state: state.clone(),
+                registry: registry.clone(),
+            }))?;
+        }
+        builder.set(
+            "automation.engine",
+            Arc::new(crate::automation::engine::Engine {
+                store: crate::automation::store::Store::new(
+                    state.clone(),
+                    "00000000-0000-0000-0000-000000000000",
+                )?,
+                catalog: Arc::new(catalog),
+                vault,
+            }),
+        );
+    }
     builder.set("tenant.plugins", registry.clone());
     let auth = crate::auth::strategies(&mut builder, state.clone())?;
     crate::services::configure(&mut builder, auth.clone(), state, registry)?;
@@ -74,6 +103,7 @@ pub fn router(http: DogHttpService<Value, BusinessParams>) -> axum::Router {
         .route_service("/authentication", endpoint(http.clone()))
         .route_service("/data", endpoint(http.clone()))
         .route_service("/portal", endpoint(http.clone()))
+        .route_service("/automation", endpoint(http.clone()))
         .merge(crate::plugins::routes(http))
         .route_layer(axum::middleware::from_fn(crate::admission::guard))
         .route(
@@ -115,4 +145,33 @@ pub fn router(http: DogHttpService<Value, BusinessParams>) -> axum::Router {
             }),
         )
         .route("/health", axum::routing::get(|| async { "ok" }))
+}
+
+fn configured_registry() -> Result<Arc<crate::finance::TenantRegistry>> {
+    if std::env::var("AUTOMATION_ENABLED").as_deref() == Ok("true") {
+        Ok(Arc::new(crate::finance::TenantRegistry::default()))
+    } else {
+        crate::plugins::configuration::registry()
+    }
+}
+
+/// Install trusted connector packages without editing the automation engine or services.
+pub fn build_with_connectors(
+    state: Arc<crate::typedb::TypeDBState>,
+    jwt_secret: String,
+    registry: Arc<crate::finance::TenantRegistry>,
+    catalog: crate::automation::connectors::Catalog,
+) -> Result<Backend> {
+    anyhow::ensure!(
+        std::env::var("AUTOMATION_ENABLED").as_deref() == Ok("true"),
+        "Enable automation before installing connectors"
+    );
+    anyhow::ensure!(
+        jwt_secret.trim().len() >= 32,
+        "JWT secret must contain at least 32 nonblank bytes"
+    );
+    let mut builder = dog_core::DogAppBuilder::new();
+    builder.set("auth.jwt.secret", jwt_secret);
+    builder.set("typedb", state);
+    compose(builder, registry, Some(catalog))
 }

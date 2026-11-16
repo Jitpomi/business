@@ -1,0 +1,15 @@
+define
+attribute auto_key @meta("dog.security.hidden","true"), value string;
+attribute auto_tenant @meta("dog.security.hidden","true"), value string;
+attribute auto_kind @meta("dog.security.hidden","true"), value string;
+attribute auto_payload @meta("dog.security.hidden","true"), value string;
+attribute auto_revision @meta("dog.security.hidden","true"), value string;
+attribute auto_status @meta("dog.security.hidden","true"), value string;
+attribute auto_when @meta("dog.security.hidden","true"), value integer;
+entity automation_record,
+ owns auto_key @key, owns auto_tenant @card(1), owns auto_kind @card(1),
+ owns auto_payload @card(1), owns auto_revision @card(1), owns auto_status @card(1), owns auto_when @card(1);
+fun automation_private($tenant:string,$actor:string,$now:datetime,$record:automation_record)->boolean:
+ match $record has auto_tenant == $tenant; $actor != ""; $now > 1900-01-01T00:00:00; let $denied=false;
+ return first $denied;
+entity automation_record @meta("dog.security.scope","automation_private") @meta("dog.security.read","automation_private");

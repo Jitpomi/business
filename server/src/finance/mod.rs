@@ -138,7 +138,6 @@ pub trait NotificationPlugin: Send + Sync {
 pub struct TenantRuntime {
     pub tenant: String,
     pub sandbox: bool,
-    pub scheduler_secret: Option<String>,
     pub reminder_days: i64,
     pub default_financial: Option<String>,
     financial: HashMap<String, Arc<dyn FinancialPlugin>>,
@@ -150,7 +149,6 @@ impl TenantRuntime {
         Self {
             tenant,
             sandbox,
-            scheduler_secret: None,
             reminder_days: 7,
             default_financial: None,
             financial: HashMap::new(),
@@ -218,8 +216,25 @@ pub fn opaque_id(id: &str) -> Result<()> {
 #[derive(Clone, Default)]
 pub struct TenantRegistry {
     tenants: HashMap<String, Arc<TenantRuntime>>,
+    source: Option<Arc<dyn RuntimeSource>>,
+}
+#[async_trait]
+pub trait RuntimeSource: Send + Sync {
+    async fn resolve(&self, tenant: &str) -> Result<Arc<TenantRuntime>>;
 }
 impl TenantRegistry {
+    pub fn with_source(mut self, source: Arc<dyn RuntimeSource>) -> Self {
+        self.source = Some(source);
+        self
+    }
+    pub async fn resolve(&self, tenant: &str) -> Result<Arc<TenantRuntime>> {
+        match &self.source {
+            Some(s) => s.resolve(tenant).await,
+            None => Ok(self
+                .get(tenant)
+                .unwrap_or_else(|_| Arc::new(TenantRuntime::new(tenant.into(), true)))),
+        }
+    }
     pub fn register(&mut self, runtime: TenantRuntime) -> Result<()> {
         ensure!(
             !self.tenants.contains_key(&runtime.tenant),

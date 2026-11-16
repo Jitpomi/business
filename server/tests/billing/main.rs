@@ -149,7 +149,7 @@ async fn scheduled_payment_receipt_and_decline_reminder() -> Result<()> {
         std::env::set_var("STRIPE_WEBHOOK_SECRET","whsec_synthetic_signature_test");
         let router=server::billing::http::router(engine.clone())?;
         let denied=router.clone().oneshot(Request::post("/internal/billing/tick").body(Body::empty())?).await?;
-        ensure!(denied.status()==401,"Unauthenticated scheduler accepted");
+        ensure!(denied.status()==404,"Removed scheduler endpoint still exists");
         let paid=evidence.iter().find(|r|r["status"]=="paid").unwrap();
         for (signed,live,account,expected) in [(false,false,None,401),(true,true,None,400),(true,false,Some("acct_foreign"),400),(true,false,None,200),(true,false,None,200)] {
             let body=json!({"id":"evt_fixture","type":"invoice.payment_succeeded","livemode":live,"account":account,"data":{"object":{"id":paid["external"],"status":"open","metadata":{"business_invoice":paid["id"]}}}}).to_string();

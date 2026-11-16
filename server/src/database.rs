@@ -44,7 +44,14 @@ pub async fn install(driver: &TypeDBDriver, name: &str) -> Result<()> {
     driver.databases().create(name).await?;
     // On failure leave this exact new target for inspection, never delete a database implicitly.
     let tx = driver.transaction(name, TransactionType::Schema).await?;
-    for source in [SCHEMA, FUNCTIONS, SCHEMA_POLICY, BILLING, ACCOUNT_LINKS] {
+    for source in [
+        SCHEMA,
+        FUNCTIONS,
+        SCHEMA_POLICY,
+        BILLING,
+        ACCOUNT_LINKS,
+        crate::automation::store::SCHEMA,
+    ] {
         tx.query(source).await?;
     }
     tx.commit().await?;
@@ -117,3 +124,5 @@ pub async fn bootstrap(
 #[cfg(test)]
 #[path = "../tests/unit/database/tests.rs"]
 mod tests;
+
+pub mod snapshot;

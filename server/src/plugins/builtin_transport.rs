@@ -53,9 +53,43 @@ impl Providers {
                 "Billing Mercury permission or environment mismatch"
             );
         }
-        // Accounts and local invoice state do not require a payment connection.
-        // Provider operations enforce readiness before claims or external calls.
         let connected_account = stripe.as_ref().and_then(|c| c.connected_account.clone());
+        Self::connected(
+            live,
+            stripe.map(|c| c.token),
+            mercury.map(|c| c.token),
+            connected_account,
+            destination,
+        )
+    }
+    /// Credentials already resolved and authorized by the tenant connection service.
+    /// Provider transport does not invent proxy identities or resolve tenant ownership.
+    pub fn connected(
+        live: bool,
+        stripe_token: Option<String>,
+        mercury_token: Option<String>,
+        connected_account: Option<String>,
+        destination: Option<String>,
+    ) -> Result<Self> {
+        if let Some(token) = &stripe_token {
+            crate::plugins::stripe::auth_stripe::auth_stripe_schema::validate_key(
+                token,
+                if live {
+                    crate::plugins::stripe::auth_stripe::auth_stripe_schema::Environment::Live
+                } else {
+                    crate::plugins::stripe::auth_stripe::auth_stripe_schema::Environment::Test
+                },
+            )?;
+        }
+        crate::plugins::stripe::auth_stripe::auth_stripe_schema::validate_account(
+            connected_account.as_deref(),
+        )?;
+        if let Some(token) = &mercury_token {
+            ensure!(
+                !token.trim().is_empty() && !token.chars().any(char::is_control),
+                "Invalid Mercury token"
+            );
+        }
         let _ = rustls::crypto::ring::default_provider().install_default();
         Ok(Self {
             http: Client::builder()
@@ -66,8 +100,8 @@ impl Providers {
                 .build()?,
             live,
             connected_account,
-            stripe_token: stripe.map(|c| c.token),
-            mercury_token: mercury.map(|c| c.token),
+            stripe_token,
+            mercury_token,
             destination,
             mercury_card_enabled: false,
             mercury_ach_debit_enabled: false,

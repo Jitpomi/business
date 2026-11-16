@@ -40,7 +40,13 @@ pub async fn check(e: &Engine) -> Result<()> {
         e.state.clone(),
         "account-links-sandbox-signing-secret-long-enough".into(),
     )?;
-    let r = server::app::router(http).merge(server::billing::http::router(e.clone())?);
+    let mut registry = server::finance::TenantRegistry::default();
+    registry.register((*e.runtime).clone())?;
+    let r = server::app::router(http).merge(server::billing::http::managed_router(
+        e.state.clone(),
+        std::sync::Arc::new(registry),
+        Some(e.merchant.clone()),
+    )?);
     let (s, login) = call(
         &r,
         "account",

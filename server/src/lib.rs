@@ -15,3 +15,6 @@ pub use plugins::stripe;
 pub mod finance;
 pub mod plugin_migration;
 pub mod plugins;
+
+pub mod automation;
+pub(crate) mod storage;

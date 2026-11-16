@@ -5,13 +5,14 @@ Tests are separate from source, following the DogRS/sp-connector service layout.
 - `backend/`: real TypeDB policy and main-server HTTP tests, plus executable provisioning/bootstrap/login/data/logout acceptance. Uses the same app composition as production; no alternate server.
 - `mercury/`, `stripe/`: registered resource/auth hooks, tenant boundaries, HTTP transport and separately gated real sandbox checks.
 - `billing/`: canonical scheduler and real sandbox payment/receipt/reminder acceptance (explicitly gated); source-adjacent tests are linked from this directory.
+- `automation/`: encrypted vault, bounded mappings, HTTP destination policy, real tenant/API/worker isolation, replay/approval/recovery and additive installer/backup checks.
 - `unit/`: current configuration, database-tool validation, token keys, admission and data envelopes.
 - `frontend/`: the actual frontend TypeQL client and binding contracts.
 - `layout/`: every Rust source/test must be reachable from a Cargo target,
   and each service must have its common service/shared/hooks/schema modules.
 
 Run `cargo test --locked --all-targets` and
-`node --test tests/frontend/data-client.test.mjs ../deploy/billing-scheduler/worker.test.mjs`.
+`node --test tests/frontend/data-client.test.mjs ../deploy/automation-wake/worker.test.mjs`.
 Real integrations are intentionally ignored by default, not empty placeholders:
 
 ```sh
@@ -84,3 +85,13 @@ not certify final `Paid` settlement or application receipt delivery. The payer's
 success screen and provider-generated receipt are not substitutes for invoice API
 settlement state. The full test reports state changes and fails explicitly if paid
 settlement is not observed in its bounded window.
+
+## Automation acceptance
+
+`BUSINESS_ENV_FILE=/private/dev.env cargo test --locked --test automation -- --ignored --test-threads=1`
+uses only generated disposable databases and synthetic connector effects. It runs
+real authentication, schema policy, the polling worker, backup and installer tools.
+`BUSINESS_ENV_FILE=/private/dev.env cargo test --locked --test plugins two_tenants_complete_billing -- --ignored`
+runs complete billing workflows through the automation connector and independently
+resolved bank/mail capabilities for two tenants. Neither sends a real payment or
+email. Real Stripe/Mercury acceptance remains separately gated.

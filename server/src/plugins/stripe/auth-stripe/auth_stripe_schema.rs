@@ -169,7 +169,7 @@ pub(crate) fn validate_key(token: &str, environment: Environment) -> Result<()> 
     );
     Ok(())
 }
-fn validate_account(account: Option<&str>) -> Result<()> {
+pub(crate) fn validate_account(account: Option<&str>) -> Result<()> {
     anyhow::ensure!(
         account.is_none_or(|a| a.starts_with("acct_")
             && a.len() > 5
