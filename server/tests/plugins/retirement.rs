@@ -2,6 +2,12 @@ use super::*;
 #[tokio::test]
 #[ignore = "Real development TypeDB, website queries, isolated plugins and durable worker; disposable database only"]
 async fn website_queries_retire_portal_end_to_end() -> Result<()> {
+    let _environment = environment::Environment::capture(&[
+        "BUSINESS_GATEWAY_SECRET",
+        "BILLING_ENABLED",
+        "AUTOMATION_ENABLED",
+        "AUTOMATION_MASTER_KEY_B64",
+    ]);
     use server::{database, typedb::TypeDBState};
     dotenvy::from_path(std::env::var("BUSINESS_ENV_FILE")?)?;
     support::auth()?;

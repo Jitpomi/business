@@ -138,3 +138,8 @@ binaries with `--ignored --test-threads=1`. These groups use generated test
 databases and isolated provider fixtures. Run real-provider billing phases
 separately according to the Stripe and Mercury acceptance guides, reusing their
 checkpoint IDs. A missing operator input is a setup failure, not a passing test.
+
+The acceptance suites run serially because they configure process-local plugin
+profiles. Tests that change gateway, billing or automation settings capture and
+restore their original values on scope exit, including error paths. Do not remove
+the runtime gateway check or rely on another test to select an HTTP TLS provider.
