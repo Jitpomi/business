@@ -2,6 +2,7 @@
 mod account_links;
 mod financial;
 mod mercury;
+mod mercury_automation;
 use anyhow::{ensure, Context, Result};
 use serde_json::json;
 use server::{

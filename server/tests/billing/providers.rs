@@ -69,3 +69,39 @@ fn mercury_invoices_do_not_require_a_stripe_account() {
     assert_eq!(enabled["creditCardEnabled"], true);
     assert_eq!(enabled["achDebitEnabled"], true);
 }
+
+#[test]
+fn mercury_processing_never_becomes_paid_or_a_receipt() {
+    use crate::finance::InvoiceState;
+    use crate::plugins::BuiltinFinancial;
+    let plugin = BuiltinFinancial {
+        transport: Providers::connected(
+            false,
+            None,
+            Some("sandbox-contract-fixture".into()),
+            None,
+            Some("11111111-1111-4111-8111-111111111111".into()),
+        )
+        .unwrap(),
+        provider: Provider::Mercury,
+        webhook_secret: None,
+    };
+    let mut value = json!({"id":"22222222-2222-4222-8222-222222222222","customerId":"33333333-3333-4333-8333-333333333333","invoiceNumber":"JIT-44444444-4444-4444-8444-444444444444","amount":1.00,"currencyCode":"USD","status":"Processing","slug":"sandbox-test-invoice"});
+    let pending = plugin.observation(&value).unwrap();
+    assert_eq!(pending.state, InvoiceState::Processing);
+    assert_eq!(pending.amount_minor, 100);
+    assert_eq!(pending.invoice_id, "44444444-4444-4444-8444-444444444444");
+    assert!(pending
+        .payment_url
+        .starts_with("https://sandbox.mercury.com/pay/"));
+    value["status"] = json!("Paid");
+    assert_eq!(
+        plugin.observation(&value).unwrap().state,
+        InvoiceState::Paid
+    );
+    value["status"] = json!("unexpected");
+    assert!(plugin.observation(&value).is_err());
+    value["status"] = json!("Paid");
+    value["invoiceNumber"] = json!("unbound-reference");
+    assert!(plugin.observation(&value).is_err());
+}
