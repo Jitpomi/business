@@ -37,7 +37,7 @@ pub async fn check(engine: &Engine) -> Result<()> {
     let customer = customers[0]["id"].as_str().unwrap();
     let other = customers[1]["id"].as_str().unwrap();
     let hash = bcrypt::hash("portal-sandbox-test-password", 4)?;
-    engine.write(format!(r#"{} $b isa tenant,has tenant_id "{buyer}";insert $u isa person,has identity_id "{user}",has name "TEST portal buyer",has email "portal@example.com",has password_hash "{hash}",has credential_version "fixture",has status "active";(tenant:$b,member:$u) isa membership,has membership_role "owner",has start_at 2020-01-01T00:00:00;fetch {{"id":$u.identity_id}};"#,engine.prefix())).await?;
+    engine.write(format!(r#"{} $b isa tenant,has tenant_id "{buyer}";insert $u isa person,has identity_id "{user}",has name "TEST portal buyer",has email "portal@example.com",has status "active"; (person:$u) isa password_credential,has credential_id "{user}",has login_email "portal@example.com",has password_hash "{hash}",has credential_version "fixture";(tenant:$b,member:$u) isa membership,has membership_role "owner",has start_at 2020-01-01T00:00:00;fetch {{"id":$u.identity_id}};"#,engine.prefix())).await?;
     let (_, http) = server::app::build_with_state(
         engine.state.clone(),
         "portal-sandbox-test-signing-secret-long-enough".into(),

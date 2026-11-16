@@ -18,3 +18,5 @@ pub mod plugins;
 
 pub mod automation;
 pub(crate) mod storage;
+
+pub mod credential_migration;

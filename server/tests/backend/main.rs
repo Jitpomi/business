@@ -6,3 +6,5 @@ mod domain_model_tests;
 mod provisioning_tests;
 mod review_tests;
 mod schema_policy_tests;
+
+mod identity_tests;
