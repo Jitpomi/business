@@ -45,3 +45,7 @@ hyper-util = { version = "0.1", features = ["server-auto", "service", "tokio"] }
 tempfile = "3"
 http = "1"
 http-body-util = "0.1"
+
+# Reviewed maintained transport; preserves the TypeDB 3.13 protocol.
+[patch.crates-io]
+typedb-driver = { git = "https://github.com/Jitpomi/typedb-driver", rev = "548a885bc3dee18a3a84fb3092e8b45dc9a4e081" }
