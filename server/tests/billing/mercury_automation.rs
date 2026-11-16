@@ -26,6 +26,17 @@ async fn mercury_managed_create_invoice_and_reminder() -> Result<()> {
 async fn mercury_managed_paid_receipt_and_replay() -> Result<()> {
     run("paid").await
 }
+#[tokio::test]
+#[ignore = "Creates one separate USD 1 sandbox invoice for the supported manual-payment case; independent reminder delivery"]
+async fn mercury_managed_create_manual_payment_case() -> Result<()> {
+    run("create-manual").await
+}
+#[tokio::test]
+#[ignore = "Requires Mercury's sandbox manual-payment case to report Paid; tests actual provider Paid -> application receipt"]
+async fn mercury_managed_manual_paid_receipt() -> Result<()> {
+    run("paid-manual").await
+}
+
 fn save(path: &Path, value: &Value) -> Result<()> {
     std::fs::write(path, serde_json::to_vec_pretty(value)?)?;
     #[cfg(unix)]
@@ -228,6 +239,7 @@ async fn run(phase: &str) -> Result<()> {
         )?;
     }
     let mut saved = prepared(&root, &driver).await?;
+    let manual = phase.ends_with("-manual");
     ensure!(
         saved["canonical_model"] == true && saved["checkpoint_graph_preserved"] == true,
         "Preservation-verified canonical checkpoint required"
@@ -379,15 +391,15 @@ async fn run(phase: &str) -> Result<()> {
         let read=|query:String|{let state=state.clone();async move{let tx=state.driver.transaction(&state.database,TransactionType::Read).await?;database::documents(&tx,&query).await}};
         let invoice=|id:&str|format!("match $i isa bill_invoice,has bill_key {};fetch {{'id':$i.bill_key,'external':$i.bill_external_id,'url':$i.bill_url,'status':$i.bill_status}};",q(id));
         let notices=|id:&str|format!("match $i isa bill_invoice,has bill_key {};(invoice:$i,notice:$n) isa bill_notice_owner;$n has bill_key $key;select $n,$key;sort $key;fetch {{'id':$n.bill_key,'status':$n.bill_status}};",q(id));
-        let target=if phase=="processing"{original.clone()}else if phase=="create"{
-            let plan=saved["new_plan"].as_str().map(str::to_owned).unwrap_or_else(||uuid::Uuid::new_v4().to_string());saved["new_plan"]=json!(plan);save(&root.join("prepared-run.json"),&saved)?;
+        let target=if phase=="processing"{original.clone()}else if phase=="create"||phase=="create-manual"{
+            let plan=saved[if manual{"manual_plan"}else{"new_plan"}].as_str().map(str::to_owned).unwrap_or_else(||uuid::Uuid::new_v4().to_string());saved[if manual{"manual_plan"}else{"new_plan"}]=json!(plan);save(&root.join("prepared-run.json"),&saved)?;
             let customer=read(format!("match $i isa bill_invoice,has bill_key {};(plan:$p,invoice:$i) isa bill_invoice_owner;(customer:$c,plan:$p) isa bill_plan_owner;fetch {{'id':$c.bill_key}};",q(&original))).await?;
             let query=format!("match $c isa bill_customer,has bill_key {};put $p isa bill_plan,has bill_key {},has name 'TEST ONLY Mercury managed plugin invoice',has bill_amount 100,has bill_due_days 0,has bill_anchor {},has bill_next {},has bill_sequence 0,has bill_interval 'once',has bill_status 'active';(customer:$c,plan:$p) isa bill_plan_owner;fetch {{'id':$p.bill_key}};",q(customer[0]["id"].as_str().unwrap()),q(&plan),chrono::Utc::now().timestamp()-60,chrono::Utc::now().timestamp()-60);
             let existing=read(format!("match $p isa bill_plan,has bill_key {};fetch {{'id':$p.bill_key}};",q(&plan))).await?;
             if existing.is_empty(){let answer=ok(&router,&tenant,token,"/data",json!({"query":query}),Some("write")).await?;ensure!(answer["ok"]["answers"].as_array().is_some_and(|a|a.len()==1),"Native plan creation did not commit");}
-            event(&router,&tenant,token,"mercury-cycle","create-invoice-once").await?;
-            let rows=read(format!("match $p isa bill_plan,has bill_key {};(plan:$p,invoice:$i) isa bill_invoice_owner;fetch {{'id':$i.bill_key}};",q(&plan))).await?;ensure!(rows.len()==1,"Invoice duplicated or missing");let id=rows[0]["id"].as_str().unwrap().to_owned();saved["created_invoice"]=json!(id);save(&root.join("prepared-run.json"),&saved)?;id
-        }else{saved["created_invoice"].as_str().context("Create the checkpointed test invoice first")?.to_owned()};
+            event(&router,&tenant,token,"mercury-cycle",if manual{"create-manual-invoice-once"}else{"create-invoice-once"}).await?;
+            let rows=read(format!("match $p isa bill_plan,has bill_key {};(plan:$p,invoice:$i) isa bill_invoice_owner;fetch {{'id':$i.bill_key}};",q(&plan))).await?;ensure!(rows.len()==1,"Invoice duplicated or missing");let id=rows[0]["id"].as_str().unwrap().to_owned();saved[if manual{"manual_invoice"}else{"created_invoice"}]=json!(id);save(&root.join("prepared-run.json"),&saved)?;id
+        }else{saved[if manual{"manual_invoice"}else{"created_invoice"}].as_str().context("Create the checkpointed test invoice first")?.to_owned()};
         let before=read(notices(&target)).await?;
         // Resolve templated input through the production workflow engine.
         for workflow in ["mercury-reconcile","mercury-notify"] {
@@ -401,7 +413,7 @@ async fn run(phase: &str) -> Result<()> {
         save(&root.join(format!("{phase}-observation.json")),&json!({"phase":phase,"invoice":observed[0],"notices":after,"provider_paid_and_application_receipt":status=="paid"&&after.iter().any(|n|n["id"]==format!("{target}-receipt")&&n["status"].as_str().unwrap().starts_with("accepted:"))}))?;
         match phase {
             "processing"|"processing-created"=>ensure!(status=="processing"&&before==after&&!after.iter().any(|n|n["id"].as_str().unwrap().ends_with("-receipt")),"Processing must not produce reminders or receipts"),
-            "create"=>ensure!(status=="open"&&after.iter().filter(|n|n["id"]==format!("{target}-reminder-0")&&n["status"].as_str().unwrap().starts_with("accepted:")).count()==1,"Initial reminder missing or duplicated"),
+            "create"|"create-manual"=>ensure!(status=="open"&&after.iter().filter(|n|n["id"]==format!("{target}-reminder-0")&&n["status"].as_str().unwrap().starts_with("accepted:")).count()==1,"Initial reminder missing or duplicated"),
             _=>ensure!(status=="paid"&&after.iter().filter(|n|n["id"]==format!("{target}-receipt")&&n["status"].as_str().unwrap().starts_with("accepted:")).count()==1,"Mercury must report Paid before a receipt; observed {status}; checkpoint retained"),
         }
         save(&root.join(format!("{phase}-report.json")),&json!({"phase":phase,"passed":true,"invoice":observed[0],"notices":after,"tenant_connections":"Mercury + independent Resend","execution":"native data -> authenticated automation API -> durable worker -> financial/notification plugins","provider_paid_and_application_receipt":phase=="paid"}))?;

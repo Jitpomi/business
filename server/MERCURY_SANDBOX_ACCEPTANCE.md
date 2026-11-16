@@ -61,7 +61,7 @@ exact public egress IP. Never disable the restriction or use a production token.
 
 Select each test explicitly using the command above. Payment polling/notification
 runs are checkpointed; do not run every ignored integration test indiscriminately.
-Do not change `bill_status`, mark an unreceived payment paid, delete notice claims,
+Do not change `bill_status`, change a pending bank payment to Paid, delete notice claims,
 replace an uncertain event key, or remove idempotency guards to make a test pass.
 
 Reports under `MERCURY_TEST_ROOT` distinguish phase success, raw observed state and
@@ -81,3 +81,19 @@ cause JITPOMI to send a paid receipt early.
 References: [Mercury invoicing](https://docs.mercury.com/docs/invoicing),
 [sandbox setup](https://docs.mercury.com/docs/using-mercury-sandbox), and
 [applied invoice payments](https://docs.mercury.com/reference/listinvoicepayments).
+
+## Separate manual-payment sandbox case
+
+`mercury_managed_create_manual_payment_case` creates a distinct USD 1 invoice.
+Use Mercury's supported **Mark as paid → Externally** workflow to record a clearly
+simulated manual payment against that separate sandbox invoice, then run
+`mercury_managed_manual_paid_receipt`. Confirm the provider invoice is Paid and
+`GET /ar/invoices/{id}/payments` contains one payment of type `manual`.
+This exercises the real Mercury Paid response and the application's notification
+plugin; it is not evidence of settlement for either pending bank payment.
+Never use this step to relabel or replace the pending hosted-payment test.
+
+Rerun the manual paid test in another process to verify persistent connection
+secrets, durable notice claims and one receipt after restart/replay. Confirm the
+approved mailbox contains one reminder and one application receipt for that exact
+invoice reference. The provider receipt and application receipt are distinct.
