@@ -39,10 +39,12 @@ impl Engine {
         if !selected.is_empty() {
             return Ok(selected.into());
         }
-        self.runtime
-            .default_financial
-            .clone()
-            .ok_or_else(|| anyhow::anyhow!("Choose a financial plugin for this tenant"))
+        self.runtime.default_financial.clone().ok_or_else(|| {
+            dog_core::DogError::conflict(
+                "Payment setup is unavailable. Ask this company to connect a financial system.",
+            )
+            .into_anyhow()
+        })
     }
     pub fn prefix(&self) -> String {
         format!(
