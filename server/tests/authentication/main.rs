@@ -1,4 +1,5 @@
-//! Real asymmetric token verification, external account persistence and policy contracts.
+mod live_auth0;
+// Real asymmetric token verification, external account persistence and policy contracts.
 use anyhow::{ensure, Result};
 use base64::Engine;
 use serde_json::{json, Value};
@@ -363,9 +364,9 @@ async fn encrypted_plugin_credentials_migrate_to_external_references() -> Result
         ensure!(payload.get("sealed").is_none() && !payload.to_string().contains(&inline),"Encrypted credential remained in TypeDB");
         let reference=payload["secret_ref"].as_str().unwrap();ensure!(reference.starts_with("secret:"),"Missing external secret reference");
         let vault=server::automation::vault::Vault::from_env()?;
-        ensure!(vault.open(&context,reference)?==secret,"Credential contents changed");
-        ensure!(vault.open("another-tenant/bank/revision",reference).is_err(),"Credential binding lost");
-        let restarted=server::automation::vault::Vault::from_env()?;ensure!(restarted.open(&context,reference)?==secret,"Restart lost credentials");
+        ensure!(vault.open(&context,reference).await?==secret,"Credential contents changed");
+        ensure!(vault.open("another-tenant/bank/revision",reference).await.is_err(),"Credential binding lost");
+        let restarted=server::automation::vault::Vault::from_env()?;ensure!(restarted.open(&context,reference).await?==secret,"Restart lost credentials");
         Ok::<_,anyhow::Error>(())
     }.await;
     std::env::remove_var("AUTOMATION_MASTER_KEY_B64");

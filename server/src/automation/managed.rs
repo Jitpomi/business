@@ -50,7 +50,8 @@ impl RuntimeSource for Managed {
                 serde_json::Value::Null
             } else {
                 self.vault
-                    .open(&format!("{tenant}/{}/{}", c.id, c.revision), &c.secret_ref)?
+                    .open(&format!("{tenant}/{}/{}", c.id, c.revision), &c.secret_ref)
+                    .await?
             };
             let ctx = Invocation {
                 tenant: tenant.into(),

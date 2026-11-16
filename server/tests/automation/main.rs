@@ -11,23 +11,24 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Arc,
 };
-#[test]
-fn vault_binds_tenant_version_and_detects_tampering() -> Result<()> {
+#[tokio::test]
+async fn vault_binds_tenant_version_and_detects_tampering() -> Result<()> {
     let vault = Vault::new("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")?;
     let secret = json!({"token":"private-token"});
-    let a = vault.seal("tenant-a/one/v1", &secret)?;
-    let b = vault.seal("tenant-a/one/v1", &secret)?;
+    let a = vault.seal("tenant-a/one/v1", &secret).await?;
+    let b = vault.seal("tenant-a/one/v1", &secret).await?;
     ensure!(a != b, "Nonce reused");
     ensure!(!a.contains("private-token"));
-    ensure!(vault.open("tenant-a/one/v1", &a)? == secret);
+    ensure!(vault.open("tenant-a/one/v1", &a).await? == secret);
     for context in ["tenant-b/one/v1", "tenant-a/one/v2"] {
-        ensure!(vault.open(context, &a).is_err());
+        ensure!(vault.open(context, &a).await.is_err());
     }
-    ensure!(Vault::default().seal("x", &secret).is_err());
+    ensure!(Vault::default().seal("x", &secret).await.is_err());
     let mut damaged = a.into_bytes();
     damaged[20] = if damaged[20] == b'A' { b'B' } else { b'A' };
     ensure!(vault
         .open("tenant-a/one/v1", std::str::from_utf8(&damaged)?)
+        .await
         .is_err());
     Ok(())
 }

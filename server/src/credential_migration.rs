@@ -205,13 +205,13 @@ pub async fn evacuate_plugin_secrets(driver: &TypeDBDriver, name: &str) -> Resul
         let reference = if old.is_empty() {
             String::new()
         } else if old.starts_with("secret:") {
-            let _ = vault.open(&context, old)?;
+            let _ = vault.open(&context, old).await?;
             old.to_owned()
         } else {
-            vault.import_inline(&context, old)?
+            vault.import_inline(&context, old).await?
         };
         if !reference.is_empty() {
-            let _ = vault.open(&context, &reference)?;
+            let _ = vault.open(&context, &reference).await?;
         }
         payload.as_object_mut().unwrap().remove("sealed");
         payload["secret_ref"] = json!(reference);
