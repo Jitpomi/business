@@ -1,5 +1,6 @@
 //! Explicitly gated real sandbox workflow. No configured database is changed.
 mod account_links;
+mod consent_security;
 mod financial;
 mod mercury;
 mod mercury_automation;
@@ -94,14 +95,15 @@ async fn scheduled_payment_receipt_and_decline_reminder() -> Result<()> {
             let customer=providers.customer(Provider::Stripe,&cid,&format!("TEST ONLY {label}"),&recipient).await?;
             let saved=providers.stripe(reqwest::Method::POST,&format!("/payment_methods/{method}/attach"),&format!("fixture-{cid}"),&pairs(&[("customer",&customer)])).await?;
             let pm=saved["id"].as_str().context("Missing payment method")?;
+            let grant=payment_fixture::payment_grant_fixture(&cid,"stripe",pm,"fixture-consent");
             let plan=uuid::Uuid::new_v4().to_string();
             let bindings=server::billing::billing_schema::quoted(&json!({"stripe":customer}).to_string());
             engine.write(format!(r#"{} insert
                 $buyer isa tenant,has tenant_id "{}",has name "TEST buyer {label}",has status "active",has revision "initial";
                 $c isa bill_customer,has bill_key "{cid}",has name "TEST {label}",has bill_email "{recipient}",has bill_policy "customer",has bill_choice "automatic",has bill_provider "stripe",has bill_stripe_id "{customer}",has bill_mercury_id "",has bill_bindings {bindings},has bill_method_plugin "stripe",has bill_payment_method "{pm}",has bill_consent "fixture-consent",has bill_revision "fixture-consent";
-                (merchant:$t,buyer:$buyer,customer:$c) isa bill_account;
+                (merchant:$t,buyer:$buyer,customer:$c) isa bill_account;{grant}
                 $p isa bill_plan,has bill_key "{plan}",has name "TEST ONLY {label} scheduled invoice",has bill_amount 100,has bill_due_days 0,has bill_anchor {now},has bill_next {now},has bill_sequence 0,has bill_interval "once",has bill_status "active";
-                (customer:$c,plan:$p) isa bill_plan_owner;fetch {{"id":$p.bill_key}};"#,engine.prefix(),uuid::Uuid::new_v4())).await?;
+                (customer:$c,plan:$p) isa bill_plan_owner;(evidence:$grant,plan:$p) isa bill_consent_plan;fetch {{"id":$p.bill_key}};"#,engine.prefix(),uuid::Uuid::new_v4())).await?;
         }
         // Not due yet; no provider effects. Overlapping due claims cannot duplicate occurrences.
         ensure!(engine.enqueue_due(now-1).await?==0,"Early invoice");
@@ -111,11 +113,11 @@ async fn scheduled_payment_receipt_and_decline_reminder() -> Result<()> {
         let rows=engine.read(format!(r#"{} (merchant:$t,customer:$c) isa bill_account;(customer:$c,plan:$p) isa bill_plan_owner;(plan:$p,invoice:$i) isa bill_invoice_owner;fetch {{"id":$i.bill_key,"name":$i.name,"customer":$c.bill_key,"plan":$p.bill_key}};"#,engine.prefix())).await?;
         ensure!(rows.len()==2,"Duplicate or missing invoice: {}",rows.len());
         for row in &rows { engine.issue(row["id"].as_str().unwrap()).await?; }
-        // Revocation and paused schedules must stop collection even without a changed revision.
+        // Native revision revocation and paused schedules stop collection.
         let sample=&rows[0]; let invoice=sample["id"].as_str().unwrap();
-        engine.write(format!(r#"{} select $t,$c;distinct;update $c has bill_choice "manual";fetch {{"id":$c.bill_key}};"#,engine.invoice_match(invoice)?)).await?;
+        engine.write(format!(r#"{} select $t,$c;distinct;update $c has bill_revision "fixture-revoked";fetch {{"id":$c.bill_key}};"#,engine.invoice_match(invoice)?)).await?;
         engine.collect_due(invoice,now).await?;
-        engine.write(format!(r#"{} select $t,$c,$p;distinct;update $c has bill_choice "automatic";$p has bill_status "paused";fetch {{"id":$c.bill_key}};"#,engine.invoice_match(invoice)?)).await?;
+        engine.write(format!(r#"{} select $t,$c,$p;distinct;update $c has bill_revision "fixture-consent";$p has bill_status "paused";fetch {{"id":$c.bill_key}};"#,engine.invoice_match(invoice)?)).await?;
         engine.collect_due(invoice,now).await?;
         let binding=engine.read(format!(r#"{} fetch {{"external":$i.bill_external_id}};"#,engine.invoice_match(invoice)?)).await?;
         let observed=providers.observe(Provider::Stripe,binding[0]["external"].as_str().unwrap()).await?;
@@ -270,3 +272,6 @@ async fn account_and_invoice_workflow_without_provider_effects() -> Result<()> {
 
 #[path = "../support/mod.rs"]
 mod support;
+
+#[path = "../support/payment_fixture.rs"]
+mod payment_fixture;

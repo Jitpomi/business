@@ -1,0 +1,3 @@
+match $c isa bill_customer,has bill_key @@customer_id@@;
+update $c has bill_payment_method @@method_id@@;
+fetch {"id":$c.bill_key,"method":$c.bill_payment_method};

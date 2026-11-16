@@ -1,0 +1,12 @@
+# Render placeholders as typed JSON literals. Submit the exact revision and
+# immutable plan the buyer reviewed, never a newly fetched replacement revision.
+match $c isa bill_customer,has bill_key @@customer_id@@,has bill_revision @@expected_revision@@;
+$p isa bill_plan,has bill_key @@plan_id@@;
+let $by=request_identity();let $now=request_now();
+insert $e isa bill_consent_evidence,has bill_key @@request_id@@,
+  has bill_revision @@expected_revision@@,
+  has consent_claim @@consent_claim@@,has method_plugin @@plugin_id@@,
+  has method_ref @@method_id@@,has consent_at == $now;
+(customer:$c,actor:$by,evidence:$e) isa bill_consent_owner;
+(evidence:$e,plan:$p) isa bill_consent_plan;
+fetch {"id":$e.bill_key,"at":$e.consent_at,"plan":$p.bill_key};

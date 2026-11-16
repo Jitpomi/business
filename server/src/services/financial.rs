@@ -135,13 +135,8 @@ impl DogService<Value, BusinessParams> for FinancialService {
                     value["plugin_id"] = json!(plugin_id);
                     value["is_default"] = json!(default);
                     value["removal_pending"] = json!(!pending.is_empty());
-                    value["automatic_enabled"] = json!(
-                        pending.is_empty()
-                            && default
-                            && customer["choice"] == "automatic"
-                            && customer["consent"] == customer["revision"]
-                            && customer["policy"] != "manual"
-                    );
+                    value["automatic_enabled"] =
+                        json!(default && customer["choice"] == "automatic");
                     methods.push(value);
                 }
                 Ok(json!({"methods":methods}))

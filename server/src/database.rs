@@ -21,7 +21,11 @@ pub fn target(name: &str) -> Result<()> {
     ensure!(
         matches!(
             name,
-            "business_dev" | "business_native_dev" | "business_native_dev_v2" | "business_prod"
+            "business_dev"
+                | "business_native_dev"
+                | "business_native_dev_v2"
+                | "business_native_dev_v3"
+                | "business_prod"
         ) || name
             .strip_prefix("business_backend_test_")
             .is_some_and(|s| uuid::Uuid::parse_str(s).is_ok()),
@@ -174,7 +178,7 @@ pub fn import_schema() -> String {
 pub async fn verify_runtime(driver: &TypeDBDriver, name: &str) -> Result<()> {
     verify(driver, name).await?;
     let schema = driver.databases().get(name).await?.schema().await?;
-    ensure!(["entity bill_saved_method","fun create_invitation","fun request_identity","fun scope_visible_tenant"].iter().all(|part|schema.contains(part)),"Native account/payment model migration required; startup will not migrate or reset the database");
+    ensure!(["entity bill_saved_method","fun create_invitation","fun request_identity","fun scope_visible_tenant","fun bill_has_consent","relation bill_consent_plan"].iter().all(|part|schema.contains(part)),"Native account/payment model migration required; startup will not migrate or reset the database");
     let tx = driver.transaction(name, TransactionType::Read).await?;
     let versions=documents(&tx,"match $t label bootstrap_record;let $version=get_meta('jitpomi.model.version',$t);fetch {'version':$version};").await?;
     ensure!(

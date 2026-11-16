@@ -17,10 +17,15 @@ async fn main() -> Result<()> {
         .get(2)
         .ok_or_else(|| anyhow::anyhow!("Explicit database required"))?;
     ensure!(
-        matches!(name.as_str(), "business_dev" | "business_native_dev")
-            || name
-                .strip_prefix("business_backend_test_")
-                .is_some_and(|suffix| uuid::Uuid::parse_str(suffix).is_ok()),
+        matches!(
+            name.as_str(),
+            "business_dev"
+                | "business_native_dev"
+                | "business_native_dev_v2"
+                | "business_native_dev_v3"
+        ) || name
+            .strip_prefix("business_backend_test_")
+            .is_some_and(|suffix| uuid::Uuid::parse_str(suffix).is_ok()),
         "Development databases only"
     );
     let driver = dog_typedb::TypeDBDriverFactory::connect(
