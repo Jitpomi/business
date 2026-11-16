@@ -11,7 +11,7 @@ pub struct TypeDBBackend {
     pub store: Store,
     pub lease_duration: Duration,
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct Persisted {
     pub record: JobRecord,
     lease: Option<LeaseToken>,
@@ -71,21 +71,78 @@ impl TypeDBBackend {
             .map_err(error)?;
         Ok(())
     }
-    async fn save_leased(&self, old: &Record, value: &Persisted) -> QueueResult<()> {
-        // Revision binds the previously checked token; TypeDB checks that the
-        // same processing lease is still live in the acknowledgement transaction.
-        let guard = format!("$held isa automation_record,has auto_key {},has auto_tenant {},has auto_revision {},has auto_status \"processing\",has auto_when $deadline;$deadline > {};",q(&old.key),q(&self.store.tenant),q(&old.revision),Utc::now().timestamp());
-        self.store
-            .cas_guarded(
-                old,
-                &serde_json::to_value(value)?,
-                value.record.status.name(),
-                value.due(),
-                &guard,
-            )
-            .await
-            .map_err(error)?;
-        Ok(())
+    /// Reconcile metadata CAS races, including a lost commit acknowledgement.
+    /// Never repeats a handler or a business/provider operation.
+    async fn save_leased(&self, original: &Record, desired: &Persisted) -> QueueResult<()> {
+        let initial: Persisted = serde_json::from_value(original.value.clone())?;
+        let token = initial.lease.ok_or_else(|| QueueError::InvalidLeaseToken {
+            job_id: desired.record.job_id.clone(),
+        })?;
+        let ctx = QueueCtx::new(&self.store.tenant);
+        let mut old = original.clone();
+        let mut value = desired.clone();
+        for _ in 0..3 {
+            let encoded = serde_json::to_value(&value)?;
+            let guard=format!("$held isa automation_record,has auto_key {},has auto_tenant {},has auto_revision {},has auto_status \"processing\",has auto_when $deadline;$deadline > {};",q(&old.key),q(&self.store.tenant),q(&old.revision),Utc::now().timestamp());
+            match self
+                .store
+                .cas_guarded(
+                    &old,
+                    &encoded,
+                    value.record.status.name(),
+                    value.due(),
+                    &guard,
+                )
+                .await
+            {
+                Ok(_) => return Ok(()),
+                Err(cause) => {
+                    let (current, held) = self.load(&ctx, &value.record.job_id).await?;
+                    if current.value == encoded {
+                        return Ok(());
+                    } // committed; acknowledgement lost
+                    Self::validate(&held, &token)?;
+                    if current.revision == old.revision {
+                        return Err(error(cause));
+                    }
+                    // A heartbeat changed this same owned lease. Re-evaluate its
+                    // current fence; never shorten a newer renewal.
+                    if let (Some(wanted), Some(actual)) =
+                        (value.record.lease_until(), held.record.lease_until())
+                    {
+                        value
+                            .record
+                            .start_processing(token.clone(), wanted.max(actual));
+                    }
+                    old = current;
+                }
+            }
+        }
+        Err(QueueError::Internal(
+            "Queue metadata remained contended; durable lease retained".into(),
+        ))
+    }
+    async fn save_candidate(
+        &self,
+        ctx: &QueueCtx,
+        old: &Record,
+        value: &Persisted,
+    ) -> QueueResult<bool> {
+        match self.save(old, value).await {
+            Ok(()) => Ok(true),
+            Err(cause) => {
+                let (current, _) = self.load(ctx, &value.record.job_id).await?;
+                if current.value == serde_json::to_value(value)? {
+                    return Ok(true);
+                }
+                if current.revision != old.revision {
+                    // Another consumer won this exact job fence.
+                    return Ok(false);
+                }
+                // A failed or unacknowledged claim is never executed speculatively.
+                Err(cause)
+            }
+        }
     }
     fn validate(value: &Persisted, token: &LeaseToken) -> QueueResult<()> {
         if matches!(value.record.status, JobStatus::Canceled { .. }) {
@@ -137,7 +194,7 @@ impl QueueBackend for TypeDBBackend {
             return Ok(id);
         }
         let query = format!("{} not {{$existing isa automation_record,has auto_key {};}};select $t;{}fetch {{'id':$job.auto_key}};",self.store.prefix(),q(&self.store.key("job",id.as_str())),insert_clause(&self.store,&value).map_err(error)?);
-        if let Err(e) = crate::storage::write(&self.store.state, &query).await {
+        if let Err(e) = crate::storage::write_queue(&self.store.state, &query).await {
             // A lost acknowledgement is reconciled by the immutable ID, never a new submission.
             if self
                 .store
@@ -179,7 +236,7 @@ impl QueueBackend for TypeDBBackend {
                     value.record.schedule_retry(Utc::now());
                 }
                 value.lease = None;
-                self.save(&old, &value).await?;
+                self.save_candidate(&ctx, &old, &value).await?;
                 continue;
             }
             if !value.record.status.is_eligible(Utc::now())
@@ -198,7 +255,9 @@ impl QueueBackend for TypeDBBackend {
                 .ok_or_else(|| QueueError::Internal("Queue attempt limit".into()))?;
             value.record.start_processing(token.clone(), until);
             value.lease = Some(token.clone());
-            self.save(&old, &value).await?;
+            if !self.save_candidate(&ctx, &old, &value).await? {
+                continue;
+            }
             return Ok(Some(LeasedJob::new(value.record, token, until)));
         }
         Ok(None)

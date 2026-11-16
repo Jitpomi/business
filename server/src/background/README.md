@@ -15,7 +15,10 @@ active handlers to four across tenants. It never executes steps or scans for due
 business records. Failed pools are drained and restarted. All pools drain together
 on shutdown; await Worker::shutdown before backing up or deleting a database.
 
-Queue operations are tenant-bound, revision-fenced TypeDB transactions. Lease tokens
+Queue operations are tenant-bound, revision-fenced TypeDB transactions. Job metadata
+uses its own fence and never changes the tenant business revision. Competing claims
+and uncertain metadata commits are reconciled by exact job state and lease ownership;
+this never retries a handler or provider operation. Lease tokens
 and deadlines protect acknowledgements. Native schema policies deny raw access;
 owner operations use TypeDB RBAC functions. The workflow rechecks its owner and
 atomically claims the approved connection before external effects. Queue possession

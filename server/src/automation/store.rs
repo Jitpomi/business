@@ -122,7 +122,12 @@ impl Store {
             .next()
             .ok_or_else(|| anyhow::anyhow!("Invalid record kind"))?;
         let delivery = crate::background::jobs::outbox(self, kind, id, &rev, status, when)?;
-        storage::write(&self.state,&format!("{} {guard} $r isa automation_record,has auto_tenant {},has auto_key {},has auto_revision {};select $t,$r;update $r has auto_payload {},has auto_revision {},has auto_status {},has auto_when {when};{delivery}fetch {{'id':$r.auto_key}};",self.prefix(),q(&self.tenant),q(&old.key),q(&old.revision),q(&value.to_string()),q(&rev),q(status))).await?;
+        let query=format!("{} {guard} $r isa automation_record,has auto_tenant {},has auto_kind {},has auto_key {},has auto_revision {};select $t,$r;update $r has auto_payload {},has auto_revision {},has auto_status {},has auto_when {when};{delivery}fetch {{'id':$r.auto_key}};",self.prefix(),q(&self.tenant),q(kind),q(&old.key),q(&old.revision),q(&value.to_string()),q(&rev),q(status));
+        if kind == "job" {
+            storage::write_queue(&self.state, &query).await?;
+        } else {
+            storage::write(&self.state, &query).await?;
+        }
         Ok(Record {
             key: old.key.clone(),
             revision: rev,

@@ -33,6 +33,14 @@ pub async fn write(state: &TypeDBState, query: &str) -> Result<Value> {
         uuid::Uuid::new_v4(),
         &query[at..]
     );
+    write_projected(state, &query).await
+}
+/// Queue ledger writes are fenced by the job revision and unique key. They must
+/// not mutate the tenant's business fence while a payment journals its outcome.
+pub(crate) async fn write_queue(state: &TypeDBState, query: &str) -> Result<Value> {
+    write_projected(state, query).await
+}
+async fn write_projected(state: &TypeDBState, query: &str) -> Result<Value> {
     tokio::time::timeout(DEADLINE, async {
         let tx = state
             .driver
@@ -42,7 +50,7 @@ pub async fn write(state: &TypeDBState, query: &str) -> Result<Value> {
                 TransactionOptions::new().transaction_timeout(DEADLINE),
             )
             .await?;
-        let result = documents(&tx, &query).await;
+        let result = documents(&tx, query).await;
         let rows = match result {
             Ok(rows) if rows.len() == 1 => rows,
             result => {

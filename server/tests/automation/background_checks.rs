@@ -77,6 +77,20 @@ pub async fn exercise(store: &Store, other: &Store) -> Result<()> {
         "Delayed delivery ran early"
     );
     backend.cancel(ctx.clone(), future).await?;
+    // Hold a business fence update open while queue ownership changes commit.
+    // Queue metadata must not invalidate a payment's independent transaction.
+    let business = store
+        .state
+        .driver
+        .transaction(&store.state.database, typedb_driver::TransactionType::Write)
+        .await?;
+    business
+        .query(format!(
+            "match $t isa tenant,has tenant_id {};update $t has revision {};",
+            serde_json::to_string(&store.tenant)?,
+            serde_json::to_string(&uuid::Uuid::new_v4().to_string())?
+        ))
+        .await?;
     let done = backend
         .enqueue(
             ctx.clone(),
@@ -104,6 +118,7 @@ pub async fn exercise(store: &Store, other: &Store) -> Result<()> {
         backend.get_status(ctx.clone(), done).await?,
         JobStatus::Completed { .. }
     ));
+    business.commit().await?; // A shared tenant-wide queue fence would conflict here.
     ensure!(backend.get_record(ctx, JobId::new()).await.is_err());
     Ok(())
 }
