@@ -90,7 +90,8 @@ settlement is not observed in its bounded window.
 
 `BUSINESS_ENV_FILE=/private/dev.env cargo test --locked --test automation -- --ignored --test-threads=1`
 uses only generated disposable databases and synthetic connector effects. It runs
-real authentication, schema policy, the polling worker, backup and installer tools.
+real authentication, schema policy, dog-queue workers, competing TypeDB leases, stale acknowledgements,
+restart/backfill preservation, backup and installer tools.
 `BUSINESS_ENV_FILE=/private/dev.env cargo test --locked --test plugins two_tenants_complete_billing -- --ignored`
 runs complete billing workflows through the automation connector and independently
 resolved bank/mail capabilities for two tenants. Neither sends a real payment or
@@ -148,3 +149,13 @@ Automation pollers return an owned Worker handle. Call `shutdown().await` to
 stop new polls and finish the current poll before exporting or deleting a fixture.
 The server drains its HTTP requests and worker on shutdown. Do not replace this
 with task abortion, a sleep, repeated deletion, or replaying an uncertain effect.
+
+## Queue cutover rehearsal
+
+After exporting a fresh quiesced development backup, run
+`BUSINESS_ENV_FILE=/private/dev.env cargo run --locked --bin rehearse_queue -- business_native_dev_v3 /private/backup`.
+It restores into a generated development shadow, verifies the backup, adds only
+missing queue deliveries and checks original objects, business attributes and
+relation roles. A second backfill must insert nothing. No providers are called;
+the source and backup remain untouched and the shadow is retained as evidence.
+See `src/background/README.md` for execution and rollback responsibilities.

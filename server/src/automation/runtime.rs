@@ -1,8 +1,7 @@
-//! Durable polling. A schedule advances only after its deterministic event exists.
+//! Workflow scheduling and human reconciliation; execution belongs to background.
 use super::{
     engine::{now, Engine},
     model::{identifier, Run, Schedule},
-    store::{q, Store},
 };
 use anyhow::{ensure, Result};
 use serde_json::{json, Value};
@@ -159,109 +158,3 @@ impl Engine {
             .value)
     }
 }
-impl Store {
-    pub async fn due(&self) -> Result<Vec<(String, String)>> {
-        let rows=crate::storage::read(&self.state,&format!("{} $r isa automation_record,has auto_tenant {},has auto_key $key,has auto_kind $kind,has auto_status $status,has auto_when $when;$when <= {};{{$kind == \"run\";{{$status == \"queued\";}} or {{$status == \"running\";}} or {{$status == \"retry\";}} or {{$status == \"waiting\";}};}} or {{$kind == \"schedule\";$status == \"scheduled\";}};select $r,$when,$key;sort $when,$key;limit 32;fetch {{'key':$r.auto_key,'kind':$r.auto_kind}};",self.prefix(),q(&self.tenant),now())).await?;
-        Ok(rows
-            .iter()
-            .filter_map(|r| {
-                Some((
-                    r["kind"].as_str()?.into(),
-                    r["key"].as_str()?.rsplit('/').next()?.into(),
-                ))
-            })
-            .collect())
-    }
-}
-pub async fn tick(engine: &Engine) -> Result<usize> {
-    let due = engine.store.due().await?;
-    let n = due.len();
-    for (kind, id) in due.into_iter().take(4) {
-        let result = if kind == "run" {
-            engine.advance(&id).await.map(|_| ())
-        } else {
-            engine.fire_schedule(&id).await
-        };
-        if result.is_err() {
-            tracing::warn!(tenant=%engine.store.tenant,record=%id,"Automation deferred; durable state retained");
-        }
-    }
-    Ok(n)
-}
-/// Owns a poller. Explicit shutdown waits for its current poll and effects to finish.
-/// Dropping the handle requests a stop; callers retiring a database must await shutdown.
-#[must_use = "Retain the worker and await shutdown before retiring its database"]
-pub struct Worker {
-    stop: Option<tokio::sync::oneshot::Sender<()>>,
-    task: Option<tokio::task::JoinHandle<()>>,
-}
-impl Worker {
-    pub async fn shutdown(mut self) -> Result<()> {
-        if let Some(stop) = self.stop.take() {
-            let _ = stop.send(());
-        }
-        if let Some(task) = self.task.take() {
-            task.await?;
-        }
-        Ok(())
-    }
-}
-impl Drop for Worker {
-    fn drop(&mut self) {
-        if let Some(stop) = self.stop.take() {
-            let _ = stop.send(());
-        }
-    }
-}
-/// Discover tenants with due records on every poll; newly connected tenants need no restart.
-pub fn spawn_all(template: Engine) -> Worker {
-    let (stop, mut stopped) = tokio::sync::oneshot::channel();
-    let task = tokio::spawn(async move {
-        let mut clock = tokio::time::interval(std::time::Duration::from_secs(2));
-        clock.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        loop {
-            // Stop only between polls. Cancelling a query or provider mutation
-            // midway can conceal its outcome; finish and persist it first.
-            tokio::select! {
-                biased;
-                _ = &mut stopped => break,
-                _ = clock.tick() => {},
-            }
-            let query=format!("match $r isa automation_record,has auto_tenant $tenant,has auto_when $when,has auto_status $status;$when <= {};{{$status == \"queued\";}} or {{$status == \"running\";}} or {{$status == \"retry\";}} or {{$status == \"waiting\";}} or {{$status == \"scheduled\";}};select $tenant;distinct;limit 1000;fetch {{'tenant':$tenant}};",now());
-            let Ok(rows) = crate::storage::read(&template.store.state, &query).await else {
-                tracing::warn!("Automation discovery failed");
-                continue;
-            };
-            use futures::StreamExt;
-            futures::stream::iter(rows)
-                .for_each_concurrent(4, |row| {
-                    let template = template.clone();
-                    async move {
-                        let Some(tenant) = row["tenant"].as_str() else {
-                            return;
-                        };
-                        let Ok(store) = Store::new(template.store.state.clone(), tenant) else {
-                            return;
-                        };
-                        let e = Engine {
-                            store,
-                            catalog: template.catalog.clone(),
-                            vault: template.vault.clone(),
-                        };
-                        if tick(&e).await.is_err() {
-                            tracing::warn!(tenant=%tenant,"Automation tenant polling failed");
-                        }
-                    }
-                })
-                .await;
-        }
-    });
-    Worker {
-        stop: Some(stop),
-        task: Some(task),
-    }
-}
-
-#[cfg(test)]
-#[path = "../../tests/unit/automation_worker.rs"]
-mod worker_tests;

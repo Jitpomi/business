@@ -55,7 +55,7 @@ async fn website_queries_retire_portal_end_to_end() -> Result<()> {
   http_server = Some((stop_http, tokio::spawn(async move {
       axum::serve(listener,router).with_graceful_shutdown(async {let _=stopped_http.await;}).await
   })));
-  worker = Some(server::automation::runtime::spawn_all((*template).clone()));
+  worker = Some(server::background::spawn_all((*template).clone()));
   let request=serde_json::json!({"base":base,"tenant":tenant,"email":email,"gateway":std::env::var("BUSINESS_GATEWAY_SECRET").unwrap_or_default()});
   let output=tokio::task::spawn_blocking(move||->Result<std::process::Output>{
    use std::io::Write;

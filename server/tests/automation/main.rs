@@ -1,3 +1,4 @@
+mod background_checks;
 use anyhow::{ensure, Result};
 use serde_json::{json, Value};
 use server::automation::{
@@ -129,11 +130,11 @@ tx.query(format!(r#"insert $t isa tenant,has tenant_id "{tenant}",has name "Auto
  let recorder=Arc::new(Recorder{calls:AtomicUsize::new(0)});let mut catalog=Catalog::default();catalog.register(recorder.clone())?;
  let e=Engine{store:Store::new(state.clone(),&tenant)?,catalog:Arc::new(catalog),vault:Vault::with_store("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",server::automation::secret_store::Files::configured()?)?};
  let public=e.connect("crm","recorder",json!({}),json!({"token":"DO-NOT-LEAK"})).await?;ensure!(!public.to_string().contains("secret_ref")&&!public.to_string().contains("DO-NOT-LEAK"));e.verify_connection("crm").await?;
- let b=Store::new(state.clone(),&other)?;ensure!(b.get("connection","crm").await?.is_none());ensure!(b.owner(&owner).await.is_err());
+ let b=Store::new(state.clone(),&other)?;background_checks::exercise(&e.store,&b).await?;ensure!(b.get("connection","crm").await?.is_none());ensure!(b.owner(&owner).await.is_err());
  let page=e.store.page("connection",None,1).await?;ensure!(page.len()==1);let cursor=page[0]["key"].as_str().unwrap();ensure!(e.store.page("connection",Some(cursor),1).await?.is_empty());ensure!(b.page("connection",Some(cursor),1).await.is_err(),"Pagination accepted another tenant's cursor");
  let w=Workflow{id:"onboarding".into(),revision:String::new(),name:"Onboarding".into(),enabled:true,steps:vec![Step::Transform{id:"mapped".into(),value:json!({"customer":{"$ref":"input/customer"}})},Step::Approval{id:"review".into()},Step::Action{id:"deliver".into(),connection:"crm".into(),action:"send".into(),input:json!({"$ref":"steps/mapped"})},Step::Delay{id:"pause".into(),seconds:0},Step::Transform{id:"done".into(),value:json!(true)}]};
  let published=e.publish(w.clone(),&owner).await?;let original_revision=published["workflow"]["revision"].as_str().unwrap().to_owned();ensure!(e.publish(w.clone(),&owner).await.is_err(),"Stale publication overwrote a workflow");ensure!(e.store.get("workflow_version",&original_revision).await?.is_some(),"Published definition was lost");let mut updated:Workflow=serde_json::from_value(published["workflow"].clone())?;updated.name="Updated onboarding".into();let updated=e.publish(updated,&owner).await?;ensure!(updated["workflow"]["revision"]!=original_revision&&e.store.get("workflow_version",&original_revision).await?.unwrap().value["workflow"]["name"]=="Onboarding","Prior workflow version changed");let run=e.enqueue(&w.id,"event-1",json!({"customer":"Jane"})).await?;let id=run["id"].as_str().unwrap();ensure!(e.enqueue(&w.id,"event-1",json!({"customer":"Jane"})).await?["id"]==id);ensure!(e.enqueue(&w.id,"event-1",json!({"customer":"Changed"})).await.is_err());
- ensure!(!e.store.due().await?.is_empty());e.advance(id).await?;ensure!(e.advance(id).await?["status"]=="approval");ensure!(recorder.calls.load(Ordering::SeqCst)==0);e.approve(id,&owner).await?;
+ ensure!(e.store.list("job",1000).await?.iter().any(|r|r.status=="enqueued"));e.advance(id).await?;ensure!(e.advance(id).await?["status"]=="approval");ensure!(recorder.calls.load(Ordering::SeqCst)==0);e.approve(id,&owner).await?;
  // Reconstructing the engine simulates a worker restart; persisted state is authoritative.
  let restarted=e.clone();for _ in 0..5{restarted.advance(id).await?;}let completed=e.store.get("run",id).await?.unwrap().value;ensure!(completed["status"]=="completed","{completed}");ensure!(!completed.to_string().contains("DO-NOT-LEAK"));ensure!(recorder.calls.load(Ordering::SeqCst)==1);
  let mut uncertain=w.clone();uncertain.id="uncertain".into();uncertain.steps=vec![Step::Action{id:"write".into(),connection:"crm".into(),action:"send".into(),input:json!({"uncertain":true})}];e.publish(uncertain.clone(),&owner).await?;let r=e.enqueue(&uncertain.id,"one",Value::Null).await?;let rid=r["id"].as_str().unwrap();ensure!(e.advance(rid).await?["status"]=="attention");e.advance(rid).await?;ensure!(recorder.calls.load(Ordering::SeqCst)==2);e.resolve(rid,&owner,"Checked the external system; action succeeded",json!({"id":"verified"})).await?;ensure!(e.advance(rid).await?["status"]=="completed");ensure!(recorder.calls.load(Ordering::SeqCst)==2);
@@ -146,7 +147,16 @@ tx.query(format!(r#"insert $t isa tenant,has tenant_id "{tenant}",has name "Auto
  // A shared-secret trigger cannot cross tenants or replay different payloads.
  let trigger=e.trigger("crm-events","scheduled",true).await?;let token=trigger["token"].as_str().unwrap();ensure!(e.event("crm-events","wrong","event",Value::Null).await.is_err());
  let event=e.event("crm-events",token,"event",json!({"event":1})).await?;ensure!(e.event("crm-events",token,"event",json!({"event":1})).await?["id"]==event["id"]);ensure!(e.event("crm-events",token,"event",json!({"event":2})).await.is_err());
- let driven=e.enqueue("scheduled","worker-driven",Value::Null).await?;let driven_id=driven["id"].as_str().unwrap().to_owned();let worker=server::automation::runtime::spawn_all(e.clone());let outcome=tokio::time::timeout(std::time::Duration::from_secs(30),async{loop{if e.store.get("run",&driven_id).await?.unwrap().value["status"]=="completed"{break Ok::<_,anyhow::Error>(());}tokio::time::sleep(std::time::Duration::from_millis(500)).await;}}).await;worker.shutdown().await?;outcome??;
+ let driven=e.enqueue("scheduled","worker-driven",Value::Null).await?;let driven_id=driven["id"].as_str().unwrap().to_owned();let pending=e.store.get("run",&driven_id).await?.unwrap();
+ // Simulate a pre-cutover record with no queue delivery, then prove exact workflow preservation.
+ let tx=driver.transaction(&db,typedb_driver::TransactionType::Write).await?;
+ tx.query(format!("match $j isa automation_record,has auto_key {};delete $j;",serde_json::to_string(&e.store.key("job",&pending.revision))?)).await?;tx.commit().await?;
+ ensure!(server::background::reconcile(&e.store).await? >= 1);
+ ensure!(server::background::reconcile(&e.store).await? == 0,"Backfill duplicated deliveries");
+ ensure!(e.store.get("run",&driven_id).await?.unwrap().value==pending.value,"Backfill changed useful workflow state");
+ let worker=server::background::spawn_all(e.clone());let outcome=tokio::time::timeout(std::time::Duration::from_secs(30),async{loop{if e.store.get("run",&driven_id).await?.unwrap().value["status"]=="completed"{break Ok::<_,anyhow::Error>(());}tokio::time::sleep(std::time::Duration::from_millis(500)).await;}}).await;worker.shutdown().await?;
+ if outcome.is_err(){for row in e.store.list("job",1000).await? {eprintln!("queue diagnostic status={} attempt={} error={}",row.status,row.value["record"]["attempt"],row.value["record"]["last_error"]);}}
+ outcome??;
  // Real authentication and schema-policy ingress must not expose or forge records.
  std::env::set_var("AUTOMATION_ENABLED","true");std::env::set_var("AUTOMATION_MASTER_KEY_B64","AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=");
  let (_,http)=server::app::build_with_plugins(state.clone(),"automation-test-signing-secret-with-at-least-32-bytes".into(),Arc::new(server::finance::TenantRegistry::default()))?;

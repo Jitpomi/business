@@ -29,8 +29,7 @@ async fn main() -> Result<()> {
             std::env::var("ACCOUNT_TENANT_ID").ok(),
         )?);
     }
-    let worker =
-        automation.map(|template| server::automation::runtime::spawn_all((*template).clone()));
+    let worker = automation.map(|template| server::background::spawn_all((*template).clone()));
     let served = axum::serve(listener, router)
         .with_graceful_shutdown(async {
             #[cfg(unix)]

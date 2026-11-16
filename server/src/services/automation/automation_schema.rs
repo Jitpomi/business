@@ -8,7 +8,8 @@ pub fn kind(kind: &str) -> anyhow::Result<()> {
             "run",
             "schedule",
             "trigger",
-            "settings"
+            "settings",
+            "job"
         ]
         .contains(&kind),
         "Unknown record kind"

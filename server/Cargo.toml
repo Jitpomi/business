@@ -9,6 +9,7 @@ aes-gcm = "=0.10.3"
 anyhow = "1.0.102"
 async-trait = "0.1.89"
 axum = "0.8.8"
+dog-queue = { git = "https://github.com/Jitpomi/dogrs", rev = "115ea80114701f51204f67f5736d801fe2d077b8", default-features = false, features = ["json"] }
 dog-auth = "=0.3.1"
 dog-auth-local = "0.3.0"
 dog-transport = { version = "0.3.0", features = ["http"] }
