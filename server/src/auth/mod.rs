@@ -97,6 +97,15 @@ pub trait AuthenticationPlugin: Send + Sync {
             dog_core::DogError::method_not_allowed("Unsupported provider account operation")
                 .into_anyhow()
         );
+        // External-provider logout is a browser/SDK handoff, independent of
+        // whether this provider exposes a general account-management URL.
+        // The relying application must close its session and complete the
+        // provider flow; this does not claim server-side API-token revocation.
+        if operation == "logout" {
+            return Ok(
+                json!({"flow":"provider","operation":"logout","issuer":self.issuer(),"account_url":self.account_url(),"completed":false}),
+            );
+        }
         let url = self.account_url().ok_or_else(|| {
             dog_core::DogError::method_not_allowed("Use this provider's SDK or hosted account flow")
                 .into_anyhow()
