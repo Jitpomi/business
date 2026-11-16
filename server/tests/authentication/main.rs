@@ -311,10 +311,19 @@ async fn oidc_dog_auth_identity_linking_and_tenant_rbac_end_to_end() -> Result<(
         let machine_key=server::auth::binding_key(&primary.url,"ci-service");
         tx.query(format!("match $bot isa service_account,has identity_id 'bot';insert (identity:$bot) isa external_identity,has auth_binding_key {},has auth_issuer {},has auth_subject 'ci-service';",q(&machine_key),q(&primary.url))).await?;tx.commit().await?;
         std::env::remove_var("AUTH_SERVICE_REQUIREMENTS_JSON");
+        std::env::set_var("AUTOMATION_ENABLED","true");
         let (_,machine_http)=server::app::build_with_authentication(state.clone(),"machine-integration-unused-signing-key-at-least-32-bytes".into(),Arc::new(server::finance::TenantRegistry::default()),registry.clone())?;
         let machine_app=server::app::router(machine_http);let mut machine=primary.claims();machine["sub"]=json!("ci-service");machine["amr"]=json!([]);let machine_token=primary.token(&machine,"at+jwt")?;
         let (status,machine_rows)=request(&machine_app,"tenant-a",&machine_token,"read",query.clone()).await?;
         ensure!(status==200 && machine_rows.to_string().contains("files") && !machine_rows.to_string().contains("foreign"),"Service account did not use native data policies: {status}");
+        let automation=|proof:&str,scope:&str,body:Value|axum::http::Request::post("/automation").header("content-type","application/json").header("x-tenant-id",scope).header("authorization",format!("Bearer {proof}")).body(axum::body::Body::from(body.to_string()));
+        ensure!(machine_app.clone().oneshot(automation(&machine_token,"tenant-a",json!({"action":"list","kind":"run"}))?).await?.status()==403,"Machine member bypassed native owner policy");
+        ensure!(machine_app.clone().oneshot(automation(&partner_token,"tenant-a",json!({"action":"unsupported"}))?).await?.status()==400,"Opaque human identity did not reach clear operation validation");
+        let tx=driver.transaction(&db,typedb_driver::TransactionType::Write).await?;
+        tx.query("match $bot isa service_account,has identity_id 'bot';$m isa membership,links(member:$bot);update $m has membership_role 'owner';").await?;tx.commit().await?;
+        ensure!(machine_app.clone().oneshot(automation(&machine_token,"tenant-a",json!({"action":"list","kind":"run"}))?).await?.status()==200,"Native machine owner could not use automation");
+        ensure!(machine_app.clone().oneshot(automation(&machine_token,"tenant-a",json!({"action":"unsupported"}))?).await?.status()==400,"Unsupported automation returned an opaque error");
+        ensure!(machine_app.clone().oneshot(automation(&machine_token,"tenant-b",json!({"action":"list","kind":"run"}))?).await?.status()==401,"Machine automation crossed tenants");
         let tx=driver.transaction(&db,typedb_driver::TransactionType::Write).await?;tx.query("match $bot isa service_account,has identity_id 'bot';update $bot has status 'suspended';").await?;tx.commit().await?;
         ensure!(request(&machine_app,"tenant-a",&machine_token,"read",query.clone()).await?.0==401,"Suspended service account retained access");
         // Managed invitation acceptance uses signed provider email proof, with
@@ -336,6 +345,7 @@ async fn oidc_dog_auth_identity_linking_and_tenant_rbac_end_to_end() -> Result<(
         Ok::<_,anyhow::Error>(())
     }.await;
     std::env::remove_var("AUTH_SERVICE_REQUIREMENTS_JSON");
+    std::env::remove_var("AUTOMATION_ENABLED");
     driver.databases().get(&db).await?.delete().await?;
     result
 }

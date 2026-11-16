@@ -39,7 +39,9 @@ impl Store {
     }
 
     pub fn new(state: Arc<TypeDBState>, tenant: &str) -> Result<Self> {
-        uuid::Uuid::parse_str(tenant)?;
+        super::model::identifier(tenant).map_err(|_| {
+            dog_core::DogError::bad_request("Invalid tenant identifier").into_anyhow()
+        })?;
         Ok(Self {
             state,
             tenant: tenant.into(),
@@ -96,11 +98,10 @@ impl Store {
         actor: &str,
         connection: &Record,
     ) -> Result<Record> {
-        uuid::Uuid::parse_str(actor)?;
         let now = chrono::Utc::now()
             .naive_utc()
             .format("%Y-%m-%dT%H:%M:%S%.6f");
-        let guard=format!("$u isa person,has identity_id {};let $allowed=role_at_least($u,$t,\"owner\",{now});$allowed==true;$bound isa automation_record,has auto_tenant {},has auto_key {},has auto_revision {},has auto_status \"enabled\";",q(actor),q(&self.tenant),q(&connection.key),q(&connection.revision));
+        let guard=format!("$u isa identity,has identity_id {};let $allowed=role_at_least($u,$t,\"owner\",{now});$allowed==true;$bound isa automation_record,has auto_tenant {},has auto_key {},has auto_revision {},has auto_status \"enabled\";",q(actor),q(&self.tenant),q(&connection.key),q(&connection.revision));
         self.cas_guarded(old, value, status, when, &guard).await
     }
     async fn cas_guarded(
@@ -122,13 +123,15 @@ impl Store {
         })
     }
     pub async fn owner(&self, actor: &str) -> Result<()> {
-        uuid::Uuid::parse_str(actor)?;
         let now = chrono::Utc::now()
             .naive_utc()
             .format("%Y-%m-%dT%H:%M:%S%.6f")
             .to_string();
-        let rows=storage::read(&self.state,&format!("{} $u isa person,has identity_id {};let $allowed=role_at_least($u,$t,\"owner\",{now});$allowed==true;fetch {{'id':$u.identity_id}};",self.prefix(),q(actor))).await?;
-        ensure!(rows.len() == 1, "Tenant owner permission required");
+        let rows=storage::read(&self.state,&format!("{} $u isa identity,has identity_id {};let $allowed=role_at_least($u,$t,\"owner\",{now});$allowed==true;fetch {{'id':$u.identity_id}};",self.prefix(),q(actor))).await?;
+        ensure!(
+            rows.len() == 1,
+            dog_core::DogError::forbidden("Tenant owner permission required").into_anyhow()
+        );
         Ok(())
     }
 }

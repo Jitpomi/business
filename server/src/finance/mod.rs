@@ -166,10 +166,10 @@ impl TenantRuntime {
         Ok(())
     }
     pub fn financial(&self, id: &str) -> Result<Arc<dyn FinancialPlugin>> {
-        self.financial
-            .get(id)
-            .cloned()
-            .ok_or_else(|| anyhow::anyhow!("Financial plugin not configured for this tenant"))
+        self.financial.get(id).cloned().ok_or_else(|| {
+            dog_core::DogError::conflict("Financial system is not connected for this company")
+                .into_anyhow()
+        })
     }
     pub fn validate_delivery(&self, recipient: &str) -> Result<()> {
         ensure!(
@@ -245,10 +245,10 @@ impl TenantRegistry {
         Ok(())
     }
     pub fn get(&self, tenant: &str) -> Result<Arc<TenantRuntime>> {
-        self.tenants
-            .get(tenant)
-            .cloned()
-            .ok_or_else(|| anyhow::anyhow!("Tenant runtime not configured"))
+        self.tenants.get(tenant).cloned().ok_or_else(|| {
+            dog_core::DogError::conflict("Financial systems are not configured for this company")
+                .into_anyhow()
+        })
     }
 }
 
