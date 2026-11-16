@@ -10,6 +10,7 @@ async fn shutdown_waits_for_in_flight_work_to_finish() -> anyhow::Result<()> {
         let _ = stopped.await;
         let _ = stopping.send(());
         let _ = may_finish.await;
+        Ok(())
     });
     let worker = Worker {
         stop: Some(stop),

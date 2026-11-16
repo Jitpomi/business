@@ -71,7 +71,8 @@ impl Store {
     ) -> Result<Record> {
         let key = self.key(kind, id);
         let rev = uuid::Uuid::new_v4().to_string();
-        storage::write(&self.state,&format!("{} not {{$r isa automation_record,has auto_key {};}};select $t;insert $r isa automation_record,has auto_key {},has auto_tenant {},has auto_kind {},has auto_payload {},has auto_revision {},has auto_status {},has auto_when {when};fetch {{'id':$r.auto_key}};",self.prefix(),q(&key),q(&key),q(&self.tenant),q(kind),q(&value.to_string()),q(&rev),q(status))).await?;
+        let delivery = crate::background::jobs::outbox(self, kind, id, &rev, status, when)?;
+        storage::write(&self.state,&format!("{} not {{$r isa automation_record,has auto_key {};}};select $t;insert $r isa automation_record,has auto_key {},has auto_tenant {},has auto_kind {},has auto_payload {},has auto_revision {},has auto_status {},has auto_when {when};{delivery}fetch {{'id':$r.auto_key}};",self.prefix(),q(&key),q(&key),q(&self.tenant),q(kind),q(&value.to_string()),q(&rev),q(status))).await?;
         Ok(Record {
             key,
             revision: rev,
@@ -104,7 +105,7 @@ impl Store {
         let guard=format!("$u isa identity,has identity_id {};let $allowed=role_at_least($u,$t,\"owner\",{now});$allowed==true;$bound isa automation_record,has auto_tenant {},has auto_key {},has auto_revision {},has auto_status \"enabled\";",q(actor),q(&self.tenant),q(&connection.key),q(&connection.revision));
         self.cas_guarded(old, value, status, when, &guard).await
     }
-    async fn cas_guarded(
+    pub(crate) async fn cas_guarded(
         &self,
         old: &Record,
         value: &Value,
@@ -113,7 +114,15 @@ impl Store {
         guard: &str,
     ) -> Result<Record> {
         let rev = uuid::Uuid::new_v4().to_string();
-        storage::write(&self.state,&format!("{} {guard} $r isa automation_record,has auto_tenant {},has auto_key {},has auto_revision {};select $t,$r;update $r has auto_payload {},has auto_revision {},has auto_status {},has auto_when {when};fetch {{'id':$r.auto_key}};",self.prefix(),q(&self.tenant),q(&old.key),q(&old.revision),q(&value.to_string()),q(&rev),q(status))).await?;
+        let mut parts = old.key.rsplit('/');
+        let id = parts
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("Invalid record key"))?;
+        let kind = parts
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("Invalid record kind"))?;
+        let delivery = crate::background::jobs::outbox(self, kind, id, &rev, status, when)?;
+        storage::write(&self.state,&format!("{} {guard} $r isa automation_record,has auto_tenant {},has auto_key {},has auto_revision {};select $t,$r;update $r has auto_payload {},has auto_revision {},has auto_status {},has auto_when {when};{delivery}fetch {{'id':$r.auto_key}};",self.prefix(),q(&self.tenant),q(&old.key),q(&old.revision),q(&value.to_string()),q(&rev),q(status))).await?;
         Ok(Record {
             key: old.key.clone(),
             revision: rev,

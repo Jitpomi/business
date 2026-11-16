@@ -25,3 +25,5 @@ pub mod credential_migration;
 pub mod portal_migration;
 
 pub mod consent_migration;
+
+pub mod background;

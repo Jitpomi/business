@@ -502,7 +502,7 @@ async fn run(phase: &str) -> Result<()> {
         .iter()
         .map(|c| c["tenant"].as_str().unwrap().to_owned())
         .collect();
-    let worker = server::automation::runtime::spawn_all((*template).clone());
+    let worker = server::background::spawn_all((*template).clone());
     let outcome=async {
         if phase=="status" {
             let case=&saved["cases"][0];

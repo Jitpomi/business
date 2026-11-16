@@ -282,7 +282,7 @@ async fn run(phase: &str) -> Result<()> {
             ok(&router,&tenant,token,"/automation",json!({"action":"publish","workflow":{"id":id,"revision":"","name":"Mercury sandbox acceptance","enabled":true,"steps":[{"kind":"action","id":"check","connection":"billing","action":action,"input":if action=="tick"{Value::Null}else{json!({"invoice_id":{"$ref":"input/invoice_id"}})}}]}}),None).await?;
         }
     }
-    let worker = server::automation::runtime::spawn_all((*template).clone());
+    let worker = server::background::spawn_all((*template).clone());
     let outcome=async {
         let read=|query:String|{let state=state.clone();async move{let tx=state.driver.transaction(&state.database,TransactionType::Read).await?;database::documents(&tx,&query).await}};
         let invoice=|id:&str|format!("match $i isa bill_invoice,has bill_key {};fetch {{'id':$i.bill_key,'external':$i.bill_external_id,'url':$i.bill_url,'status':$i.bill_status}};",q(id));

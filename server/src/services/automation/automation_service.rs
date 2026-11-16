@@ -99,6 +99,7 @@ impl DogService<Value, BusinessParams> for AutomationService {
             connections.push(c.public());
         }
         let mut out = json!({"catalog":e.catalog.describe(),"connections":connections});
+        out["job"] = json!(e.store.summaries("job", 100).await?);
         out["run"] = json!(e.store.summaries("run", 100).await?);
         out["workflow_version"] = json!(e.store.summaries("workflow_version", 100).await?);
         out["billing_settings"] = e
@@ -154,6 +155,13 @@ impl DogService<Value, BusinessParams> for AutomationService {
                 if kind == "connection" {
                     let c: Connection = serde_json::from_value(record.value)?;
                     Ok(c.public())
+                } else if kind == "job" {
+                    // Lease ownership remains private even to tenant owners.
+                    let job: dog_queue::JobRecord =
+                        serde_json::from_value(record.value["record"].clone())?;
+                    Ok(
+                        json!({"data":job,"status":record.status,"revision":record.revision,"due":record.when}),
+                    )
                 } else if kind == "trigger" {
                     Ok(
                         json!({"id":record.value["id"],"workflow":record.value["workflow"],"enabled":record.value["enabled"]}),
