@@ -43,3 +43,15 @@ impl PluginAccess {
         self.0.remove(key);
     }
 }
+
+pub fn actor(ctx: &dog_core::TenantContext, p: &BusinessParams) -> anyhow::Result<String> {
+    let u = p
+        .auth_result
+        .as_ref()
+        .and_then(|v| v.get("user"))
+        .ok_or_else(|| dog_core::DogError::not_authenticated("Please sign in").into_anyhow())?;
+    if !p.authenticated || u["tenant_id"].as_str() != Some(&ctx.tenant_id.0) {
+        return Err(dog_core::DogError::not_authenticated("Company access changed").into_anyhow());
+    }
+    Ok(uuid::Uuid::parse_str(u["id"].as_str().unwrap_or(""))?.to_string())
+}

@@ -4,4 +4,4 @@ pub mod billing_schema;
 pub mod engine;
 pub mod http;
 mod notifications;
-mod store;
+use crate::storage as store;

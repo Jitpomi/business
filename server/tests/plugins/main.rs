@@ -87,6 +87,57 @@ impl NotificationPlugin for Mail {
         Ok(format!("test-delivery-{}", m.key))
     }
 }
+struct BankConnector {
+    tenants: HashMap<String, (Arc<Bank>, Arc<Mail>)>,
+}
+#[async_trait]
+impl server::automation::connectors::Connector for BankConnector {
+    fn name(&self) -> &str {
+        "community-bank"
+    }
+    fn actions(&self) -> Vec<server::automation::model::ActionSpec> {
+        vec![]
+    }
+    fn validate(&self, c: &serde_json::Value, s: &serde_json::Value) -> Result<()> {
+        ensure!(c == &serde_json::json!({"sandbox":true}) && s.is_null());
+        Ok(())
+    }
+    async fn verify(&self, c: &serde_json::Value, s: &serde_json::Value) -> Result<()> {
+        self.validate(c, s)
+    }
+    fn financial(
+        &self,
+        c: &server::automation::connectors::Invocation,
+    ) -> Result<Option<Arc<dyn FinancialPlugin>>> {
+        Ok(Some(
+            self.tenants
+                .get(&c.tenant)
+                .ok_or_else(|| anyhow::anyhow!("Unknown tenant"))?
+                .0
+                .clone(),
+        ))
+    }
+    fn notification(
+        &self,
+        c: &server::automation::connectors::Invocation,
+    ) -> Result<Option<Arc<dyn NotificationPlugin>>> {
+        Ok(Some(
+            self.tenants
+                .get(&c.tenant)
+                .ok_or_else(|| anyhow::anyhow!("Unknown tenant"))?
+                .1
+                .clone(),
+        ))
+    }
+    async fn execute(
+        &self,
+        _: &server::automation::connectors::Invocation,
+        _: &str,
+        _: serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        anyhow::bail!("Use the billing capability")
+    }
+}
 #[tokio::test]
 async fn registry_is_tenant_scoped_and_open_to_another_bank() -> Result<()> {
     let mut a = TenantRuntime::new("tenant-a".into(), true);
@@ -201,9 +252,22 @@ async fn two_tenants_complete_billing_using_independent_plugins() -> Result<()> 
             }
             fixtures.push((engine,bank,mail,email));
         }
+        let mut catalog=server::automation::connectors::Catalog::default();catalog.register(Arc::new(BankConnector{tenants:fixtures.iter().map(|(e,b,m,_)|(e.merchant.clone(),(b.clone(),m.clone()))).collect()}))?;
+        let vault=server::automation::vault::Vault::default();
+        registry=registry.with_source(Arc::new(server::automation::managed::Managed{state:state.clone(),catalog:Arc::new(catalog.clone()),vault:vault.clone()}));
+        catalog.register(Arc::new(server::automation::billing::Billing{state:state.clone(),registry:Arc::new(registry.clone())}))?;
+        let catalog=Arc::new(catalog);
         for (engine,bank,mail,_) in &fixtures {
-            let report=engine.tick().await?;ensure!(report["errors"]==0,"Plugin workflow failed: {report}");
+            let automation=server::automation::engine::Engine{store:server::automation::store::Store::new(state.clone(),&engine.merchant)?,catalog:catalog.clone(),vault:vault.clone()};
+            let owners=engine.read(format!("match $u isa person,has email {};fetch {{'id':$u.identity_id}};",serde_json::to_string(&fixtures.iter().find(|(e,_,_,_)|e.merchant==engine.merchant).unwrap().3)?)).await?;let owner=owners[0]["id"].as_str().unwrap();
+            automation.connect("community-bank","community-bank",serde_json::json!({"sandbox":true}),serde_json::Value::Null).await?;automation.verify_connection("community-bank").await?;
+            automation.configure_billing(server::automation::managed::Settings{sandbox:true,default_financial:Some("community-bank".into()),notification:Some("community-bank".into()),reminder_days:7,allowed_test_recipients:vec!["test@example.invalid".into()]}).await?;
+            automation.connect("billing","billing",serde_json::json!({}),serde_json::Value::Null).await?;automation.verify_connection("billing").await?;
+            automation.publish(server::automation::model::Workflow{id:"billing".into(),revision:String::new(),name:"Complete billing".into(),enabled:true,steps:vec![server::automation::model::Step::Action{id:"cycle".into(),connection:"billing".into(),action:"tick".into(),input:serde_json::Value::Null}]},owner).await?;
+            let run=automation.enqueue("billing","first",serde_json::Value::Null).await?;let done=automation.advance(run["id"].as_str().unwrap()).await?;ensure!(done["status"]=="completed","{done}");let report=&done["outputs"]["cycle"];ensure!(report["errors"]==0,"Plugin workflow failed: {report}");
             ensure!(report["issued"]==2&&report["notices"]==2,"Incomplete workflow: {report}");
+            let paid={let invoices=bank.invoices.lock().unwrap();invoices.values().find(|i|i.state==InvoiceState::Paid).unwrap().invoice_id.clone()};
+            automation.publish(server::automation::model::Workflow{id:"follow-up".into(),revision:String::new(),name:"Reconcile and notify".into(),enabled:true,steps:["reconcile","collect_due","notify"].into_iter().map(|action|server::automation::model::Step::Action{id:action.into(),connection:"billing".into(),action:action.into(),input:serde_json::json!({"invoice_id":paid})}).collect()},owner).await?;let follow=automation.enqueue("follow-up","paid-invoice",serde_json::Value::Null).await?;let fid=follow["id"].as_str().unwrap();for _ in 0..3{automation.advance(fid).await?;}ensure!(automation.store.get("run",fid).await?.unwrap().value["status"]=="completed","Individual billing actions failed");
             let repeated=engine.tick().await?;ensure!(repeated["issued"]==0&&repeated["notices"]==0&&repeated["errors"]==0,"Replay duplicated work: {repeated}");
             ensure!(bank.attempts.lock().unwrap().values().all(|n|*n==1),"Payment attempted twice");
             let messages=mail.messages.lock().unwrap();ensure!(messages.len()==2,"Wrong delivery count");

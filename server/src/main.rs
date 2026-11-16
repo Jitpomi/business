@@ -6,39 +6,31 @@ async fn main() -> Result<()> {
     let port: String = app.get("http.port").unwrap();
     let listener = tokio::net::TcpListener::bind(format!("{host}:{port}")).await?;
     let mut router = server::app::router(http);
-    let mut billing_workers = Vec::new();
-    if std::env::var("BILLING_ENABLED").as_deref() == Ok("true") {
-        let tenants: Vec<String> =
-            serde_json::from_str(&std::env::var("BILLING_WORKER_TENANTS_JSON")?)?;
+    let automation: Option<std::sync::Arc<server::automation::engine::Engine>> =
+        app.get("automation.engine");
+    if let Some(template) = automation.clone() {
         anyhow::ensure!(
-            !tenants.is_empty(),
-            "Configure explicit billing worker tenants"
+            server::automation::store::installed(&template.store.state).await?,
+            "Install the additive automation schema before enabling automation"
         );
-        let primary = std::env::var("ACCOUNT_TENANT_ID").ok();
-        let mut seen = std::collections::HashSet::new();
-        let registry: std::sync::Arc<server::finance::TenantRegistry> =
-            app.get("tenant.plugins")
-                .ok_or_else(|| anyhow::anyhow!("Tenant registry missing"))?;
-        for tenant in tenants {
-            let tenant = server::billing::billing_schema::id(&tenant)?;
-            anyhow::ensure!(seen.insert(tenant.clone()), "Duplicate worker tenant");
-            let state = app
-                .get("typedb")
-                .ok_or_else(|| anyhow::anyhow!("Missing TypeDB state"))?;
-            let engine =
-                server::billing::engine::Engine::new(state, &tenant, registry.get(&tenant)?)?;
-            let (routes, worker) = server::billing::http::runtime(engine)?;
-            router = router.nest(&format!("/tenants/{tenant}"), routes.clone());
-            if primary.as_deref() == Some(tenant.as_str()) {
-                router = router.merge(routes);
-            }
-            billing_workers.push(worker);
-        }
-        anyhow::ensure!(
-            primary.as_ref().is_none_or(|p| seen.contains(p)),
-            "Account tenant must be in the worker list"
-        );
+        router = router.merge(server::automation::events::router((*template).clone()));
     }
+    if std::env::var("BILLING_ENABLED").as_deref() == Ok("true") {
+        anyhow::ensure!(automation.is_some(),"Billing requires the automation engine; install/import connections and billing workflows before enabling it");
+        let state = app
+            .get("typedb")
+            .ok_or_else(|| anyhow::anyhow!("Missing TypeDB state"))?;
+        let registry = app
+            .get("tenant.plugins")
+            .ok_or_else(|| anyhow::anyhow!("Missing tenant registry"))?;
+        router = router.merge(server::billing::http::managed_router(
+            state,
+            registry,
+            std::env::var("ACCOUNT_TENANT_ID").ok(),
+        )?);
+    }
+    let worker =
+        automation.map(|template| server::automation::runtime::spawn_all((*template).clone()));
     axum::serve(listener, router)
         .with_graceful_shutdown(async {
             #[cfg(unix)]
@@ -57,7 +49,7 @@ async fn main() -> Result<()> {
             }
         })
         .await?;
-    for worker in billing_workers {
+    if let Some(worker) = worker {
         worker.abort();
         let _ = worker.await;
     }

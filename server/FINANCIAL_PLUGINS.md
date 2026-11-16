@@ -44,28 +44,23 @@ claims to retry an uncertain external side effect blindly.
 
 ## Configuration
 
-See `.env.example`. All JSON is trusted deployment configuration, never request data.
-Use one financial settings entry per tenant. Defaults are explicit; tenants can have
-no financial plugin and still use accounts or notifications. Built-in connection
-arrays retain their tenant, identity, write and environment restrictions.
-`sandbox` defaults to true per tenant. Financial and notification credentials are
-separate. Duplicate plugin registrations/settings and unknown defaults fail closed.
+Managed runtime connections now live in the encrypted tenant connection registry.
+See [automation architecture, API and required cutover](AUTOMATION.md). The previous
+deployment JSON loader remains an explicit import/test/standalone-proxy boundary;
+it does not supply managed runtime credentials. Tenant financial capability
+contracts and adapters are preserved. New connector packages can supply those
+capabilities without editing billing rules.
 
-Workers require an explicit `BILLING_WORKER_TENANTS_JSON` list. Tenant routes are
-`/tenants/<UUID>/internal/billing/tick`, `/webhooks/<plugin>` (under that same prefix),
-`/onboarding` and `/recovery`. `ACCOUNT_TENANT_ID` adds root aliases for one listed
-tenant to preserve the current website URLs. Configure each Stripe endpoint with
-that tenant's secret. The scheduler Worker now requires `BILLING_TENANT_ID` and its
-matching `BILLING_TICK_SECRET`; run separately configured schedulers as needed.
-The template intentionally omits a tenant UUID: set the intended tenant before deployment.
-Mercury settings `mercury_card_enabled` and `mercury_ach_debit_enabled` default to
-false. Virtual bank-transfer instructions work independently of Stripe. Opting into
-card acceptance requires a connected Stripe account within Mercury; that is a
-Mercury feature requirement, not a requirement for using the Mercury plugin.
+The engine discovers due work from persisted workflow schedules. The old billing
+timer, tick HTTP endpoint, scheduler secret and worker tenant list no longer drive
+execution. Tenant webhook/account routes resolve managed connections per request.
 
-Old global billing merchant, payment mode, webhook and mail variables no longer
-configure the runtime. Replace them with the tenant entries; do not leave deployment
-operators relying on the old settings.
+Retain old tenant JSON only in the private import source until cutover is verified.
+The managed runtime does not fall back to deployment credentials.
+
+Mercury `card_enabled` and `ach_debit_enabled` default to false. Bank-transfer
+invoices work without Stripe. Mercury card acceptance requires connecting Stripe
+inside Mercury; that is a provider feature requirement, not an engine dependency.
 
 ## Explicit migration of an existing canonical database
 

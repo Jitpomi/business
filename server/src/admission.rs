@@ -42,6 +42,10 @@ pub(crate) async fn guard(request: Request, next: Next) -> Response {
                 .into_response();
         }
     }
+    external_guard(request, next).await
+}
+/// External systems authenticate in their handler; they share the database admission budget.
+pub(crate) async fn external_guard(request: Request, next: Next) -> Response {
     let started = std::time::Instant::now();
     let Ok(waiting) = WAITING.try_acquire() else {
         return overloaded();

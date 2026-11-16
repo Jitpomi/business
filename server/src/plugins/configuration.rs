@@ -20,7 +20,9 @@ struct Settings {
     mercury_card_enabled: bool,
     #[serde(default)]
     mercury_ach_debit_enabled: bool,
-    scheduler_secret: Option<String>,
+    // Accepted only in old private operator/test input. Scheduling no longer uses it.
+    #[serde(rename = "scheduler_secret")]
+    _retired_scheduler_secret: Option<String>,
     reminder_days: Option<i64>,
 }
 fn sandbox() -> bool {
@@ -65,7 +67,6 @@ pub fn registry() -> Result<Arc<TenantRegistry>> {
         let mut runtime =
             TenantRuntime::new(tenant.clone(), setting.map(|s| s.sandbox).unwrap_or(true));
         if let Some(s) = setting {
-            runtime.scheduler_secret = s.scheduler_secret.clone();
             runtime.reminder_days = s.reminder_days.unwrap_or(7);
             ensure!(
                 (1..=30).contains(&runtime.reminder_days),
@@ -162,6 +163,9 @@ pub fn register_services(
     builder: &mut dog_core::DogAppBuilder<serde_json::Value, crate::BusinessParams>,
     authentication: Arc<dog_auth::AuthenticationService<crate::BusinessParams>>,
 ) -> Result<()> {
+    if std::env::var("AUTOMATION_ENABLED").as_deref() == Ok("true") {
+        return Ok(());
+    }
     use crate::plugins::{mercury, stripe};
     if let Some(credentials) = mercury::auth_mercury::AuthMercuryState::from_env()? {
         let state = mercury::adapters::mercury_adapter::MercuryState::new(Arc::new(

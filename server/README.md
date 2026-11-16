@@ -82,7 +82,7 @@ cargo build --locked --all-targets
 cargo test --locked --all-targets
 cargo test --locked --doc
 cargo clippy --locked --all-targets -- -D warnings
-node --test tests/frontend/data-client.test.mjs ../deploy/billing-scheduler/worker.test.mjs
+node --test tests/frontend/data-client.test.mjs ../deploy/automation-wake/worker.test.mjs
 BUSINESS_ENV_FILE=/private/dev.env BUSINESS_RUNTIME_ENV_FILE=/private/runtime.env cargo test --locked --test backend -- --ignored --test-threads=1
 ```
 
@@ -268,37 +268,29 @@ committed or pasted into logs. Use a dedicated non-admin runtime account.
 
 ## Billing execution
 
-`src/billing/` owns scheduling, consent, invoice state, collection claims,
+`src/automation/` owns durable workflow execution and triggers.
+`src/billing/` owns billing recurrence rules, consent, invoice state, collection claims,
 receipts and reminders. `src/finance/` defines business-owned financial and
 notification contracts. `src/plugins/` contains Stripe, Mercury and Resend
 implementations and trusted configuration. See [plugin architecture and migration](FINANCIAL_PLUGINS.md).
 
 The same canonical tenant/account graph backs protected `/data` and `/portal`.
-Provider references, consent and credentials remain private. Credentials never go
-into business records. Notification delivery does not require a financial plugin.
+Provider references, consent and credentials remain private. Credentials are encrypted in private connection records and excluded from
+ordinary business records and API responses. Notification delivery does not require a financial plugin.
 
-Enable workers explicitly with `BILLING_ENABLED=true` and
-`BILLING_WORKER_TENANTS_JSON` (an array of tenant UUIDs). Each tenant has its own
-immutable plugin runtime, credentials, sandbox policy, notification plugin and
-scheduler secret. Configure `TENANT_FINANCIAL_SETTINGS_JSON` and
-`TENANT_NOTIFICATION_PLUGINS_JSON`; examples are in `.env.example`.
-Each configured worker runs a bounded pass every 60 seconds. Other tenants are
-not swept. Multiple tenants can run in one process.
+The durable automation engine owns execution and tenant-owned encrypted connections.
+Enable `AUTOMATION_ENABLED=true` after its explicit schema installation and tenant
+import; `BILLING_ENABLED=true` enables the portal and dynamic billing ingress.
+New tenants configure their connections through `/automation` rather than changing
+deployment JSON. See [automation API, security and cutover](AUTOMATION.md).
 
-- `POST /tenants/<tenant UUID>/internal/billing/tick`: requires that tenant's
-  scheduler bearer secret (32+ characters). No header changes the tenant.
-  Each pass is bounded to ten new occurrences, ten issuance attempts, twenty
-  reconciliations and twenty notification candidates.
-- `POST /tenants/<tenant UUID>/webhooks/<plugin ID>`: dispatches to that tenant's
-  plugin for authenticity and normalization. The Stripe plugin verifies raw-body
-  signatures with five-minute tolerance and connected-account/environment checks,
-  then reads current provider state. The business engine checks customer, invoice,
-  amount, currency and tenant bindings. Replays cannot undo paid/void states or charge.
-- `ACCOUNT_TENANT_ID`, when explicitly in the worker list, also mounts that tenant's
-  routes at the root for the existing account website. There is no implicit primary.
-- Sandbox notification delivery requires an exact recipient in that tenant's
-  `allowed_test_recipients` list. Messages are marked TEST. The Mercury plugin
-  suppresses provider invoice emails so the independent notification policy applies.
+The previous process timer, external billing tick route and
+`BILLING_WORKER_TENANTS_JSON` list are removed. A persisted `billing-cycle`
+workflow invokes the existing business engine. Provider webhooks use
+`/tenants/<UUID>/webhooks/<plugin ID>`; onboarding and recovery use that same tenant
+prefix. `ACCOUNT_TENANT_ID` optionally mounts root aliases for the account website.
+Connections are resolved afresh for the tenant; no header retargets a payment
+account. Sandbox notifications still require an approved recipient.
 
 Amounts are integer USD cents. Weekly/monthly/yearly schedules use UTC and retain
 the original anchor (January 31 → February 28 → March 31). One-time plans finish

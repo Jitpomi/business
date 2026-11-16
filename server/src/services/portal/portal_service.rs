@@ -18,11 +18,8 @@ impl PortalService {
     pub fn new(state: Arc<TypeDBState>, registry: Arc<crate::finance::TenantRegistry>) -> Self {
         Self { state, registry }
     }
-    fn engine(&self, tenant: &str) -> Result<Engine> {
-        let runtime = self
-            .registry
-            .get(tenant)
-            .unwrap_or_else(|_| Arc::new(crate::finance::TenantRuntime::new(tenant.into(), true)));
+    async fn engine(&self, tenant: &str) -> Result<Engine> {
+        let runtime = self.registry.resolve(tenant).await?;
         Engine::new(self.state.clone(), tenant, runtime)
     }
     async fn engine_for(&self, ctx: &TenantContext, actor: &str, data: &Value) -> Result<Engine> {
@@ -30,7 +27,7 @@ impl PortalService {
             data["action"].as_str(),
             Some("invite" | "renew_invite" | "revoke_invite")
         ) {
-            return self.engine(&ctx.tenant_id.0);
+            return self.engine(&ctx.tenant_id.0).await;
         }
         let selector = if let Some(id) = data["invoice_id"].as_str() {
             format!("(customer:$c,plan:$p) isa bill_plan_owner;(plan:$p,invoice:$i) isa bill_invoice_owner;$i has bill_key {};",quoted(&crate::billing::billing_schema::id(id)?))
@@ -43,12 +40,12 @@ impl PortalService {
                 )?)?)
             )
         };
-        let e = self.engine(&ctx.tenant_id.0)?;
+        let e = self.engine(&ctx.tenant_id.0).await?;
         let rows=e.read(format!("match $viewer isa person,has identity_id {};$scope isa tenant,has tenant_id {};$merchant isa tenant;$c isa bill_customer;(merchant:$merchant,customer:$c) isa bill_account;{selector}let $allowed=bill_reader($viewer,$scope,$c,{});$allowed==true;select $merchant;distinct;fetch {{'merchant':$merchant.tenant_id}};",quoted(actor),quoted(&ctx.tenant_id.0),now())).await?;
         if rows.len() != 1 {
             return Err(DogError::forbidden("Billing account unavailable").into_anyhow());
         }
-        self.engine(schema::field(&rows[0], "merchant")?)
+        self.engine(schema::field(&rows[0], "merchant")?).await
     }
     fn permission(ctx: &TenantContext, actor: &str, customer: &str, kind: &str) -> Result<String> {
         ensure!(
@@ -118,7 +115,7 @@ impl DogService<Value, BusinessParams> for PortalService {
     }
     async fn find(&self, ctx: &TenantContext, params: BusinessParams) -> Result<Vec<Value>> {
         let actor = schema::actor(ctx, &params)?;
-        let e = self.engine(&ctx.tenant_id.0)?;
+        let e = self.engine(&ctx.tenant_id.0).await?;
         let query = format!(
             r#"match $u isa person,has identity_id {}; $t isa tenant,has tenant_id {};let $active=active_member($u,$t,{});$active==true;let $owner=role_at_least($u,$t,"owner",{});fetch {{"email":$u.email,"tenant_id":$t.tenant_id,"owner":$owner,"merchant_id":{},"live":{},"companies":[match $company isa tenant;let $member=active_member($u,$company,{});$member==true;fetch {{"id":$company.tenant_id,"domain":$company.name}};]}};"#,
             quoted(&actor),

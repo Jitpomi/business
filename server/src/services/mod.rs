@@ -1,6 +1,7 @@
 use dog_core::DogAppBuilder;
 use serde_json::Value;
 use std::sync::Arc;
+pub(crate) mod automation;
 pub(crate) mod data;
 pub(crate) mod portal;
 mod types;
@@ -26,6 +27,16 @@ pub fn configure(
             Arc::new(portal::PortalService::new(state, registry)),
         );
         portal::portal_shared::register_hooks(builder, authentication.clone())?;
+    }
+    if std::env::var("AUTOMATION_ENABLED").as_deref() == Ok("true") {
+        let template = builder
+            .get("automation.engine")
+            .ok_or_else(|| anyhow::anyhow!("Automation engine missing"))?;
+        builder.register_service(
+            "automation",
+            Arc::new(automation::AutomationService { template }),
+        );
+        automation::automation_shared::register_hooks(builder, authentication.clone())?;
     }
     crate::plugins::configuration::register_services(builder, authentication)?;
     Ok(())
