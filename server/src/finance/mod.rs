@@ -114,7 +114,7 @@ pub trait FinancialPlugin: Send + Sync {
     ) -> Result<String> {
         bail!("Saved methods unsupported")
     }
-    async fn detach_method(&self, _method: &str, _key: &str) -> Result<()> {
+    async fn detach_method(&self, _customer: &str, _method: &str, _key: &str) -> Result<()> {
         bail!("Saved methods unsupported")
     }
     async fn history(&self, _external: &str) -> Result<Value> {

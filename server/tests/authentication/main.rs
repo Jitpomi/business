@@ -317,6 +317,21 @@ async fn oidc_dog_auth_identity_linking_and_tenant_rbac_end_to_end() -> Result<(
         ensure!(status==200 && machine_rows.to_string().contains("files") && !machine_rows.to_string().contains("foreign"),"Service account did not use native data policies: {status}");
         let tx=driver.transaction(&db,typedb_driver::TransactionType::Write).await?;tx.query("match $bot isa service_account,has identity_id 'bot';update $bot has status 'suspended';").await?;tx.commit().await?;
         ensure!(request(&machine_app,"tenant-a",&machine_token,"read",query.clone()).await?.0==401,"Suspended service account retained access");
+        // Managed invitation acceptance uses signed provider email proof, with
+        // no financial runtime and no credentials in the domain graph.
+        let buyer=uuid::Uuid::new_v4().to_string();let customer=uuid::Uuid::new_v4().to_string();let invitation=uuid::Uuid::new_v4().to_string();
+        let until=(chrono::Utc::now()+chrono::Duration::hours(48)).naive_utc().format("%Y-%m-%dT%H:%M:%S%.6f").to_string();
+        let tx=driver.transaction(&db,typedb_driver::TransactionType::Write).await?;
+        tx.query(format!("match $merchant isa tenant,has tenant_id 'tenant-a';insert $buyer isa tenant,has tenant_id '{buyer}',has name 'Managed buyer',has status 'active',has revision 'invited';$c isa bill_customer,has bill_key '{customer}',has name 'Managed buyer',has bill_email 'invited@example.invalid',has bill_policy 'customer',has bill_choice 'manual',has bill_provider '',has bill_bindings '{{}}',has bill_method_plugin '',has bill_payment_method '',has bill_consent '',has bill_revision 'invited';(merchant:$merchant,buyer:$buyer,customer:$c) isa bill_account;$l isa account_invitation,has invitation_id '{invitation}',has invitation_email 'invited@example.invalid',has invitation_target '{buyer}',has invitation_revision 'invited',has invitation_expires {},has invitation_valid_until {until},has invitation_used false;",chrono::Utc::now().timestamp()+172800)).await?;tx.commit().await?;
+        let accept=|proof:&str|axum::http::Request::post("/authentication").header("content-type","application/json").header("x-service-method","account").body(axum::body::Body::from(json!({"operation":"accept_invitation","invitation_id":invitation,"accessToken":proof}).to_string()));
+        let mut invited=primary.claims();invited["sub"]=json!("invited-external");invited["email"]=json!("invited@example.invalid");invited["email_verified"]=json!(false);
+        ensure!(machine_app.clone().oneshot(accept(&primary.token(&invited,"at+jwt")?)?).await?.status()==403,"Unverified invitation email accepted");
+        invited["email_verified"]=json!(true);let invited_token=primary.token(&invited,"at+jwt")?;
+        ensure!(machine_app.clone().oneshot(accept(&invited_token)?).await?.status()==200,"Managed invitation acceptance failed");
+        ensure!(machine_app.clone().oneshot(accept(&invited_token)?).await?.status()==403,"Managed invitation replay accepted");
+        let (status,profile)=request(&machine_app,&buyer,&invited_token,"read",json!({"query":include_str!("../../public/queries/data/account-profile.tql")})).await?;
+        ensure!(status==200&&profile.to_string().contains("invited@example.invalid"),"Managed identity cannot discover its company: {status} {profile}");
+        ensure!(request(&machine_app,"tenant-a",&invited_token,"read",query.clone()).await?.0==401,"Invitation crossed tenant scope");
         let schema=driver.databases().get(&db).await?.schema().await?;ensure!(!schema.contains("password_hash") && !schema.contains("credential_version") && !schema.contains("auth_revocation"),"Authentication secrets/state remain in graph");
         Ok::<_,anyhow::Error>(())
     }.await;

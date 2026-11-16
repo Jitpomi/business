@@ -111,7 +111,7 @@ pub async fn check(engine: &Engine) -> Result<()> {
         "Invoice history failed: {status} {history}"
     );
     for (asset, variable, extra) in [
-        ("billing-customers", "c", ""),
+        ("billing-customers", "c", ",$buyer,$seller"),
         ("billing-plans", "p", ",$c"),
         ("billing-invoices", "i", ",$c"),
     ] {
@@ -144,14 +144,20 @@ pub async fn check(engine: &Engine) -> Result<()> {
     }
     let method = methods["methods"][0]["id"].as_str().unwrap();
     let current = engine.customer(customer).await?;
-    let (status,result)=call(&router,buyer,token,"/portal",Some(json!({"action":"set_default","customer_id":customer,"method_id":method,"expected_revision":current["revision"]}))).await?;
+    let plugin = methods["methods"][0]["plugin_id"].as_str().unwrap();
+    let q = |s: &str| serde_json::to_string(s).unwrap();
+    let query=format!("match $c isa bill_customer,has bill_key {},has bill_revision {};update $c has bill_choice 'manual';update $c has bill_consent '';update $c has bill_revision {};update $c has bill_method_plugin {};update $c has bill_payment_method {};fetch {{'id':$c.bill_key}};",q(customer),current["revision"],q(&uuid::Uuid::new_v4().to_string()),q(plugin),q(method));
+    let (status, result) = native_write(&router, buyer, token, &query).await?;
     ensure!(status == 200, "Default update failed: {status} {result}");
     let current = engine.customer(customer).await?;
     ensure!(
         current["choice"] == "manual" && current["consent"] == "",
         "Changing default retained consent"
     );
-    let (status,result)=call(&router,buyer,token,"/portal",Some(json!({"action":"remove_method","customer_id":customer,"method_id":method,"expected_revision":current["revision"]}))).await?;
+    let query=format!("match $c isa bill_customer,has bill_key {},has bill_revision {};update $c has bill_choice 'manual';update $c has bill_consent '';update $c has bill_revision {};update $c has bill_payment_method '';match $m isa bill_saved_method,has method_ref {},has method_plugin {};(customer:$c,method:$m) isa bill_method_owner;update $m has method_pending true;fetch {{'id':$c.bill_key}};",q(customer),current["revision"],q(&uuid::Uuid::new_v4().to_string()),q(method),q(plugin));
+    let (status, result) = native_write(&router, buyer, token, &query).await?;
+    ensure!(status == 200, "Removal intent: {status} {result}");
+    let(status,result)=call(&router,buyer,token,"/financial",Some(json!({"action":"detach_method","customer_id":customer,"method_id":method,"plugin_id":plugin}))).await?;
     ensure!(status == 200, "Remove method failed: {status} {result}");
     Ok(())
 }
@@ -182,4 +188,26 @@ async fn account_profile(
             .map(|a| a["data"].clone())
             .collect::<Vec<_>>()),
     ))
+}
+
+async fn native_write(
+    router: &axum::Router,
+    tenant: &str,
+    token: &str,
+    query: &str,
+) -> Result<(u16, Value)> {
+    let response = router
+        .clone()
+        .oneshot(
+            Request::post("/data")
+                .header("x-tenant-id", tenant)
+                .header("authorization", format!("Bearer {token}"))
+                .header("x-service-method", "write")
+                .header("content-type", "application/json")
+                .body(Body::from(json!({"query":query}).to_string()))?,
+        )
+        .await?;
+    let status = response.status().as_u16();
+    let bytes = to_bytes(response.into_body(), 1_000_000).await?;
+    Ok((status, serde_json::from_slice(&bytes)?))
 }

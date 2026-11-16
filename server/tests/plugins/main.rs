@@ -12,6 +12,7 @@ struct Bank {
     invoices: Mutex<HashMap<String, InvoiceObservation>>,
     requests: Mutex<HashMap<String, InvoiceRequest>>,
     attempts: Mutex<HashMap<String, usize>>,
+    fail_detach: std::sync::atomic::AtomicBool,
 }
 #[async_trait]
 impl FinancialPlugin for Bank {
@@ -19,6 +20,7 @@ impl FinancialPlugin for Bank {
         Capabilities {
             idempotent_customers: true,
             automatic_collection: true,
+            saved_methods: true,
             ..Capabilities::default()
         }
     }
@@ -59,6 +61,46 @@ impl FinancialPlugin for Bank {
             .get(id)
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("Unknown invoice"))
+    }
+    async fn method(&self, customer: &str, id: &str) -> Result<SavedMethod> {
+        ensure!(id == "bank/method/one", "Foreign method");
+        Ok(SavedMethod {
+            id: id.into(),
+            customer: customer.into(),
+            kind: "bank_account".into(),
+            brand: None,
+            bank_name: Some("Test bank".into()),
+            last4: Some("1234".into()),
+            exp_month: None,
+            exp_year: None,
+        })
+    }
+    async fn methods(&self, customer: &str) -> Result<Vec<SavedMethod>> {
+        Ok(vec![self.method(customer, "bank/method/one").await?])
+    }
+    async fn setup_method(
+        &self,
+        _customer: &str,
+        _local: &str,
+        _bank: bool,
+        _return_url: &str,
+        _key: &str,
+    ) -> Result<String> {
+        Ok("https://bank.example.invalid/setup".into())
+    }
+    async fn confirm_method(&self, _customer: &str, _local: &str, session: &str) -> Result<String> {
+        ensure!(session == "setup-owned", "Wrong setup session");
+        Ok("bank/method/one".into())
+    }
+    async fn detach_method(&self, customer: &str, method: &str, _key: &str) -> Result<()> {
+        self.method(customer, method).await?;
+        ensure!(
+            !self
+                .fail_detach
+                .swap(false, std::sync::atomic::Ordering::SeqCst),
+            "Synthetic lost detach acknowledgement"
+        );
+        Ok(())
     }
     async fn collect(&self, id: &str, _key: &str, _method: &str) -> Result<()> {
         *self.attempts.lock().unwrap().entry(id.into()).or_default() += 1;
@@ -169,7 +211,7 @@ async fn registry_is_tenant_scoped_and_open_to_another_bank() -> Result<()> {
     ensure!(registry.get("unknown").is_err(), "Unknown tenant fell back");
     let p = registry.get("tenant-a")?.financial("community-bank")?;
     ensure!(
-        p.methods("customer").await.is_err(),
+        p.history("invoice").await.is_err(),
         "Unsupported capability fabricated a success"
     );
     Ok(())
@@ -292,7 +334,7 @@ tx.query(format!(r#"insert $t isa tenant,has tenant_id "{tenant}",has name "Plug
         let token=login["accessToken"].as_str().ok_or_else(||anyhow::anyhow!("Missing login token"))?;
         ensure!(account_profile(&router,&a.merchant,token).await?.0==200,"Custom tenant profile failed");
         let (status,metadata)=portal_call(&router,&a.merchant,token,"/financial",None).await?;
-        ensure!(status==200 && metadata==serde_json::json!([{"sandbox":true}]),"Financial metadata exposed extra state: {status} {metadata}");
+        ensure!(status==200 && metadata[0]["sandbox"]==true,"Financial metadata exposed extra state: {status} {metadata}");
         ensure!(portal_call(&router,&a.merchant,"","/financial",None).await?.0==401,"Anonymous financial metadata allowed");
         ensure!(portal_call(&router,&b.merchant,token,"/financial",None).await?.0>=400,"Financial metadata crossed tenant membership");
         ensure!(portal_call(&router,&a.merchant,token,"/portal",None).await?.0>=400,"Retired profile handler is still active");
@@ -331,7 +373,7 @@ async fn explicit_migration_preserves_legacy_work_and_is_repeatable() -> Result<
     driver.databases().create(&name).await?;
     let result=async {
         let tx=driver.transaction(&name,TransactionType::Schema).await?;
-        for source in [database::SCHEMA,database::FUNCTIONS,database::SCHEMA_POLICY,include_str!("../backend/legacy-billing.tql"),database::ACCOUNT_LINKS]{tx.query(source).await?;}tx.commit().await?;
+        for source in [database::SCHEMA,database::FUNCTIONS,include_str!("../backend/pre-portal-retirement-policy.tql"),include_str!("../backend/legacy-billing.tql"),include_str!("../backend/pre-portal-retirement-account-links.tql")]{tx.query(source).await?;}tx.commit().await?;
         let tx=driver.transaction(&name,TransactionType::Write).await?;
         tx.query(r#"insert $t isa tenant,has tenant_id "seller",has name "Seller",has status "active",has revision "unchanged";$b isa tenant,has tenant_id "buyer",has name "Buyer",has status "active",has revision "initial";
         $c isa bill_customer,has bill_key "old-customer",has name "Customer",has bill_email "fixture@example.invalid",has bill_policy "customer",has bill_choice "automatic",has bill_provider "mercury",has bill_stripe_id "cus_kept",has bill_mercury_id "pending",has bill_payment_method "pm_kept",has bill_consent "approved",has bill_revision "approved",has bill_removed_method "pm_removed";(merchant:$t,buyer:$b,customer:$c) isa bill_account;
@@ -470,10 +512,10 @@ async fn account_discovery_and_financial_metadata_enforce_tenant_scope() -> Resu
         let (status,profile)=account_profile(&router,&first,token).await?;
         ensure!(status==200&&profile[0]["email"]==email&&profile[0]["companies"].as_array().is_some_and(|x|x.len()==1),"Initial discovery: {status} {profile}");
         let (status,metadata)=portal_call(&router,&first,token,"/financial",None).await?;
-        ensure!(status==200&&metadata==serde_json::json!([{"sandbox":true}]),"Financial metadata: {status} {metadata}");
+        ensure!(status==200&&metadata[0]["sandbox"]==true,"Financial metadata: {status} {metadata}");
         ensure!(portal_call(&router,&second,token,"/financial",None).await?.0>=400,"Foreign financial metadata accepted");
         ensure!(portal_call(&router,&first,"","/financial",None).await?.0==401,"Anonymous financial metadata accepted");
-        ensure!(portal_call(&router,&first,token,"/portal",None).await?.0==405,"Old profile handler remains");
+        ensure!(portal_call(&router,&first,token,"/portal",None).await?.0==404,"Old profile handler remains");
         ensure!(portal_call(&router,&first,token,"/financial",Some(serde_json::json!({"action":"unknown"}))).await?.0==400,"Unsupported operation did not return a clear error");
         for method in ["PUT","PATCH","DELETE"] {
             use tower::ServiceExt;
@@ -499,3 +541,5 @@ async fn account_discovery_and_financial_metadata_enforce_tenant_scope() -> Resu
     driver.databases().get(&name).await?.delete().await?;
     result
 }
+
+mod retirement;

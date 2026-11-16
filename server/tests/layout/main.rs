@@ -121,7 +121,7 @@ fn every_service_uses_the_common_dogrs_modules() -> Result<()> {
 fn business_rules_do_not_import_vendor_protocols_or_credentials() -> Result<()> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut files = Vec::new();
-    for dir in ["src/finance", "src/billing", "src/services/portal"] {
+    for dir in ["src/finance", "src/billing"] {
         rust_files(&root.join(dir), &mut files)?;
     }
     files.push(root.join("src/services/types.rs"));

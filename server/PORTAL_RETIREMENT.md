@@ -1,48 +1,71 @@
-# Portal retirement — implementation checkpoint
+# Portal retirement
 
-This is in progress. Do not remove `/portal` or deploy the website branch on its
-own. Development and production data have not been migrated by this checkpoint.
+The backend `/portal` service, route, hooks and duplicate commands are removed.
+The customer website remains at `/account/`.
 
-Implemented:
+| Responsibility | Boundary |
+| --- | --- |
+| Profile and company discovery | Frontend TypeQL, native context functions |
+| Customer/buyer creation and invitation lifecycle | TypeDB schema and policies |
+| Verified payment-method facts | Financial plugin bridge only |
+| Default choice, consent, removal intent | Atomic TypeDB transactions |
+| Confirmation and customer-bound detach | Tenant financial plugin |
+| Credential challenges, account linking/acceptance, recovery | Authentication plugins |
+| Reconciliation | Existing durable automation engine |
 
-- Account discovery is a frontend-owned TypeQL query through `/data`. Native
-  context functions return the current person's own profile and active company
-  labels. The existing strict tenant scope is unchanged.
-- `/financial` owns runtime mode, payment-method listing/setup and invoice
-  history. Native billing functions authorize access before provider calls.
-  Shared billing access contains no service-layer role list.
-- The website uses those boundaries. Card-specific setup/confirmation aliases
-  are removed in favor of generic payment-method names.
-- Existing invitation, consent, removal, provider binding and reconciliation
-  behavior is retained while its replacement is built.
+Permissions use the authenticated identity and tenant with server-owned policy
+time. Discovering a person's companies does not broaden `scope_tenant` for graph
+access. A company can both sell and buy; customer records expose the native buyer
+and seller checks so the website can show both sets of actions.
 
-Remaining before retirement:
+Automatic payments require a provider-verified active method, native ownership,
+applicable policy, active schedule and fresh explicit consent evidence. Stale
+revisions cannot commit. Saving or confirming a method does not authorize a
+charge. Removal intent commits before a provider call; a failed acknowledgement
+leaves removal pending and does not restore automatic payments. Detach is bound
+to the expected external customer and uses a stable retry key.
 
-1. Add native creation/renewal/revocation policies for billing customers, buyer
-   tenants and invitations. Keep proof-checked acceptance in the authentication
-   plugin boundary; keep credential-bearing links outside TypeDB and workflow
-   results. Preserve existing invitation IDs, revisions and used/expiry records.
-2. Persist provider-verified method facts, then enforce default selection,
-   automatic-payment consent and removal intent through native TypeDB policies.
-   Preserve stale-revision rejection, customer/provider binding, consent evidence
-   and retry-safe removal. Frontends must not manufacture verified method facts.
-3. Move confirmation's provider work to `/financial` and replace its implicit
-   default-setting write with an explicit native operation. Keep save-only setup
-   separate from authorization to charge.
-4. Use the existing automation engine for reconciliation; retain its observation
-   validation and uncertain-effect handling. Do not introduce another job engine.
-5. Replace the website's older local password flow with hosted Auth0 login and
-   managed invitation acceptance. Current local-auth mock tests do not establish
-   compatibility with the Auth0-only development service.
-6. Audit the website's global owner/customer view: a tenant can both sell and buy.
-   Preserve access to customer payment preferences when adding merchant features.
-7. Rehearse an additive migration on a restored backup. Before live development
-   changes, stop writers, take and restore-verify a fresh backup, retain all
-   business IDs, identity links, grants, invoice/payment history and ciphertext
-   references, and compare pre/post records. Do not reset or touch business_prod.
-8. Release backend and website together, verify hosted login and tenant isolation,
-   then delete the remaining PortalService, routes, hooks and obsolete callers.
-   Preserve historical audit records and useful migration/import tools.
+## Migration and rollback
 
-Checks run at this checkpoint are recorded in the change description. Passing a
-subset does not mean all dead code is removed or hosted customer flows are accepted.
+Use the existing free infrastructure. The explicit `migrate_portal` tool imports
+into a new development shadow database; it never resets or mutates the source.
+Existing business IDs, attributes, issuer/subject links, grants, invoice/payment
+history, workflow/run state and external ciphertext references are preserved.
+TypeDB remaps internal storage IIDs during import. Preservation is therefore
+verified using a full logical graph, including relation role bindings and record
+multiplicity, not by equating storage IIDs with application identity IDs.
+
+Historical invitation integer expiries are retained. The tool adds their exact
+UTC datetime equivalent without renewing an expired invitation. Existing consent
+evidence is retained without inventing timestamps. New consent uses native
+`consent_at`; verified-method facts are not fabricated from old provider IDs.
+Custom schema definitions absent from the canonical model block migration for
+preservation review instead of being silently dropped.
+
+1. Rehearse on an existing restore-verified backup with `--rehearse`.
+2. Stop the development service and confirm its writers have stopped.
+3. Export and restore-verify a fresh private backup.
+4. With `BUSINESS_WRITERS_STOPPED=true` and the matching backup directory, run
+   `migrate_portal --apply business_native_dev`. The new target is
+   `business_native_dev_v2`; an existing target is never overwritten.
+5. Keep the source database, original encryption key and durable secret store.
+6. Verify imported connection decryption and non-admin runtime access before
+   changing Render's database target and deploying the tested backend commit.
+7. Deploy the matching website Worker and verify hosted Auth0 login, acceptance,
+   native tenant isolation, payment settings and the retired route's HTTP 404.
+
+Rollback uses the retained source database with the previous backend and website
+releases. Do not roll back after accepting new writes without reconciling those
+writes first. Neither startup nor rollback instructions perform a destructive
+reset or credential rotation.
+
+## Verification
+
+The checks cover the actual website TypeQL against disposable TypeDB databases,
+independent bank/mail plugins and the existing background worker, including
+invitations, replay/expiry, default choice, consent, collection, reconciliation,
+failed detach and explicit retry. Existing recovery/reset races, identity linking,
+multiple authentication providers, machine identities and immediate revocation
+remain covered. Stripe TEST payment/receipt and decline/reminder checks exercise
+the built-in provider boundary. Hosted deployment acceptance is recorded separately
+from local and disposable-database test results.

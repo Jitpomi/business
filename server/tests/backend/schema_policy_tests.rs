@@ -98,8 +98,8 @@ async fn schema_policy_real_http_migration() -> Result<()> {
         let tx=driver.transaction(&database,TransactionType::Schema).await?;
         tx.query(SCHEMA).await.context("base schema")?;
         tx.query(FUNCTIONS).await.context("domain functions")?;
-        tx.query(SCHEMA_POLICY).await.context("schema policy batch")?;
         tx.query(BILLING).await.context("native billing model")?;
+        tx.query(SCHEMA_POLICY).await.context("schema policy batch")?;
         tx.commit().await?;
         let state=Arc::new(server::typedb::TypeDBState{driver:driver.clone(),database:database.clone()});
         let trusted=dog_typedb::TypeDBAdapter::new(state.clone());
@@ -140,7 +140,7 @@ async fn schema_policy_real_http_migration() -> Result<()> {
         }
         for query in [
             "match $c isa bill_customer; fetch {'secret':$c.bill_stripe_id};",
-            "match $c isa bill_customer,has bill_consent $secret; fetch {'secret':$secret};",
+            "match $i isa bill_invoice,has bill_external_id $secret; fetch {'secret':$secret};",
             "match $c isa bill_customer; update $c has bill_choice 'automatic'; fetch {'id':$c.bill_key};",
             "match $c isa bill_customer; delete $c;",
         ] {

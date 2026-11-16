@@ -14,7 +14,7 @@ entity principal @meta("dog.security.scope", "scope_principal") @meta("dog.secur
 entity identity @meta("dog.security.scope", "scope_identity") @meta("dog.security.read", "scope_identity");
 entity person @meta("dog.security.scope", "scope_identity") @meta("dog.security.read", "scope_identity");
 entity service_account @meta("dog.security.scope", "scope_identity") @meta("dog.security.read", "scope_identity");
-entity tenant @meta("dog.security.scope", "scope_tenant") @meta("dog.security.read", "scope_tenant"),
+entity tenant @meta("dog.security.scope", "scope_visible_tenant") @meta("dog.security.read", "scope_visible_tenant") @meta("dog.security.create", "create_bill_buyer"),
   owns revision @meta("dog.security.update", "update_tenant_revision");
 entity resource @meta("dog.security.scope", "scope_resource") @meta("dog.security.read", "read_resource") @meta("dog.security.create", "create_resource");
 entity team @meta("dog.security.scope", "scope_team") @meta("dog.security.read", "scope_team") @meta("dog.security.create", "create_team");
@@ -33,10 +33,8 @@ relation access_review @meta("dog.security.scope", "scope_review") @meta("dog.se
 fun request_now($tenant: string, $actor: string, $now: datetime) -> datetime @meta("dog.security.context", "true"):
   match $tenant != ""; $actor != ""; let $time=$now;
   return first $time;
-fun scope_tenant($tenant: string, $actor: string, $now: datetime, $t: tenant) -> boolean:
-  match $t has tenant_id == $tenant;
-    $i isa identity, has identity_id == $actor;
-    let $ok=active_member($i,$t,$now); $ok==true;
+fun scope_tenant($tenant: string,$actor: string,$now: datetime,$t: tenant) -> boolean:
+  match let $allowed=tenant_member_scope($tenant,$actor,$now,$t); $allowed==true;
   return check;
 fun request_manage($tenant: string, $actor: string, $now: datetime, $t: tenant) -> boolean @meta("dog.security.context", "true"):
   match let $scoped=scope_tenant($tenant,$actor,$now,$t); $scoped==true;
@@ -160,7 +158,7 @@ fun create_policy_scope($tenant: string, $actor: string, $now: datetime, $o: pol
   match let $ok=scope_policy_scope($tenant,$actor,$now,$o); $ok==true;
   return check;
 fun update_tenant_revision($tenant: string, $actor: string, $now: datetime, $t: tenant, $revision: string) -> boolean:
-  match let $ok=request_manage($tenant,$actor,$now,$t); $ok==true; $revision != "";
+  match {let $ok=request_manage($tenant,$actor,$now,$t); $ok==true;} or {let $buyer=pending_bill_buyer($tenant,$actor,$now,$t); $buyer==true;}; $revision != "";
   return check;
 fun create_exception_grant($tenant: string, $actor: string, $now: datetime, $g: exception_access_grant) -> boolean:
   match $g links(tenant:$t,grantee:$target,grantor:$by,resource:$r); $t isa tenant; $target isa principal; $by isa identity, has identity_id == $actor; $r isa resource;
@@ -248,3 +246,8 @@ fun request_companies($tenant: string, $actor: string, $now: datetime) -> {strin
     let $id=$id_attr; let $name=$name_attr;
     let $member=active_member($i,$company,$now); $member==true;
   return {$id,$name};
+
+fun request_identity($tenant: string,$actor: string,$now: datetime) -> identity @meta("dog.security.context","true"):
+  match $t isa tenant; let $ok=scope_tenant($tenant,$actor,$now,$t); $ok==true;
+    $i isa identity,has identity_id == $actor;
+  return first $i;

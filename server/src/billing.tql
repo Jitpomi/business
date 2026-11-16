@@ -2,12 +2,13 @@ define
 # Billing uses the same person/tenant model as IAM. Provider state is private:
 # frontend queries cannot manufacture payments, saved cards or consent evidence.
 attribute bill_key, value string;
+attribute bill_customer_claim, value string;
 attribute bill_email, value string;
 attribute bill_policy, value string @values("customer", "manual", "automatic");
 attribute bill_choice, value string @values("manual", "automatic");
 attribute bill_provider, value string;
-attribute bill_bindings @meta("dog.security.hidden", "true"), value string;
-attribute bill_method_plugin @meta("dog.security.hidden", "true"), value string;
+attribute bill_bindings, value string;
+attribute bill_method_plugin, value string;
 attribute bill_status, value string;
 attribute bill_amount, value integer @range(50..99999999);
 attribute bill_due_days, value integer @range(0..90);
@@ -17,8 +18,8 @@ attribute bill_sequence, value integer @range(0..);
 attribute bill_interval, value string @values("once", "week", "month", "year");
 attribute bill_stripe_id @meta("dog.security.hidden", "true"), value string;
 attribute bill_mercury_id @meta("dog.security.hidden", "true"), value string;
-attribute bill_payment_method @meta("dog.security.hidden", "true"), value string;
-attribute bill_consent @meta("dog.security.hidden", "true"), value string;
+attribute bill_payment_method, value string;
+attribute bill_consent, value string;
 attribute bill_external_id @meta("dog.security.hidden", "true"), value string;
 attribute bill_removed_method @meta("dog.security.hidden", "true"), value string;
 attribute bill_url, value string;
@@ -26,7 +27,7 @@ attribute bill_updated, value integer;
 attribute bill_revision, value string;
 attribute bill_history @meta("dog.security.hidden", "true"), value string;
 entity bill_customer,
-  owns bill_key @key, owns name @card(1), owns bill_email @card(1),
+  owns bill_key @key, owns bill_customer_claim @card(0..1) @unique, owns name @card(1), owns bill_email @card(1),
   owns bill_policy @card(1), owns bill_choice @card(1), owns bill_provider @card(1),
   owns bill_stripe_id @card(0..1), owns bill_mercury_id @card(0..1),
   owns bill_bindings @card(1), owns bill_method_plugin @card(1),
@@ -110,7 +111,15 @@ fun update_bill_policy($tenant: string, $actor: string, $now: datetime, $c: bill
   return check;
 fun update_bill_choice($tenant: string, $actor: string, $now: datetime, $c: bill_customer, $choice: string) -> boolean:
   match $t isa tenant, has tenant_id == $tenant; $i isa person, has identity_id == $actor;
-    let $ok=bill_buyer($i,$t,$c,$now); $ok==true; $choice=="manual";
+    let $ok=bill_buyer($i,$t,$c,$now); $ok==true;
+    { $choice=="manual"; } or {
+      $choice=="automatic"; $c has bill_policy $policy; $policy!="manual";
+      $c has bill_revision $rev, has bill_consent == $rev;
+      (customer:$c,actor:$i,evidence:$e) isa bill_consent_owner;
+      $e has bill_revision == $rev,has consent_at == $now;
+      let $method=usable_bill_method($c,$now); $method==true;
+      (customer:$c,plan:$p) isa bill_plan_owner; $p has bill_status "active";
+    };
   return check;
 fun create_bill_plan($tenant: string, $actor: string, $now: datetime, $p: bill_plan) -> boolean:
   match (customer:$c,plan:$p) isa bill_plan_owner; $c isa bill_customer;
@@ -141,3 +150,154 @@ entity bill_plan @meta("dog.security.scope", "scope_bill_plan") @meta("dog.secur
 entity bill_invoice @meta("dog.security.scope", "scope_bill_invoice") @meta("dog.security.read", "scope_bill_invoice");
 relation bill_plan_owner @meta("dog.security.scope", "scope_bill_plan_owner") @meta("dog.security.read", "scope_bill_plan_owner") @meta("dog.security.create", "create_bill_plan_owner");
 relation bill_invoice_owner @meta("dog.security.scope", "scope_bill_invoice_owner") @meta("dog.security.read", "scope_bill_invoice_owner");
+
+# Provider attestations are facts, not frontend assertions. No public create or
+# delete policy exists for these records or their ownership relation.
+attribute method_ref, value string;
+attribute method_plugin, value string;
+attribute method_automatic, value boolean;
+attribute method_pending, value boolean;
+attribute method_active, value boolean;
+attribute method_verified_at, value datetime;
+attribute consent_at, value datetime;
+entity bill_saved_method, owns bill_key @key, owns method_ref @card(1),
+  owns method_plugin @card(1), owns method_automatic @card(1),
+  owns method_pending @card(1), owns method_active @card(1), owns method_verified_at @card(1);
+relation bill_method_owner, relates customer @card(1), relates method @card(1);
+bill_customer plays bill_method_owner:customer;
+bill_saved_method plays bill_method_owner:method @card(1);
+bill_consent_evidence owns consent_at @card(0..1);
+fun scope_bill_method($tenant: string,$actor: string,$now: datetime,$m: bill_saved_method) -> boolean:
+  match (customer:$c,method:$m) isa bill_method_owner; $c isa bill_customer;
+    $t isa tenant,has tenant_id == $tenant; $i isa identity,has identity_id == $actor;
+    let $ok=bill_buyer($i,$t,$c,$now); $ok==true;
+  return check;
+fun usable_bill_method($c: bill_customer,$now: datetime) -> boolean:
+  match $c has bill_payment_method $ref,has bill_method_plugin $plugin;
+    (customer:$c,method:$m) isa bill_method_owner;
+    $m has method_ref == $ref,has method_plugin == $plugin,
+      has method_automatic true,has method_pending false,has method_active true,has method_verified_at $verified;
+    let $fresh=$now - PT10M; $verified>=$fresh; $verified<=$now;
+  return check;
+fun bill_preference_editor($tenant: string,$actor: string,$now: datetime,$c: bill_customer) -> boolean:
+  match $t isa tenant,has tenant_id == $tenant; $i isa identity,has identity_id == $actor;
+    let $buyer=bill_buyer($i,$t,$c,$now); $buyer==true;
+    $c has bill_choice "manual"; let $safe=bill_unconsented($c); $safe==true;
+  return check;
+fun update_bill_method_plugin($tenant: string,$actor: string,$now: datetime,$c: bill_customer,$plugin: string) -> boolean:
+  match let $ok=bill_preference_editor($tenant,$actor,$now,$c); $ok==true;
+    (customer:$c,method:$m) isa bill_method_owner;
+    $m has method_plugin == $plugin,has method_pending false,has method_active true;
+  return check;
+fun update_bill_method($tenant: string,$actor: string,$now: datetime,$c: bill_customer,$ref: string) -> boolean:
+  match let $ok=bill_preference_editor($tenant,$actor,$now,$c); $ok==true;
+    {$ref=="";} or {
+      $c has bill_method_plugin $plugin;
+      (customer:$c,method:$m) isa bill_method_owner;
+      $m has method_ref == $ref,has method_plugin == $plugin,has method_pending false,has method_active true;
+    };
+  return check;
+fun scope_bill_consent($tenant: string,$actor: string,$now: datetime,$e: bill_consent_evidence) -> boolean:
+  match (customer:$c,evidence:$e) isa bill_consent_owner; $c isa bill_customer;
+    let $ok=scope_bill_customer($tenant,$actor,$now,$c); $ok==true;
+  return check;
+fun create_bill_consent($tenant: string,$actor: string,$now: datetime,$e: bill_consent_evidence) -> boolean:
+  match (customer:$c,actor:$by,evidence:$e) isa bill_consent_owner;
+    $by isa identity,has identity_id == $actor; $c isa bill_customer,has bill_revision $rev;
+    let $ok=bill_preference_editor($tenant,$actor,$now,$c); $ok==true;
+    $e has bill_revision == $rev,has consent_at == $now;
+  return check;
+fun scope_bill_consent_owner($tenant: string,$actor: string,$now: datetime,$o: bill_consent_owner) -> boolean:
+  match $o links(evidence:$e); $e isa bill_consent_evidence;
+    let $ok=scope_bill_consent($tenant,$actor,$now,$e); $ok==true;
+  return check;
+fun create_bill_consent_owner($tenant: string,$actor: string,$now: datetime,$o: bill_consent_owner) -> boolean:
+  match $o links(evidence:$e); $e isa bill_consent_evidence;
+    let $ok=create_bill_consent($tenant,$actor,$now,$e); $ok==true;
+  return check;
+fun update_bill_consent($tenant: string,$actor: string,$now: datetime,$c: bill_customer,$rev: string) -> boolean:
+  match $t isa tenant,has tenant_id == $tenant; $i isa identity,has identity_id == $actor;
+    let $ok=bill_buyer($i,$t,$c,$now); $ok==true;
+    {$rev=="";} or {
+      $c has bill_revision == $rev,has bill_choice "manual",has bill_policy $policy; $policy!="manual";
+      let $method=usable_bill_method($c,$now); $method==true;
+      (customer:$c,actor:$i,evidence:$e) isa bill_consent_owner;
+      $e has bill_revision == $rev,has consent_at == $now;
+    };
+  return check;
+fun update_method_pending($tenant: string,$actor: string,$now: datetime,$m: bill_saved_method,$pending: boolean) -> boolean:
+  match let $ok=scope_bill_method($tenant,$actor,$now,$m); $ok==true; $pending==true;
+    (customer:$c,method:$m) isa bill_method_owner;
+    $m has method_ref $ref,has method_plugin $plugin;
+    not {$c has bill_payment_method == $ref,has bill_method_plugin == $plugin;};
+  return check;
+entity bill_saved_method @meta("dog.security.scope","scope_bill_method") @meta("dog.security.read","scope_bill_method"),
+  owns method_pending @meta("dog.security.update","update_method_pending");
+entity bill_customer,
+  owns bill_method_plugin @meta("dog.security.update","update_bill_method_plugin"),
+  owns bill_payment_method @meta("dog.security.update","update_bill_method"),
+  owns bill_consent @meta("dog.security.update","update_bill_consent");
+entity bill_consent_evidence @meta("dog.security.scope","scope_bill_consent") @meta("dog.security.read","scope_bill_consent") @meta("dog.security.create","create_bill_consent");
+relation bill_consent_owner @meta("dog.security.scope","scope_bill_consent_owner") @meta("dog.security.read","scope_bill_consent_owner") @meta("dog.security.create","create_bill_consent_owner");
+
+# Counterparty visibility is deliberately separate from scope_tenant. It exposes
+# a billing buyer's tenant record, never its resources, memberships or IAM graph.
+fun pending_bill_buyer($tenant: string,$actor: string,$now: datetime,$b: tenant) -> boolean:
+  match $t isa tenant,has tenant_id == $tenant; $i isa identity,has identity_id == $actor;
+    let $owner=role_at_least($i,$t,"owner",$now); $owner==true;
+    (merchant:$t,buyer:$b) isa bill_account;
+    not {(tenant:$b) isa membership;};
+  return check;
+fun scope_visible_tenant($tenant: string,$actor: string,$now: datetime,$b: tenant) -> boolean:
+  match {let $own=tenant_member_scope($tenant,$actor,$now,$b); $own==true;} or {
+    $t isa tenant,has tenant_id == $tenant; $i isa identity,has identity_id == $actor;
+    let $owner=role_at_least($i,$t,"owner",$now); $owner==true;
+    (merchant:$t,buyer:$b) isa bill_account;
+  };
+  return check;
+fun create_bill_customer($tenant: string,$actor: string,$now: datetime,$c: bill_customer) -> boolean:
+  match $t isa tenant,has tenant_id == $tenant; $i isa identity,has identity_id == $actor;
+    let $owner=role_at_least($i,$t,"owner",$now); $owner==true;
+    (merchant:$t,buyer:$b,customer:$c) isa bill_account;
+    $b has status "active"; not {(tenant:$b) isa membership;};
+    $c has bill_policy "customer",has bill_choice "manual",has bill_bindings "{}",
+      has bill_method_plugin "",has bill_payment_method "",has bill_consent "",has bill_revision $rev;
+    $rev!=""; not {(customer:$c) isa bill_plan_owner;};
+    $c has bill_email $email;
+    let $claim=$tenant+":"+$email; $c has bill_customer_claim == $claim;
+    not {(merchant:$t,customer:$other) isa bill_account; $other has bill_email == $email; not {$other is $c;};};
+  return check;
+fun create_bill_buyer($tenant: string,$actor: string,$now: datetime,$b: tenant) -> boolean:
+  match let $ok=pending_bill_buyer($tenant,$actor,$now,$b); $ok==true;
+    $b has tenant_id $id,has status "active",has revision $revision; $id!=$tenant; $revision!="";
+    (buyer:$b,customer:$c) isa bill_account; $c isa bill_customer;
+    let $safe=create_bill_customer($tenant,$actor,$now,$c); $safe==true;
+    not {(merchant:$b) isa bill_account;};
+    not {(merchant:$other,buyer:$b) isa bill_account; $other has tenant_id $other_id; $other_id!=$tenant;};
+  return check;
+fun scope_bill_account($tenant: string,$actor: string,$now: datetime,$a: bill_account) -> boolean:
+  match $a links(customer:$c); $c isa bill_customer;
+    let $ok=scope_bill_customer($tenant,$actor,$now,$c); $ok==true;
+  return check;
+fun create_bill_account($tenant: string,$actor: string,$now: datetime,$a: bill_account) -> boolean:
+  match $a links(customer:$c,buyer:$b); $c isa bill_customer; $b isa tenant;
+    let $ok=create_bill_customer($tenant,$actor,$now,$c); $ok==true;
+    let $safe=create_bill_buyer($tenant,$actor,$now,$b); $safe==true;
+  return check;
+entity bill_customer @meta("dog.security.create","create_bill_customer");
+relation bill_account @meta("dog.security.scope","scope_bill_account") @meta("dog.security.read","scope_bill_account") @meta("dog.security.create","create_bill_account");
+
+fun scope_bill_method_owner($tenant: string,$actor: string,$now: datetime,$o: bill_method_owner) -> boolean:
+  match $o links(method:$m); $m isa bill_saved_method;
+    let $ok=scope_bill_method($tenant,$actor,$now,$m); $ok==true;
+  return check;
+relation bill_method_owner @meta("dog.security.scope","scope_bill_method_owner") @meta("dog.security.read","scope_bill_method_owner");
+
+fun request_bill_buyer($tenant: string,$actor: string,$now: datetime,$c: bill_customer) -> boolean @meta("dog.security.context","true"):
+  match $t isa tenant,has tenant_id == $tenant; $i isa identity,has identity_id == $actor;
+    let $allowed=bill_buyer($i,$t,$c,$now);
+  return first $allowed;
+fun request_bill_seller($tenant: string,$actor: string,$now: datetime,$c: bill_customer) -> boolean @meta("dog.security.context","true"):
+  match $t isa tenant,has tenant_id == $tenant; $i isa identity,has identity_id == $actor;
+    let $allowed=bill_seller($i,$t,$c,$now);
+  return first $allowed;

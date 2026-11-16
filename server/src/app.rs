@@ -109,10 +109,6 @@ pub fn router(http: DogHttpService<Value, BusinessParams>) -> axum::Router {
         .route_service("/authentication", endpoint(http.clone()))
         .route_service("/data", endpoint(http.clone()))
         .route(
-            "/portal",
-            axum::routing::post_service(endpoint(http.clone())),
-        )
-        .route(
             "/financial",
             axum::routing::get_service(endpoint(http.clone())).post_service(endpoint(http.clone())),
         )

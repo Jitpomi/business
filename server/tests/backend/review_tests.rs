@@ -28,7 +28,7 @@ async fn concurrent_review_reproduction() -> Result<()> {
     driver.databases().create(&database).await?;
     let outcome = std::panic::AssertUnwindSafe(async {
         let tx = driver.transaction(&database, TransactionType::Schema).await?;
-        for source in [SCHEMA, FUNCTIONS, SCHEMA_POLICY, BILLING] { tx.query(source).await?; }
+        for source in [SCHEMA, FUNCTIONS, BILLING, SCHEMA_POLICY] { tx.query(source).await?; }
         tx.commit().await?;
         let state = Arc::new(server::typedb::TypeDBState { driver: driver.clone(), database: database.clone() });
         let trusted = dog_typedb::TypeDBAdapter::new(state.clone());

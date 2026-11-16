@@ -20,3 +20,5 @@ pub mod automation;
 pub(crate) mod storage;
 
 pub mod credential_migration;
+
+pub mod portal_migration;

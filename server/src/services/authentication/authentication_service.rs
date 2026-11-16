@@ -9,6 +9,7 @@ pub struct PluginAuthentication {
     pub auth: Arc<AuthService>,
     pub plugins: Arc<Registry>,
     pub state: Arc<TypeDBState>,
+    pub financial: Arc<crate::finance::TenantRegistry>,
 }
 #[async_trait::async_trait]
 impl DogService<Value, BusinessParams> for PluginAuthentication {
@@ -62,9 +63,26 @@ impl DogService<Value, BusinessParams> for PluginAuthentication {
         let input = data.ok_or_else(|| {
             dog_core::DogError::bad_request("Missing account request").into_anyhow()
         })?;
+        if input["operation"] == "accept_invitation" {
+            return self.accept_invitation(&input).await;
+        }
+        if input["operation"] == "invitation" {
+            return self.invitation(ctx, &input, params).await;
+        }
+        let operation = input["operation"].as_str().unwrap_or("");
+        ensure!(
+            matches!(
+                operation,
+                "link" | "login" | "signup" | "manage" | "recover" | "logout"
+            ),
+            dog_core::DogError::bad_request("Unsupported authentication operation").into_anyhow()
+        );
         let plugin = self
             .plugins
-            .plugin(input["plugin"].as_str().unwrap_or(""))?;
+            .plugin(input["plugin"].as_str().unwrap_or(""))
+            .map_err(|_| {
+                dog_core::DogError::bad_request("Unknown authentication plugin").into_anyhow()
+            })?;
         let operation = input["operation"].as_str().unwrap_or("");
         if operation != "link" {
             return plugin.account(operation, &input).await;

@@ -311,12 +311,31 @@ impl FinancialPlugin for BuiltinFinancial {
         self.method(customer, method).await?;
         Ok(method.into())
     }
-    async fn detach_method(&self, method: &str, key: &str) -> Result<()> {
+    async fn detach_method(&self, customer: &str, method: &str, key: &str) -> Result<()> {
         ensure!(
             self.capabilities().saved_methods,
             "Saved methods unsupported"
         );
         safe_id(method)?;
+        let current = self
+            .transport
+            .stripe(Method::GET, &format!("/payment_methods/{method}"), "", &[])
+            .await?;
+        ensure!(
+            current["object"] == "payment_method"
+                && current["id"] == method
+                && current["livemode"].as_bool() == Some(self.transport.live)
+                && current
+                    .as_object()
+                    .is_some_and(|o| o.contains_key("customer")),
+            "Invalid payment method observation"
+        );
+        // Stripe's detached methods are terminal. A lost acknowledgement can be
+        // reconciled without deleting a method now owned by another customer.
+        if current["customer"].is_null() {
+            return Ok(());
+        }
+        self.saved(&current, customer)?;
         self.transport
             .stripe(
                 Method::POST,

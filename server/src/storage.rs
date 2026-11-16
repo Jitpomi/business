@@ -49,8 +49,13 @@ pub async fn write(state: &TypeDBState, query: &str) -> Result<Value> {
                 tx.close().await?;
                 let rows = result?;
                 ensure!(
+                    !rows.is_empty(),
+                    dog_core::DogError::conflict("The record changed or is no longer available")
+                        .into_anyhow()
+                );
+                ensure!(
                     rows.len() == 1,
-                    "Business claim unavailable or ambiguous; nothing committed"
+                    "Ambiguous business claim; nothing committed"
                 );
                 unreachable!()
             }

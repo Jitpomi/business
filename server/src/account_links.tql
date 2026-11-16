@@ -8,3 +8,34 @@ attribute invitation_used, value boolean;
 entity account_invitation, owns invitation_id @key, owns invitation_email @card(1),
  owns invitation_target @card(1), owns invitation_revision @card(1),
  owns invitation_expires @card(1), owns invitation_used @card(1);
+
+attribute invitation_valid_until, value datetime;
+account_invitation owns invitation_valid_until @card(0..1);
+fun scope_invitation($tenant: string,$actor: string,$now: datetime,$l: account_invitation) -> boolean:
+  match $l has invitation_target $target;
+    $b isa tenant,has tenant_id == $target; $t isa tenant,has tenant_id == $tenant;
+    (merchant:$t,buyer:$b) isa bill_account;
+    $i isa identity,has identity_id == $actor;
+    let $ok=role_at_least($i,$t,"owner",$now); $ok==true;
+  return check;
+fun create_invitation($tenant: string,$actor: string,$now: datetime,$l: account_invitation) -> boolean:
+  match let $ok=scope_invitation($tenant,$actor,$now,$l); $ok==true;
+    $l has invitation_target $target,has invitation_email $email,has invitation_revision $rev,
+      has invitation_used false,has invitation_valid_until $until;
+    $until>$now; let $max=$now+P2D; $until<=$max;
+    $b isa tenant,has tenant_id == $target,has revision == $rev,has status "active";
+    let $pending=pending_bill_buyer($tenant,$actor,$now,$b); $pending==true;
+    (buyer:$b,customer:$c) isa bill_account; $c has bill_email == $email;
+  return check;
+entity account_invitation @meta("dog.security.scope","scope_invitation") @meta("dog.security.read","scope_invitation") @meta("dog.security.create","create_invitation");
+
+# Authentication supplies a provider-verified email (or a valid local challenge).
+# The graph alone decides which pending invitation can materialise membership.
+fun invitation_target_for_email($merchant: tenant,$l: account_invitation,$email: string,$now: datetime) -> tenant:
+  match $l has invitation_email == $email,has invitation_used false,
+      has invitation_target $target,has invitation_revision $revision,has invitation_valid_until $until;
+    $until>$now;
+    $b isa tenant,has tenant_id == $target,has status "active",has revision == $revision;
+    (merchant:$merchant,buyer:$b) isa bill_account;
+    not {(tenant:$b) isa membership;};
+  return first $b;

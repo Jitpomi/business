@@ -4,7 +4,6 @@ use std::sync::Arc;
 pub(crate) mod automation;
 pub(crate) mod data;
 pub(crate) mod financial;
-pub(crate) mod portal;
 mod types;
 pub use types::*;
 pub(crate) mod authentication;
@@ -25,6 +24,7 @@ pub fn configure(
                 auth,
                 plugins,
                 state: state.clone(),
+                financial: registry.clone(),
             },
         ),
     );
@@ -35,11 +35,6 @@ pub fn configure(
         .ok_or_else(|| anyhow::anyhow!("Authentication service missing"))?;
     data::data_shared::register_hooks(builder, authentication.clone())?;
     if std::env::var("BILLING_ENABLED").as_deref() == Ok("true") {
-        builder.register_service(
-            "portal",
-            Arc::new(portal::PortalService::new(state.clone(), registry.clone())),
-        );
-        portal::portal_shared::register_hooks(builder, authentication.clone())?;
         builder.register_service(
             "financial",
             Arc::new(financial::FinancialService::new(state, registry)),

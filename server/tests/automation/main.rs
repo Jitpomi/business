@@ -304,8 +304,8 @@ async fn additive_install_checks_backup_and_preserves_existing_work() -> Result<
         for source in [
             server::database::SCHEMA,
             server::database::FUNCTIONS,
-            server::database::SCHEMA_POLICY,
             server::database::BILLING,
+            server::database::SCHEMA_POLICY,
             server::database::ACCOUNT_LINKS,
         ] {
             tx.query(source).await?;

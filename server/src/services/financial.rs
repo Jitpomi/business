@@ -46,7 +46,9 @@ impl DogService<Value, BusinessParams> for FinancialService {
             DogError::forbidden("Financial configuration unavailable").into_anyhow()
         );
         let runtime = self.access.registry.resolve(&ctx.tenant_id.0).await?;
-        Ok(vec![json!({"sandbox":runtime.sandbox})])
+        Ok(vec![
+            json!({"sandbox":runtime.sandbox,"default_financial":runtime.default_financial}),
+        ])
     }
     async fn create(
         &self,
@@ -57,7 +59,10 @@ impl DogService<Value, BusinessParams> for FinancialService {
         let actor = actor(ctx, &params)?;
         let action = field(&data, "action")?;
         ensure!(
-            matches!(action, "history" | "payment_methods" | "setup_method"),
+            matches!(
+                action,
+                "history" | "payment_methods" | "setup_method" | "confirm_method" | "detach_method"
+            ),
             DogError::bad_request("Unsupported financial plugin operation").into_anyhow()
         );
         let e = self.access.engine_for(ctx, &actor, &data).await?;
@@ -98,7 +103,11 @@ impl DogService<Value, BusinessParams> for FinancialService {
         if action == "payment_methods" && bindings.values().all(String::is_empty) {
             return Ok(json!({"methods":[]}));
         }
-        let plugin_id = e.method_plugin(&customer)?;
+        let plugin_id = data["plugin_id"]
+            .as_str()
+            .map(str::to_owned)
+            .map(Ok)
+            .unwrap_or_else(|| e.method_plugin(&customer))?;
         let plugin = e.runtime.financial(&plugin_id)?;
         plugin.ready()?;
         ensure!(
@@ -118,13 +127,8 @@ impl DogService<Value, BusinessParams> for FinancialService {
                         method.customer == external,
                         "Payment method customer mismatch"
                     );
-                    let pending = e
-                        .read(format!(
-                            "{} $c has bill_removed_method {};fetch {{'id':$c.bill_key}};",
-                            e.customer_match(&id)?,
-                            quoted(&format!("{plugin_id}:{}", method.id))
-                        ))
-                        .await?;
+                    e.attest_method(&id, &plugin_id, &method).await?;
+                    let pending = e.method_removal(&id, &plugin_id, &method.id).await?;
                     let default = customer["payment_method"] == method.id
                         && customer["method_plugin"] == plugin_id;
                     let mut value = serde_json::to_value(method)?;
@@ -141,6 +145,35 @@ impl DogService<Value, BusinessParams> for FinancialService {
                     methods.push(value);
                 }
                 Ok(json!({"methods":methods}))
+            }
+            "confirm_method" => {
+                let method = plugin
+                    .confirm_method(&external, &id, field(&data, "session_id")?)
+                    .await?;
+                let verified = plugin.method(&external, &method).await?;
+                ensure!(
+                    verified.customer == external && verified.id == method,
+                    "Saved method binding mismatch"
+                );
+                e.attest_method(&id, &plugin_id, &verified).await?;
+                Ok(json!({"method_id":method,"plugin_id":plugin_id,"setup_purpose":"save_only"}))
+            }
+            "detach_method" => {
+                let method = field(&data, "method_id")?;
+                let pending = e.method_removal(&id, &plugin_id, method).await?;
+                ensure!(
+                    pending.len() == 1,
+                    DogError::conflict("Record removal intent through /data first").into_anyhow()
+                );
+                plugin
+                    .detach_method(
+                        &external,
+                        method,
+                        &format!("detach-{id}-{plugin_id}-{method}"),
+                    )
+                    .await.map_err(|error|DogError::bad_gateway("Removal is pending. Refresh and retry when your payment provider is available.").with_source(error).into_anyhow())?;
+                e.write(format!("{} $m isa bill_saved_method,has bill_key {}; (customer:$c,method:$m) isa bill_method_owner;select $t,$m;distinct;update $m has method_active false;fetch {{'id':$m.bill_key}};",e.customer_match(&id)?,quoted(field(&pending[0],"id")?))).await?;
+                Ok(json!({"removed":true}))
             }
             "setup_method" => {
                 ensure!(

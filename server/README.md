@@ -282,7 +282,7 @@ receipts and reminders. `src/finance/` defines business-owned financial and
 notification contracts. `src/plugins/` contains Stripe, Mercury and Resend
 implementations and trusted configuration. See [plugin architecture and migration](FINANCIAL_PLUGINS.md).
 
-The same canonical tenant/account graph backs protected `/data` and `/portal`.
+The canonical tenant/account graph backs `/data`, `/financial`, authentication plugins and durable automation. `/portal` is removed.
 Provider references, consent and credentials remain private. Credentials are encrypted in private connection records and excluded from
 ordinary business records and API responses. Notification delivery does not require a financial plugin.
 
@@ -385,11 +385,19 @@ Account discovery uses `account-profile.tql`, with server-context functions
 own company projections without broadening `scope_tenant` for graph access.
 Financial runtime mode, saved-method listing/setup and invoice history use
 `/financial`, with native TypeDB membership and billing permission checks.
-`/portal` no longer exposes profile discovery; invitation, confirmation,
-consent/preferences and reconciliation commands remain there until their native
-or automation replacements are completed. This is an intermediate refactor, not
-a completed portal retirement. The backend and website branches must be released
-together after a backed-up additive development schema migration.
+Native TypeDB policies now enforce customer/invitation creation, renewal and
+revocation, verified-method selection, fresh explicit consent and removal intent.
+`/financial` handles confirmation and detach as provider operations. Reconciliation
+runs through the existing automation engine. There is no backend `/portal`
+registration, route or compatibility redirect.
+
+The website supports hosted Auth0 authorization-code login with PKCE, an encrypted
+HttpOnly session cookie, and proof-checked invitation acceptance. Optional local
+account recovery remains isolated in the authentication plugin layer.
+
+See `PORTAL_RETIREMENT.md` for the shadow migration, preservation evidence and
+release checks. Do not run the new backend against the old development schema;
+startup rejects it and never performs an implicit migration.
 
 The portal now adapts billing reads/writes to protected canonical data queries.
 The approved sandbox accounts were migrated from `business_dev` without changing
@@ -403,7 +411,7 @@ Backend health alone does not establish website acceptance.
 Install the additive `account_links.tql` schema explicitly with
 `BUSINESS_ENV_FILE=/private/development-operator.env cargo run --locked --bin install_account_links`.
 This command only targets `business_native_dev`; startup never migrates data.
-Merchant owners invite, renew or revoke through authenticated `/portal` actions.
+Merchant owners create, renew or revoke invitations through native `/data` queries. Authentication plugin account operations prepare private delivery links after that transaction commits.
 Acceptance (`POST /onboarding`) and reset (`POST /recovery`) require the gateway
 secret and are rate limited at the website. Password work has a separate bounded
 admission budget. These handlers reject live provider mode.

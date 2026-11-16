@@ -78,25 +78,6 @@ impl BillingAccess {
         }
         Ok(permission)
     }
-    pub(crate) async fn payment(
-        &self,
-        e: &Engine,
-        customer: &Value,
-        method: &str,
-    ) -> Result<crate::finance::SavedMethod> {
-        let plugin_id = e.method_plugin(customer)?;
-        let external = Engine::binding(customer, &plugin_id)?;
-        let saved = e
-            .runtime
-            .financial(&plugin_id)?
-            .method(&external, method)
-            .await?;
-        ensure!(
-            saved.customer == external && saved.id == method,
-            "Saved method binding mismatch"
-        );
-        Ok(saved)
-    }
 }
 fn now() -> String {
     chrono::Utc::now()

@@ -23,6 +23,7 @@ tracing = "0.1.41"
 regex = "1.11.1"
 uuid = { version = "1.11.0", features = ["v4"] }
 typedb-driver = "=3.13.6"
+typeql = "=3.13.4"
 
 sha2 = "0.10"
 hmac = "0.12"

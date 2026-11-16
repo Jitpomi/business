@@ -129,7 +129,10 @@ impl DogService<Value, BusinessParams> for AutomationService {
         let actor = super::automation_schema::actor(ctx, &params)?;
         let e = self.engine(&ctx.tenant_id.0)?;
         e.store.owner(&actor).await?;
-        match serde_json::from_value::<Command>(data)? {
+        match serde_json::from_value::<Command>(data).map_err(|_| {
+            dog_core::DogError::bad_request("Unsupported or malformed automation request")
+                .into_anyhow()
+        })? {
             Command::List { kind, after, limit } => {
                 super::automation_schema::kind(&kind)?;
                 let rows = e.store.page(&kind, after.as_deref(), limit).await?;
