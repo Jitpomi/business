@@ -125,6 +125,7 @@ fn business_rules_do_not_import_vendor_protocols_or_credentials() -> Result<()> 
         rust_files(&root.join(dir), &mut files)?;
     }
     files.push(root.join("src/services/types.rs"));
+    files.push(root.join("src/services/financial.rs"));
     for file in files {
         let source = std::fs::read_to_string(&file)?;
         for forbidden in [

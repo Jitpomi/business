@@ -18,6 +18,9 @@ async fn call(
         .method(if data.is_some() { "POST" } else { "GET" })
         .header("x-tenant-id", tenant)
         .header("content-type", "application/json");
+    if path == "/data" {
+        request = request.header("x-service-method", "read");
+    }
     if !token.is_empty() {
         request = request.header("authorization", format!("Bearer {token}"));
     }
@@ -51,13 +54,13 @@ pub async fn check(engine: &Engine) -> Result<()> {
     )?;
     let router = server::app::router(http);
     ensure!(
-        call(&router, buyer, "", "/portal", None).await?.0 == 401,
+        account_profile(&router, buyer, "").await?.0 == 401,
         "Anonymous portal allowed"
     );
     let (status,login)=call(&router,"account","","/authentication",Some(json!({"strategy":"account","email":"portal@example.com","password":"portal-sandbox-test-password"}))).await?;
     ensure!(status == 200, "Portal login failed {status}");
     let token = login["accessToken"].as_str().unwrap();
-    let (status, profile) = call(&router, buyer, token, "/portal", None).await?;
+    let (status, profile) = account_profile(&router, buyer, token).await?;
     ensure!(
         status == 200
             && profile[0]["email"] == "portal@example.com"
@@ -70,7 +73,7 @@ pub async fn check(engine: &Engine) -> Result<()> {
         &router,
         buyer,
         token,
-        "/portal",
+        "/financial",
         Some(json!({"action":"payment_methods","customer_id":customer})),
     )
     .await?;
@@ -83,7 +86,7 @@ pub async fn check(engine: &Engine) -> Result<()> {
             &router,
             buyer,
             token,
-            "/portal",
+            "/financial",
             Some(json!({"action":"payment_methods","customer_id":other}))
         )
         .await?
@@ -91,10 +94,7 @@ pub async fn check(engine: &Engine) -> Result<()> {
         "Cross-customer payment access allowed"
     );
     ensure!(
-        call(&router, &engine.merchant, token, "/portal", None)
-            .await?
-            .0
-            >= 400,
+        account_profile(&router, &engine.merchant, token).await?.0 >= 400,
         "Cross-tenant profile allowed"
     );
     let invoices=engine.read(format!("{} (customer:$c,plan:$p) isa bill_plan_owner;(plan:$p,invoice:$i) isa bill_invoice_owner;fetch {{'id':$i.bill_key}};",engine.customer_match(customer)?)).await?;
@@ -102,7 +102,7 @@ pub async fn check(engine: &Engine) -> Result<()> {
         &router,
         buyer,
         token,
-        "/portal",
+        "/financial",
         Some(json!({"action":"history","invoice_id":invoices[0]["id"]})),
     )
     .await?;
@@ -154,4 +154,32 @@ pub async fn check(engine: &Engine) -> Result<()> {
     let (status,result)=call(&router,buyer,token,"/portal",Some(json!({"action":"remove_method","customer_id":customer,"method_id":method,"expected_revision":current["revision"]}))).await?;
     ensure!(status == 200, "Remove method failed: {status} {result}");
     Ok(())
+}
+
+async fn account_profile(
+    router: &axum::Router,
+    tenant: &str,
+    token: &str,
+) -> Result<(u16, serde_json::Value)> {
+    let (status, body) = call(
+        router,
+        tenant,
+        token,
+        "/data",
+        Some(json!({"query":include_str!("../../public/queries/data/account-profile.tql")})),
+    )
+    .await?;
+    if status != 200 {
+        return Ok((status, body));
+    }
+    let answers = body["ok"]["answers"]
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("Missing account answers: {body}"))?;
+    Ok((
+        status,
+        json!(answers
+            .iter()
+            .map(|a| a["data"].clone())
+            .collect::<Vec<_>>()),
+    ))
 }

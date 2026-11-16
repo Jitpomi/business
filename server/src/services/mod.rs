@@ -3,6 +3,7 @@ use serde_json::Value;
 use std::sync::Arc;
 pub(crate) mod automation;
 pub(crate) mod data;
+pub(crate) mod financial;
 pub(crate) mod portal;
 mod types;
 pub use types::*;
@@ -36,9 +37,14 @@ pub fn configure(
     if std::env::var("BILLING_ENABLED").as_deref() == Ok("true") {
         builder.register_service(
             "portal",
-            Arc::new(portal::PortalService::new(state, registry)),
+            Arc::new(portal::PortalService::new(state.clone(), registry.clone())),
         );
         portal::portal_shared::register_hooks(builder, authentication.clone())?;
+        builder.register_service(
+            "financial",
+            Arc::new(financial::FinancialService::new(state, registry)),
+        );
+        financial::register_hooks(builder, authentication.clone());
     }
     if std::env::var("AUTOMATION_ENABLED").as_deref() == Ok("true") {
         let template = builder

@@ -379,6 +379,18 @@ but are not selected as billing executors. A read-only Mercury connection does
 not prevent a writable Stripe test connection from starting the worker. Mode
 mismatches on writable connections still fail startup. No permission is expanded.
 
+The website Worker adapts billing reads/writes to protected canonical data queries.
+Account discovery uses `account-profile.tql`, with server-context functions
+`request_account()` and `request_companies()`. These return the current person's
+own company projections without broadening `scope_tenant` for graph access.
+Financial runtime mode, saved-method listing/setup and invoice history use
+`/financial`, with native TypeDB membership and billing permission checks.
+`/portal` no longer exposes profile discovery; invitation, confirmation,
+consent/preferences and reconciliation commands remain there until their native
+or automation replacements are completed. This is an intermediate refactor, not
+a completed portal retirement. The backend and website branches must be released
+together after a backed-up additive development schema migration.
+
 The portal now adapts billing reads/writes to protected canonical data queries.
 The approved sandbox accounts were migrated from `business_dev` without changing
 the source database. Imported unfinished schedules are paused, payment consent is

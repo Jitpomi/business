@@ -16,9 +16,13 @@ must not decide who owns an invoice, whether consent exists, or when to charge.
   durable claims, one-attempt collection, terminal states and normalized reconciliation.
 - `plugins`: built-in adapters, HTTP transport, signatures, provider history and raw
   provider services. Vendor payloads and credentials stop at this boundary.
-- `services::portal`: authenticates and resolves ownership before selecting a tenant
-  runtime. Existing `setup_card` / `confirm_card` actions remain aliases for generic
-  `setup_method` / `confirm_method` actions.
+- `/data`: account discovery is a frontend TypeQL query using native context
+  functions. Discovering one's companies does not widen tenant data access.
+- `services::financial`: tenant runtime metadata and provider operations (saved
+  method listing/setup and payment history), authorized by native billing policies.
+- `services::portal`: remaining invitations, confirmation, consent/preferences and
+  reconciliation commands. This service is not retired yet; these paths must be
+  replaced before removing it. Payment method actions use generic method names.
 
 Customer bindings are a private map from plugin ID to opaque external reference;
 selected methods record their plugin ID. Removed methods are namespaced by plugin.

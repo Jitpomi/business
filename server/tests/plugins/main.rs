@@ -1,5 +1,5 @@
 //! Contract proof using a third-party-style bank and mail plugin, without vendor credentials.
-use anyhow::{ensure, Result};
+use anyhow::{ensure, Context, Result};
 use async_trait::async_trait;
 use server::finance::*;
 use std::{
@@ -229,12 +229,16 @@ async fn two_tenants_complete_billing_using_independent_plugins() -> Result<()> 
         .await?,
     );
     let name = format!("business_backend_test_{}", uuid::Uuid::new_v4().simple());
-    database::install(&driver, &name).await?;
+    eprintln!("Disposable plugin database: {name}");
+    database::install(&driver, &name)
+        .await
+        .context("install plugin fixture schema")?;
     let state = Arc::new(TypeDBState {
         driver: driver.clone(),
         database: name.clone(),
     });
     let result=async{
+        eprintln!("Plugin fixture setup");
         let mut fixtures=vec![];
         let mut registry=TenantRegistry::default();
         for _ in 0..2 {
@@ -259,6 +263,7 @@ tx.query(format!(r#"insert $t isa tenant,has tenant_id "{tenant}",has name "Plug
         registry=registry.with_source(Arc::new(server::automation::managed::Managed{state:state.clone(),catalog:Arc::new(catalog.clone()),vault:vault.clone()}));
         catalog.register(Arc::new(server::automation::billing::Billing{state:state.clone(),registry:Arc::new(registry.clone())}))?;
         let catalog=Arc::new(catalog);
+        eprintln!("Plugin automation billing workflows");
         for (engine,bank,mail,_) in &fixtures {
             let automation=server::automation::engine::Engine{store:server::automation::store::Store::new(state.clone(),&engine.merchant)?,catalog:catalog.clone(),vault:vault.clone()};
             let owners=engine.read(format!("match $u isa person,has email {};fetch {{'id':$u.identity_id}};",serde_json::to_string(&fixtures.iter().find(|(e,_,_,_)|e.merchant==engine.merchant).unwrap().3)?)).await?;let owner=owners[0]["id"].as_str().unwrap();
@@ -275,6 +280,7 @@ tx.query(format!(r#"insert $t isa tenant,has tenant_id "{tenant}",has name "Plug
             let messages=mail.messages.lock().unwrap();ensure!(messages.len()==2,"Wrong delivery count");
             ensure!(messages.values().any(|m|m.subject.contains("Payment received"))&&messages.values().any(|m|m.subject.contains("Payment reminder")),"Receipt/reminder missing");
         }
+        eprintln!("Plugin HTTP boundary checks");
         let (a,_,_,email)=&fixtures[0];let (b,_,_,_)=&fixtures[1];
         let invoice=a.read(format!("{} (merchant:$t,customer:$c) isa bill_account;(customer:$c,plan:$p) isa bill_plan_owner;(plan:$p,invoice:$i) isa bill_invoice_owner;fetch {{'id':$i.bill_key}};",a.prefix())).await?;
         ensure!(b.reconcile(invoice[0]["id"].as_str().unwrap()).await.is_err(),"Tenant crossed invoice boundary");
@@ -284,9 +290,19 @@ tx.query(format!(r#"insert $t isa tenant,has tenant_id "{tenant}",has name "Plug
         let (status,login)=portal_call(&router,&a.merchant,"","/authentication",Some(serde_json::json!({"strategy":"local","email":email,"password":"plugin-owner-test-password"}))).await?;
         ensure!(status==200,"Custom-plugin tenant login failed: {status}");
         let token=login["accessToken"].as_str().ok_or_else(||anyhow::anyhow!("Missing login token"))?;
-        ensure!(portal_call(&router,&a.merchant,token,"/portal",None).await?.0==200,"Custom tenant profile failed");
-        ensure!(portal_call(&router,&a.merchant,token,"/portal",Some(serde_json::json!({"action":"history","invoice_id":invoice[0]["id"]}))).await?.0==200,"Custom plugin portal dispatch failed");
-        ensure!(portal_call(&router,&b.merchant,token,"/portal",None).await?.0>=400,"Portal crossed tenant membership");
+        ensure!(account_profile(&router,&a.merchant,token).await?.0==200,"Custom tenant profile failed");
+        let (status,metadata)=portal_call(&router,&a.merchant,token,"/financial",None).await?;
+        ensure!(status==200 && metadata==serde_json::json!([{"sandbox":true}]),"Financial metadata exposed extra state: {status} {metadata}");
+        ensure!(portal_call(&router,&a.merchant,"","/financial",None).await?.0==401,"Anonymous financial metadata allowed");
+        ensure!(portal_call(&router,&b.merchant,token,"/financial",None).await?.0>=400,"Financial metadata crossed tenant membership");
+        ensure!(portal_call(&router,&a.merchant,token,"/portal",None).await?.0>=400,"Retired profile handler is still active");
+        for action in ["set_default","setup_card","unknown"] {
+            let (status,_)=portal_call(&router,&a.merchant,token,"/financial",Some(serde_json::json!({"action":action}))).await?;
+            ensure!(status==400,"Unsupported financial operation must be explicit: {action} {status}");
+        }
+
+        ensure!(portal_call(&router,&a.merchant,token,"/financial",Some(serde_json::json!({"action":"history","invoice_id":invoice[0]["id"]}))).await?.0==200,"Custom plugin portal dispatch failed");
+        ensure!(account_profile(&router,&b.merchant,token).await?.0>=400,"Portal crossed tenant membership");
         Ok::<_,anyhow::Error>(())
     }.await;
     driver.databases().get(&name).await?.delete().await?;
@@ -358,19 +374,128 @@ async fn portal_call(
         .method(if data.is_some() { "POST" } else { "GET" })
         .header("x-tenant-id", tenant)
         .header("content-type", "application/json");
+    if path == "/data" {
+        request = request.header("x-service-method", "read");
+    }
     if !token.is_empty() {
         request = request.header("authorization", format!("Bearer {token}"));
     }
+    eprintln!("Plugin HTTP request {path}");
     let response = router
         .clone()
         .oneshot(request.body(axum::body::Body::from(
             data.map(|v| v.to_string()).unwrap_or_default(),
         ))?)
-        .await?;
+        .await
+        .with_context(|| format!("Plugin HTTP {path}"))?;
     let status = response.status().as_u16();
+    eprintln!("Plugin HTTP response {path}: {status}");
     let bytes = axum::body::to_bytes(response.into_body(), 1000000).await?;
-    Ok((status, serde_json::from_slice(&bytes)?))
+    Ok((
+        status,
+        if bytes.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice(&bytes)?
+        },
+    ))
 }
 
 #[path = "../support/mod.rs"]
 mod support;
+
+async fn account_profile(
+    router: &axum::Router,
+    tenant: &str,
+    token: &str,
+) -> Result<(u16, serde_json::Value)> {
+    let (status,body)=portal_call(router,tenant,token,"/data",Some(serde_json::json!({"query":include_str!("../../public/queries/data/account-profile.tql")}))).await?;
+    if status != 200 {
+        return Ok((status, body));
+    }
+    let answers = body["ok"]["answers"]
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("Missing account answers: {body}"))?;
+    Ok((
+        status,
+        serde_json::json!(answers
+            .iter()
+            .map(|a| a["data"].clone())
+            .collect::<Vec<_>>()),
+    ))
+}
+
+#[tokio::test]
+#[ignore = "Real development TypeDB; disposable graph, no payment or mail calls"]
+async fn account_discovery_and_financial_metadata_enforce_tenant_scope() -> Result<()> {
+    use server::{billing::engine::Engine, database, typedb::TypeDBState};
+    dotenvy::from_path(std::env::var("BUSINESS_ENV_FILE")?)?;
+    support::auth()?;
+    ensure!(
+        std::env::var("TYPEDB_DB")? == "business_dev",
+        "Development only"
+    );
+    let driver = Arc::new(
+        dog_typedb::TypeDBDriverFactory::connect(
+            &std::env::var("TYPEDB_ADDR")?,
+            &std::env::var("TYPEDB_USERNAME")?,
+            &std::env::var("TYPEDB_PASSWORD")?,
+            true,
+        )
+        .await?,
+    );
+    let name = format!("business_backend_test_{}", uuid::Uuid::new_v4().simple());
+    eprintln!("Disposable discovery database: {name}");
+    database::install(&driver, &name).await?;
+    let state = Arc::new(TypeDBState {
+        driver: driver.clone(),
+        database: name.clone(),
+    });
+    let result=async {
+        let first=uuid::Uuid::new_v4().to_string();let second=uuid::Uuid::new_v4().to_string();let identity=uuid::Uuid::new_v4().to_string();let email="discovery@example.invalid";
+        let mut registry=TenantRegistry::default();
+        registry.register(TenantRuntime::new(first.clone(),true))?;
+        registry.register(TenantRuntime::new(second.clone(),true))?;
+        let a=Engine::new(state.clone(),&first,registry.get(&first)?)?;
+        let b=Engine::new(state.clone(),&second,registry.get(&second)?)?;
+        let link=server::auth::local_link("$u",&identity)?;
+        server::auth::plugins::local::Local::configured(&name)?.import(&identity,email,&bcrypt::hash("plugin-owner-test-password",4)?,"initial")?;
+        a.write(format!("insert $t isa tenant,has tenant_id {},has name 'A',has status 'active',has revision 'initial'; $other isa tenant,has tenant_id {},has name 'B',has status 'active',has revision 'initial';$u isa person,has identity_id {},has email {},has name 'Owner',has status 'active';{link}(tenant:$t,member:$u) isa membership,has membership_role 'owner',has start_at 2020-01-01T00:00:00;fetch {{'id':$u.identity_id}};",serde_json::to_string(&first)?,serde_json::to_string(&second)?,serde_json::to_string(&identity)?,serde_json::to_string(email)?)).await?;
+        std::env::set_var("BILLING_ENABLED","true");
+        let (_,http)=server::app::build_with_plugins(state.clone(),"discovery-test-signing-secret-long-enough".into(),Arc::new(registry))?;
+        let router=server::app::router(http);
+        let (status,login)=portal_call(&router,&first,"","/authentication",Some(serde_json::json!({"strategy":"local","email":email,"password":"plugin-owner-test-password"}))).await?;
+        ensure!(status==200,"Discovery login: {status} {login}");
+        let token=login["accessToken"].as_str().unwrap();
+        let (status,profile)=account_profile(&router,&first,token).await?;
+        ensure!(status==200&&profile[0]["email"]==email&&profile[0]["companies"].as_array().is_some_and(|x|x.len()==1),"Initial discovery: {status} {profile}");
+        let (status,metadata)=portal_call(&router,&first,token,"/financial",None).await?;
+        ensure!(status==200&&metadata==serde_json::json!([{"sandbox":true}]),"Financial metadata: {status} {metadata}");
+        ensure!(portal_call(&router,&second,token,"/financial",None).await?.0>=400,"Foreign financial metadata accepted");
+        ensure!(portal_call(&router,&first,"","/financial",None).await?.0==401,"Anonymous financial metadata accepted");
+        ensure!(portal_call(&router,&first,token,"/portal",None).await?.0==405,"Old profile handler remains");
+        ensure!(portal_call(&router,&first,token,"/financial",Some(serde_json::json!({"action":"unknown"}))).await?.0==400,"Unsupported operation did not return a clear error");
+        for method in ["PUT","PATCH","DELETE"] {
+            use tower::ServiceExt;
+            let response=router.clone().oneshot(axum::http::Request::builder().uri("/financial").method(method).header("x-tenant-id",&first).header("authorization",format!("Bearer {token}")).body(axum::body::Body::empty())?).await?;
+            ensure!(response.status()==axum::http::StatusCode::METHOD_NOT_ALLOWED,"Unsupported financial HTTP method: {method}");
+        }
+
+        // A person's company picker can span memberships without widening the
+        // tenant scope of ordinary graph reads, and revocation takes effect now.
+        a.write(format!("{} $u isa person,has email {}; $other isa tenant,has tenant_id {}; insert (tenant:$other,member:$u) isa membership,has membership_role 'owner',has start_at 2020-01-01T00:00:00;fetch {{'id':$u.identity_id}};",a.prefix(),serde_json::to_string(email)?,serde_json::to_string(&b.merchant)?)).await?;
+        let (status,profile)=account_profile(&router,&a.merchant,token).await?;
+        ensure!(status==200 && profile[0]["companies"].as_array().is_some_and(|c|c.len()==2),"Own second company was not discoverable: {profile}");
+        let (status,foreign)=portal_call(&router,&a.merchant,token,"/data",Some(serde_json::json!({"query":format!("match $t isa tenant,has tenant_id {};fetch {{'id':$t.tenant_id}};",serde_json::to_string(&b.merchant)?)}))).await?;
+        ensure!(status==200 && foreign["ok"]["answers"].as_array().is_some_and(Vec::is_empty),"Company discovery widened tenant data access: {foreign}");
+        a.write(format!("{} $u isa person,has email {}; $other isa tenant,has tenant_id {}; $m isa membership,links(tenant:$other,member:$u); select $t,$m;distinct;update $m has end_at 2025-01-01T00:00:00;fetch {{'ended':true}};",a.prefix(),serde_json::to_string(email)?,serde_json::to_string(&b.merchant)?)).await?;
+        let (_,profile)=account_profile(&router,&a.merchant,token).await?;
+        ensure!(profile[0]["companies"].as_array().is_some_and(|c|c.len()==1),"Company discovery retained revoked membership: {profile}");
+        ensure!(account_profile(&router,&b.merchant,token).await?.0>=400,"Revoked company scope still accepted");
+
+
+        Ok::<_,anyhow::Error>(())
+    }.await;
+    driver.databases().get(&name).await?.delete().await?;
+    result
+}

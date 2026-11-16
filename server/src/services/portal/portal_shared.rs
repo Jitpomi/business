@@ -3,7 +3,7 @@ use dog_core::{DogAppBuilder, ServiceCapabilities, ServiceMethodKind};
 use serde_json::Value;
 use std::sync::Arc;
 pub fn capabilities() -> ServiceCapabilities {
-    ServiceCapabilities::from_methods(vec![ServiceMethodKind::Find, ServiceMethodKind::Create])
+    ServiceCapabilities::from_methods(vec![ServiceMethodKind::Create])
 }
 pub fn register_hooks(
     builder: &mut DogAppBuilder<Value, BusinessParams>,
