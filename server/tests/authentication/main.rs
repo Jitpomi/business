@@ -326,6 +326,12 @@ async fn oidc_dog_auth_identity_linking_and_tenant_rbac_end_to_end() -> Result<(
         ensure!(machine_app.clone().oneshot(automation(&machine_token,"tenant-b",json!({"action":"list","kind":"run"}))?).await?.status()==401,"Machine automation crossed tenants");
         let tx=driver.transaction(&db,typedb_driver::TransactionType::Write).await?;tx.query("match $bot isa service_account,has identity_id 'bot';update $bot has status 'suspended';").await?;tx.commit().await?;
         ensure!(request(&machine_app,"tenant-a",&machine_token,"read",query.clone()).await?.0==401,"Suspended service account retained access");
+        // Hosted logout hands back to the provider SDK even without a generic
+        // account URL. The transport must not claim external token revocation.
+        let logout=axum::http::Request::delete("/authentication").header("x-tenant-id","tenant-a").header("authorization",format!("Bearer {token}")).body(axum::body::Body::empty())?;
+        let response=machine_app.clone().oneshot(logout).await?;ensure!(response.status()==200,"Hosted logout failed without an account-management URL");
+        let handoff:Value=serde_json::from_slice(&axum::body::to_bytes(response.into_body(),65536).await?)?;
+        ensure!(handoff["flow"]=="provider"&&handoff["operation"]=="logout"&&handoff["completed"]==false&&handoff["issuer"]==primary.url,"Logout misrepresented the provider boundary");
         // Managed invitation acceptance uses signed provider email proof, with
         // no financial runtime and no credentials in the domain graph.
         let buyer=uuid::Uuid::new_v4().to_string();let customer=uuid::Uuid::new_v4().to_string();let invitation=uuid::Uuid::new_v4().to_string();
