@@ -77,10 +77,15 @@ async fn canonical_tools_and_server_end_to_end() -> Result<()> {
         let port=std::net::TcpListener::bind("127.0.0.1:0")?.local_addr()?.port();
         let mut command=Command::new(env!("CARGO_BIN_EXE_server"));
         command.envs(&runtime).env("TYPEDB_DB",&database).env("HTTP_HOST","127.0.0.1").env("HTTP_PORT",port.to_string())
+            .env("AUTH_LOCAL_ENABLED","true")
+            .env("AUTH_LOCAL_STORE_DIR",std::env::var("AUTH_LOCAL_STORE_DIR")?)
+            .env("AUTH_OIDC_PROVIDERS_JSON","[]")
+            .env("AUTOMATION_ENABLED","false")
+            .env("BILLING_ENABLED","false")
             .env("AUTH_JWT_SECRET","native-backend-acceptance-jwt-secret-more-than-32-bytes")
             .env("BUSINESS_GATEWAY_SECRET","acceptance-gateway-secret-more-than-32-bytes")
             .env_remove("MERCURY_CONNECTIONS_JSON").env_remove("STRIPE_CONNECTIONS_JSON")
-            .stdout(Stdio::null()).stderr(Stdio::null());
+            .stdout(Stdio::null()).stderr(Stdio::inherit());
         let mut process=Process(command.spawn()?);
         let client=reqwest::Client::builder().timeout(Duration::from_secs(60)).redirect(reqwest::redirect::Policy::none()).build()?;
         let base=format!("http://127.0.0.1:{port}");

@@ -155,8 +155,13 @@ async fn schema_policy_real_http_migration() -> Result<()> {
         let pause="match $p isa bill_plan,has bill_key 'plan-a';update $p has bill_status 'paused';fetch {'id':$p.bill_key};";
         ensure!(call(&client,&base,"tenant-a","write",a,pause).await?.0==200,"Seller could not pause plan");
         trusted.write(json!({"query":"match $c isa bill_customer; update $c has bill_consent 'initial';"})).await?;
+        // Historical flags are not authority. Only the native grant can freeze
+        // these settings; real onboarding is exercised through buyer/plugin APIs.
+        ensure!(call(&client,&base,"tenant-a","write",a,&pause.replace("'paused'","'active'")).await?.0==200,"Legacy flag acquired consent authority");
+        ensure!(call(&client,&base,"tenant-a","write",a,pause).await?.0==200,"Fixture pause failed");
+        trusted.write(json!({"query":"match $c isa bill_customer,has bill_key 'customer-a';$p isa bill_plan,has bill_key 'plan-a';$by isa person,has identity_id 'dave';insert $m isa bill_saved_method,has bill_key 'native-method',has method_ref 'pm_private',has method_plugin 'stripe',has method_active true,has method_pending false,has method_automatic true,has method_verified_at 2026-01-01T00:00:00;(customer:$c,method:$m) isa bill_method_owner;$e isa bill_consent_evidence,has bill_key 'native-grant',has bill_revision 'initial',has consent_claim 'customer-a:initial',has method_ref 'pm_private',has method_plugin 'stripe',has consent_at 2026-01-01T00:00:00;(customer:$c,actor:$by,evidence:$e) isa bill_consent_owner;(evidence:$e,plan:$p) isa bill_consent_plan;"})).await?;
         let (status,body)=call(&client,&base,"tenant-a","write",a,&pause.replace("'paused'","'active'")).await?;
-        ensure!(status>=400 || answers(&body)?.is_empty(),"Schedule changed without invalidating consent: {body}");
+        ensure!(status>=400 || answers(&body)?.is_empty(),"Schedule changed without invalidating native consent: {body}");
         let stored=trusted.read(json!({"query":"match $p isa bill_plan,has bill_key 'plan-a';fetch {'status':$p.bill_status};"})).await?;
         ensure!(stored["ok"]["answers"][0]["data"]["status"]=="paused","Denied schedule update persisted");
         let invalidate="match $c isa bill_customer;update $c has bill_revision 'new-revision';fetch {'id':$c.bill_key};";

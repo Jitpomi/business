@@ -313,7 +313,7 @@ async fn run(phase: &str) -> Result<()> {
             "create"|"create-manual"=>ensure!(status=="open"&&after.iter().filter(|n|n["id"]==format!("{target}-reminder-0")&&n["status"].as_str().unwrap().starts_with("accepted:")).count()==1,"Initial reminder missing or duplicated"),
             _=>ensure!(status=="paid"&&after.iter().filter(|n|n["id"]==format!("{target}-receipt")&&n["status"].as_str().unwrap().starts_with("accepted:")).count()==1,"Mercury must report Paid before a receipt; observed {status}; checkpoint retained"),
         }
-        save(&root.join(format!("{phase}-report.json")),&json!({"phase":phase,"passed":true,"invoice":observed[0],"notices":after,"tenant_connections":"Mercury + independent Resend","execution":"native data -> authenticated automation API -> durable worker -> financial/notification plugins","provider_paid_and_application_receipt":phase=="paid"}))?;
+        save(&root.join(format!("{phase}-report.json")),&json!({"phase":phase,"passed":true,"invoice":observed[0],"notices":after,"tenant_connections":"Mercury + independent Resend","execution":"native data -> authenticated automation API -> durable worker -> financial/notification plugins","provider_paid_and_application_receipt":phase=="paid"||phase=="paid-manual"}))?;
         println!("Mercury managed {phase} checks passed; provider status {status}; checkpoint retained");Ok::<_,anyhow::Error>(())
     }.await;
     worker.abort();
