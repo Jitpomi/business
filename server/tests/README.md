@@ -116,3 +116,25 @@ never enables it implicitly.
 BUSINESS_ENV_FILE=/private/dev.env cargo test --locked --test authentication -- --ignored --test-threads=1
 BUSINESS_ENV_FILE=/private/dev.env cargo test --locked --test backend identity_tests -- --ignored --test-threads=1
 ```
+
+## Complete dependency-upgrade acceptance
+
+The default suite intentionally excludes external-service tests. For the native
+acceptance groups, provide the following operator inputs before using `--ignored`:
+
+- `BUSINESS_ENV_FILE`: development TypeDB operator settings (`business_dev`).
+- `BUSINESS_RUNTIME_ENV_FILE`: non-admin runtime credentials for that same cluster.
+  The executable test explicitly selects its private local-auth fixture profile.
+- `AUTH0_TEST_PROOFS_DIR`: fresh independent `synthetic-owner-proof.json` and
+  `synthetic-outsider-proof.json` browser logins. Machine tokens do not replace
+  the password/AMR browser test.
+- `CONSENT_TEST_ROOT`: a fresh absolute directory with mode 700; migration
+  evidence and refused/successful shadow databases are retained.
+- `BUSINESS_WEBSITE_DIR`: the website checkout containing
+  `portal/retirement.integration.mjs`.
+
+Run the `backend`, `authentication`, `plugins` and `automation` integration test
+binaries with `--ignored --test-threads=1`. These groups use generated test
+databases and isolated provider fixtures. Run real-provider billing phases
+separately according to the Stripe and Mercury acceptance guides, reusing their
+checkpoint IDs. A missing operator input is a setup failure, not a passing test.

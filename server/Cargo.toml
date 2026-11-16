@@ -34,7 +34,7 @@ chrono = "0.4"
 
 bcrypt = "0.19"
 base64 = "0.22"
-rusqlite = { version = "0.38", features = ["bundled"] }
+rusqlite = { version = "0.43", features = ["bundled"] }
 jsonwebtoken = "=10.4.0"
 
 [dev-dependencies]
