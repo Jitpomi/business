@@ -22,7 +22,10 @@ impl crate::services::authentication::authentication_service::PluginAuthenticati
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("Missing identity"))?;
         let id = crate::billing::billing_schema::id(input["invitation_id"].as_str().unwrap_or(""))?;
-        let now = crate::clock::native_utc();
+        let now = chrono::Utc::now()
+            .naive_utc()
+            .format("%Y-%m-%dT%H:%M:%S%.6f")
+            .to_string();
         let rows=crate::storage::read(&self.state,&format!("match $l isa account_invitation,has invitation_id {},has invitation_used false,has invitation_target $target,has invitation_revision $revision,has invitation_valid_until $until;$until>{now};$b isa tenant,has tenant_id == $target,has revision == $revision;let $allowed=scope_invitation({},{},{now},$l);$allowed==true;fetch {{'email':$l.invitation_email,'target':$target,'revision':$revision,'valid_until':$l.invitation_valid_until}};",q(&id),q(&ctx.tenant_id.0),q(actor))).await?;
         ensure!(
             rows.len() == 1,
@@ -73,7 +76,10 @@ impl crate::services::authentication::authentication_service::PluginAuthenticati
             .email
             .as_deref()
             .ok_or_else(|| DogError::forbidden("Provider did not verify an email").into_anyhow())?;
-        let now = crate::clock::native_utc();
+        let now = chrono::Utc::now()
+            .naive_utc()
+            .format("%Y-%m-%dT%H:%M:%S%.6f")
+            .to_string();
         let rows=crate::storage::read(&self.state,&format!("match $l isa account_invitation,has invitation_id {};$merchant isa tenant;let $b=invitation_target_for_email($merchant,$l,{},{});fetch {{'merchant':$merchant.tenant_id}};",q(&id),q(email),now)).await?;
         ensure!(
             rows.len() == 1,

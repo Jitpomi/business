@@ -148,7 +148,7 @@ pub async fn bootstrap(
        $t isa tenant,has tenant_id "{tenant}",has name {},has status "active",has revision "initial";
        $i isa person,has identity_id "{identity}",has email {},has name {},has status "active"; (identity:$i) isa external_identity,has auth_binding_key "{binding}",has auth_issuer "urn:jitpomi:local",has auth_subject "{identity}";
        (tenant:$t,member:$i) isa membership,has membership_role "owner",has start_at {};
-    "#,q(&owner.tenant_name),q(&owner.email.trim().to_ascii_lowercase()),q(&owner.name),crate::clock::native_utc())).await?;
+    "#,q(&owner.tenant_name),q(&owner.email.trim().to_ascii_lowercase()),q(&owner.name),chrono::Utc::now().naive_utc().format("%Y-%m-%dT%H:%M:%S%.6f"))).await?;
     tx.commit().await?;
     Ok((tenant, identity))
 }

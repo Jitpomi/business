@@ -299,7 +299,10 @@ impl Providers {
                     ("currency", "usd"),
                     (
                         "due_date",
-                        &input.due.max(crate::clock::unix_seconds() + 60).to_string(),
+                        &input
+                            .due
+                            .max(chrono::Utc::now().timestamp() + 60)
+                            .to_string(),
                     ),
                     ("metadata[business_invoice]", &input.id),
                 ]);

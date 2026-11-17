@@ -8,7 +8,7 @@ impl Providers {
     pub async fn payment_history(&self, provider: Provider, invoice: &Value) -> Result<Value> {
         if provider != Provider::Stripe {
             return Ok(
-                json!({"supported":false,"message":"Detailed Mercury refund and dispute history is not exposed by this integration. Review it with Mercury.","observed_at":crate::clock::unix_seconds()}),
+                json!({"supported":false,"message":"Detailed Mercury refund and dispute history is not exposed by this integration. Review it with Mercury.","observed_at":chrono::Utc::now().timestamp()}),
             );
         }
         let id = field(invoice, "id")?;
@@ -66,7 +66,7 @@ impl Providers {
             history.push(item);
         }
         Ok(
-            json!({"supported":true,"invoice_status":invoice["status"],"amount_paid_cents":invoice["amount_paid"],"amount_remaining_cents":invoice["amount_remaining"],"total_cents":invoice["total"],"payments":history,"observed_at":crate::clock::unix_seconds()}),
+            json!({"supported":true,"invoice_status":invoice["status"],"amount_paid_cents":invoice["amount_paid"],"amount_remaining_cents":invoice["amount_remaining"],"total_cents":invoice["total"],"payments":history,"observed_at":chrono::Utc::now().timestamp()}),
         )
     }
 }

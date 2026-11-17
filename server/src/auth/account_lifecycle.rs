@@ -18,10 +18,13 @@ fn token() -> String {
     )
 }
 fn now() -> i64 {
-    crate::clock::unix_seconds()
+    chrono::Utc::now().timestamp()
 }
 fn datetime() -> String {
-    crate::clock::native_utc()
+    chrono::Utc::now()
+        .naive_utc()
+        .format("%Y-%m-%dT%H:%M:%S%.6f")
+        .to_string()
 }
 fn field<'a>(v: &'a Value, k: &str) -> Result<&'a str> {
     v[k].as_str().ok_or_else(|| anyhow::anyhow!("Missing {k}"))

@@ -15,7 +15,7 @@ pub struct Engine {
     pub vault: Vault,
 }
 pub fn now() -> i64 {
-    crate::clock::unix_seconds()
+    chrono::Utc::now().timestamp()
 }
 fn hash(s: &str) -> String {
     format!("{:x}", Sha256::digest(s.as_bytes()))

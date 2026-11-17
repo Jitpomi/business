@@ -20,7 +20,10 @@ impl Engine {
             .financial(plugin)?
             .capabilities()
             .automatic_collection;
-        let at = crate::clock::native_utc();
+        let at = chrono::Utc::now()
+            .naive_utc()
+            .format("%Y-%m-%dT%H:%M:%S%.6f")
+            .to_string();
         let existing=self.read(format!("{} $m isa bill_saved_method,has bill_key {}; (customer:$c,method:$m) isa bill_method_owner; fetch {{'id':$m.method_ref,'plugin':$m.method_plugin}};",self.customer_match(customer)?,q(&key))).await?;
         if let Some(old) = existing.first() {
             ensure!(

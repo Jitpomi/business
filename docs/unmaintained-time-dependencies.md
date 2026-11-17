@@ -47,47 +47,12 @@ remaining findings have a supported resolution. Authentication, native RBAC,
 provider uncertainty and independent-tenant billing tests are required for this
 partial fix; it must not be described as a completed four-dependency removal.
 
-## Upstream submissions and first-party clock migration
+## Review separation
 
-The active upstream submission is a bounded parser cleanup:
-https://github.com/typedb/typeql/pull/477. It removes an uncalled crate-private
-helper and its direct Chrono dependency, preserving the existing module path.
-It adds no replacement library or build-system change.
-
-The driver discussion at https://github.com/typedb/typedb-driver/issues/950 now
-asks maintainers about supported contracts, migration options and release scope.
-The broader prototypes have been withdrawn as merge proposals; their code and
-selected-case test material remain available as reference:
-
-- https://github.com/typedb/typedb-dependencies/pull/640
-- https://github.com/typedb/typedb-protocol/pull/265
-- https://github.com/typedb/typedb-driver/pull/951
-
-The archived build prototypes used contribution-fork pins only for review. The
-active parser cleanup has no such pins. Business has not adopted those forks.
-The current released driver/parser still contain the flagged dependencies; a
-supported upstream migration or another verified integration is needed before
-this graph can be called clean. The prototype's selected passing tests do not
-establish a complete SDK or cross-language compatibility contract.
-
-Business's trusted Unix-second clock and native TypeQL UTC inputs now use the
-maintained time library. Native inputs retain UTC and truncate to the existing
-six fractional digits. Authorization and tenancy decisions remain in TypeDB.
-The legacy date parsers and dog-queue public/persisted timestamp interfaces still
-use Chrono; their migration is not represented as finished by this clock change.
-No package alias, advisory exception, removed parser or success-only audit filter
-is used to hide these remaining paths.
-
-Validation of the clock change: 53 ordinary tests, Clippy with warnings denied,
-live hosted authentication-to-RBAC, native OAuth tenant/actor/expiry/replay checks,
-and two tenants billing through independent plugins pass. Real retained-provider
-replay initially stops at the canonical-schema check because its checkpoints
-predate onboarding. A separate shadow rehearsal, using a verified Stripe backup
-and fresh generated targets only, encountered hosted TypeDB gateway 502/404
-errors. Original checkpoint roots, invoice/payment IDs and source databases are
-retained. No provider status override, payment submission, live-schema cutover or
-runtime fallback was performed. These failed hosted checks are not called passes.
-
-The strict dependency-security check remains a required failing gate until the
-remaining first-party timestamp migrations and official upstream adoption are
-complete. Do not merge or deploy this as a completed dependency removal.
+The unfinished Business clock migration is excluded from PR #29. Its exact
+pre-split state is preserved at `preserve/business-29-before-split`; the clock
+changes and upstream research will continue in a separate draft follow-up.
+PR #29 retains tenant-owned onboarding, native TypeDB policies, the completed
+auth-duration update and payment acceptance safeguards. It does not claim to
+complete dependency remediation. The strict dependency-security workflow is
+unchanged; a baseline finding is still a failed check, not an exception.
