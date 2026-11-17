@@ -209,11 +209,11 @@ impl Connector for Builtin {
                 r = r.header("Stripe-Account", account);
             }
         }
-        ensure!(
-            r.send().await?.status().is_success(),
-            "Connection verification failed"
-        );
-        Ok(())
+        let response = r
+            .send()
+            .await
+            .map_err(|_| super::verification::Failure::Unavailable)?;
+        super::verification::response(response.status())
     }
     fn financial(
         &self,

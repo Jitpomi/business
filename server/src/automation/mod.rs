@@ -19,3 +19,5 @@ pub(crate) mod policy;
 pub mod oauth;
 
 mod builtin_oauth;
+
+pub mod verification;

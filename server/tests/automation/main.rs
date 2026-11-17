@@ -2,6 +2,7 @@ mod background_checks;
 mod oauth_checks;
 #[path = "../support/driver.rs"]
 mod test_driver;
+mod verification_checks;
 use anyhow::{ensure, Result};
 use serde_json::{json, Value};
 use server::automation::{

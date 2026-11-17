@@ -82,15 +82,18 @@ impl Engine {
     }
     pub async fn verify_connection(&self, id: &str) -> Result<Value> {
         let (r, mut c, s) = self.connection(id).await?;
-        ensure!(c.enabled, "Connection disabled");
+        ensure!(
+            c.enabled,
+            dog_core::DogError::conflict("This connection is disabled").into_anyhow()
+        );
         let connector = self.catalog.get(&c.connector)?;
         tokio::time::timeout(
             std::time::Duration::from_secs(30),
             connector.verify(&c.config, &s),
         )
         .await
-        .map_err(|_| anyhow::anyhow!("Verification timed out"))?
-        .map_err(|_| anyhow::anyhow!("Connection verification failed"))?;
+        .map_err(|_| super::verification::public(super::verification::Failure::Unavailable.into()))?
+        .map_err(super::verification::public)?;
         c.verified = true;
         c.verification = Some(connector.verification_method().into());
         self.store
