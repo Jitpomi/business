@@ -6,6 +6,12 @@ use serde_json::Value;
 use std::path::{Path, PathBuf};
 
 #[tokio::test]
+#[ignore = "Existing real Mercury bank-payment checkpoint only; scheduled reconciliation; requires actual transaction-backed Paid and exactly one receipt"]
+async fn mercury_actual_bank_settlement_is_automatic_and_once() -> Result<()> {
+    run("bank-auto").await
+}
+
+#[tokio::test]
 #[ignore = "Approved Mercury sandbox/checkpoint and dev mailbox; no invoice creation; verifies real Processing through managed plugins and automation"]
 async fn mercury_managed_processing_checkpoint() -> Result<()> {
     run("processing").await
@@ -297,6 +303,7 @@ async fn run(phase: &str) -> Result<()> {
     }
     let worker = server::background::spawn_all((*template).clone());
     let outcome=async {
+        if phase=="bank-auto" {return super::mercury_settlement::check(&router,&tenant,token,&tenant_store,&root,&saved,&secrets).await;}
         let read=|query:String|{let state=state.clone();async move{let tx=state.driver.transaction(&state.database,TransactionType::Read).await?;database::documents(&tx,&query).await}};
         let invoice=|id:&str|format!("match $i isa bill_invoice,has bill_key {};fetch {{'id':$i.bill_key,'external':$i.bill_external_id,'url':$i.bill_url,'status':$i.bill_status}};",q(id));
         let notices=|id:&str|format!("match $i isa bill_invoice,has bill_key {};(invoice:$i,notice:$n) isa bill_notice_owner;$n has bill_key $key;select $n,$key;sort $key;fetch {{'id':$n.bill_key,'status':$n.bill_status}};",q(id));
@@ -329,7 +336,12 @@ async fn run(phase: &str) -> Result<()> {
         save(&root.join(format!("{phase}-report.json")),&json!({"phase":phase,"passed":true,"invoice":observed[0],"notices":after,"tenant_connections":"Mercury + independent Resend","execution":"native data -> authenticated automation API -> durable worker -> financial/notification plugins","provider_paid_and_application_receipt":phase=="paid"||phase=="paid-manual"}))?;
         println!("Mercury managed {phase} checks passed; provider status {status}; checkpoint retained");Ok::<_,anyhow::Error>(())
     }.await;
-    worker.shutdown().await?;
+    let shutdown = worker.shutdown().await;
+    let pause = if phase == "bank-auto" {
+        super::mercury_settlement::pause(&router, &tenant, token, &tenant_store, &root).await
+    } else {
+        Ok(())
+    };
     let folder = root
         .join("checkpoint")
         .join(format!("{phase}-{}", uuid::Uuid::new_v4().simple()));
@@ -339,6 +351,14 @@ async fn run(phase: &str) -> Result<()> {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o700))?;
     }
+    save(
+        &folder.join("lifecycle.json"),
+        &json!({
+            "outcome_error": outcome.as_ref().err().map(|e| format!("{e:#}")),
+            "shutdown_error": shutdown.as_ref().err().map(|e| format!("{e:#}")),
+            "pause_error": pause.as_ref().err().map(|e| format!("{e:#}"))
+        }),
+    )?;
     driver
         .databases()
         .get(&name)
@@ -349,5 +369,7 @@ async fn run(phase: &str) -> Result<()> {
         )
         .await?;
     save(&folder.join("run.json"), &saved)?;
-    outcome
+    outcome?;
+    shutdown?;
+    pause
 }
