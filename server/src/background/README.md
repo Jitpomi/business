@@ -1,47 +1,36 @@
-# Background jobs
+# Generic background execution and scheduling
 
-Business uses dog-queue for typed dispatch, leases, heartbeats, retries and graceful
-draining. TypeDBBackend persists the queue in the private automation schema. No
-production memory queue or additional database is used.
+Dog-queue owns worker pools, discovery, recovery, graceful draining, delayed
+execution, retry timing, recurring occurrence generation and catch-up. Business
+contains storage adapters and domain job payloads, not timer loops or recurrence
+arithmetic. The existing in-memory cron API is not used.
 
-Workflow and schedule changes insert a revision delivery in the same transaction.
-Advance reloads current workflow state and ignores obsolete revisions. Delay and
-retry timestamps become queue eligibility times. Approval, blocked, attention and
-terminal states create no runnable delivery until an authorized transition occurs.
+The TypeDB adapter implements RecurrenceBackend. In one revision-fenced transaction
+it advances the saved cursor, stores the occurrence delivery and publishes the next
+scheduler wake-up. A crash or lost acknowledgement cannot publish the same sequence
+twice. Fixed-rate catch-up preserves every occurrence; nothing is silently skipped.
+Schedule IDs, next timestamps, sequence counters and legacy occurrence keys remain
+compatible. Existing queued schedule references call the same generic dispatcher;
+there is no second scheduling algorithm or fallback poller.
 
-The supervisor discovers tenant namespaces in pages, backfills missing deliveries
-once per namespace, and starts four workers per tenant. A shared semaphore bounds
-active handlers to four across tenants. It never executes steps or scans for due
-business records. Failed pools are drained and restarted. All pools drain together
-on shutdown; await Worker::shutdown before backing up or deleting a database.
+Scheduled<TriggerWorkflow> dispatches business work using the original
+schedule:<id>:<sequence> key. It rechecks schedule state and the existing native
+workflow-owner/connection rules. Native authorization denials can pause business
+work; infrastructure failures are retained for retry and are not classified as
+permission revocation. Occurrence jobs remain inspectable even when paused or
+failed. After review, resubmitting the original workflow/input with its recorded
+occurrence key preserves business idempotency. An uncertain payment still requires
+evidence-based resolution through the existing journal; it must never be resent.
 
-Queue operations are tenant-bound, revision-fenced TypeDB transactions. Job metadata
-uses its own fence and never changes the tenant business revision. Competing claims
-and uncertain metadata commits are reconciled by exact job state and lease ownership;
-this never retries a handler or provider operation. Lease tokens
-and deadlines protect acknowledgements. Native schema policies deny raw access;
-owner operations use TypeDB RBAC functions. The workflow rechecks its owner and
-atomically claims the approved connection before external effects. Queue possession
-does not authorize payment.
+Queue records and scheduler metadata have independent native fences and do not
+modify tenant business revisions. TypeDB remains authoritative for tenant RBAC,
+consent and financial claims. Lease tokens are omitted from owner inspection.
+There is no production memory queue, additional storage service or schema reset.
 
-The existing workflow journal remains authoritative for consent, approvals, provider
-idempotency and uncertain outcomes. Redelivery never means blindly resending a
-payment. Interrupted at-most-once attempts require evidence-based reconciliation.
-Failed deliveries remain persisted and available in owner-authorized job summaries
-and inspection, with lease tokens omitted. There is no automatic deletion or reset.
-The backend provides durable status reads, not live events or priority ordering.
-
-## Cutover
-
-No schema migration is needed: jobs use a new kind of private automation record.
-Stop old writers, export and restore-verify a fresh backup, rehearse backfill on a
-restored copy and verify existing business records remain unchanged. Backfill only
-adds missing revision deliveries and makes no provider calls. Keep original backups.
-Quiesce writers for backup and rehearsal. During a rolling replacement, both
-versions use the same native workflow CAS and effect journal; the earlier poller
-ignores job records. Queue backfill changes no existing business attributes.
-Rollback uses the earlier binary; quiesce new workers first.
-
-The dog-queue dependency pins reviewed upstream source with graceful drain and pool
-health support. There is no copied worker or local path dependency, and no new
-public package release is needed.
+Before deployment, quiesce development writers, export and restore-verify a fresh
+backup, and rehearse backfill in an exact restored shadow. Verify original data,
+attributes and relation roles. Backfill changes no existing business records and
+calls no providers. Keep original snapshots and all uncertain-outcome journals.
+Rolling versions share workflow CAS and stable occurrence keys. New scheduled job
+payloads remain durable if an older binary does not support their handler; never
+remove or rewrite them to force rollback. Restore a supporting binary to drain them.

@@ -1,4 +1,4 @@
-//! Workflow scheduling and human reconciliation; execution belongs to background.
+//! Schedule configuration and human reconciliation; dog-queue owns timing and recurrence.
 use super::{
     engine::{now, Engine},
     model::{identifier, Run, Schedule},
@@ -18,6 +18,16 @@ impl Engine {
             self.store.get("workflow", &s.workflow).await?.is_some(),
             "Workflow unavailable"
         );
+        dog_queue::recurrence::IntervalCursor {
+            every_seconds: s.every_seconds,
+            next: s.next,
+            sequence: 0,
+        }
+        .validate()
+        .map_err(|_| {
+            dog_core::DogError::bad_request("Invalid schedule interval or UTC timestamp")
+                .into_anyhow()
+        })?;
         s.sequence = 0;
         let value = serde_json::to_value(&s)?;
         if let Some(old) = self.store.get("schedule", &s.id).await? {
@@ -52,43 +62,6 @@ impl Engine {
             )
             .await?
             .value)
-    }
-    pub async fn fire_schedule(&self, id: &str) -> Result<()> {
-        let old = self
-            .store
-            .get("schedule", id)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("Schedule unavailable"))?;
-        let mut s: Schedule = serde_json::from_value(old.value.clone())?;
-        if !s.enabled || s.next > now() {
-            return Ok(());
-        }
-        if self
-            .enqueue(
-                &s.workflow,
-                &format!("schedule:{}:{}", s.id, s.sequence),
-                s.input.clone(),
-            )
-            .await
-            .is_err()
-        {
-            // A disabled workflow, revoked owner or unavailable connection must not
-            // occupy the front of the due queue forever. Owner review resumes it.
-            self.store.cas(&old, &old.value, "blocked", 0).await?;
-            return Ok(());
-        }
-        s.sequence = s
-            .sequence
-            .checked_add(1)
-            .ok_or_else(|| anyhow::anyhow!("Schedule exhausted"))?;
-        s.next = s
-            .next
-            .checked_add(s.every_seconds)
-            .ok_or_else(|| anyhow::anyhow!("Schedule exhausted"))?;
-        self.store
-            .cas(&old, &serde_json::to_value(s.clone())?, "scheduled", s.next)
-            .await?;
-        Ok(())
     }
     /// Resolving an uncertain write records evidence; it never sends the request again.
     pub async fn resolve(

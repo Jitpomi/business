@@ -612,7 +612,7 @@ dependencies = [
 [[package]]
 name = "dog-queue"
 version = "0.4.0"
-source = "git+https://github.com/Jitpomi/dogrs?rev=115ea80114701f51204f67f5736d801fe2d077b8#115ea80114701f51204f67f5736d801fe2d077b8"
+source = "git+https://github.com/Jitpomi/dogrs?rev=963c9e571ceeae4761bf78794541c5fa1b9896fb#963c9e571ceeae4761bf78794541c5fa1b9896fb"
 dependencies = [
  "async-trait",
  "chrono",
@@ -2394,6 +2394,7 @@ dependencies = [
  "tokio-rustls",
  "tower",
  "tracing",
+ "tracing-subscriber",
  "typedb-driver",
  "typeql",
  "uuid",

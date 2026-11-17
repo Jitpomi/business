@@ -32,11 +32,29 @@ impl Persisted {
     }
 }
 pub(crate) fn insert_clause(store: &Store, value: &Persisted) -> anyhow::Result<String> {
-    Ok(format!("insert $job isa automation_record,has auto_key {},has auto_tenant {},has auto_kind \"job\",has auto_payload {},has auto_revision {},has auto_status {},has auto_when {};",
-        q(&store.key("job",value.record.job_id.as_str())),q(&store.tenant),q(&serde_json::to_string(value)?),q(&uuid::Uuid::new_v4().to_string()),q(value.record.status.name()),value.due()))
+    insert_clause_named(store, value, "job")
 }
-fn error(_: anyhow::Error) -> QueueError {
-    QueueError::Internal("TypeDB queue transaction failed; durable state retained".into())
+pub(crate) fn insert_clause_named(
+    store: &Store,
+    value: &Persisted,
+    variable: &str,
+) -> anyhow::Result<String> {
+    Ok(format!("insert ${variable} isa automation_record,has auto_key {},has auto_tenant {},has auto_kind \"job\",has auto_payload {},has auto_revision {},has auto_status {},has auto_when {};",q(&store.key("job",value.record.job_id.as_str())),q(&store.tenant),q(&serde_json::to_string(value)?),q(&uuid::Uuid::new_v4().to_string()),q(value.record.status.name()),value.due()))
+}
+fn error(cause: anyhow::Error) -> QueueError {
+    // Preserve safe machine diagnostics without logging queries, payloads or tokens.
+    let code = if let Some(error) = cause.downcast_ref::<typedb_driver::Error>() {
+        error.code()
+    } else if let Some(error) = cause.downcast_ref::<dog_core::DogError>() {
+        format!("{:?}", error.kind)
+    } else if cause.is::<tokio::time::error::Elapsed>() {
+        "deadline".into()
+    } else {
+        "internal".into()
+    };
+    QueueError::Internal(format!(
+        "TypeDB queue transaction failed ({code}); durable state retained"
+    ))
 }
 impl TypeDBBackend {
     fn check(&self, ctx: &QueueCtx) -> QueueResult<()> {
@@ -96,17 +114,18 @@ impl TypeDBBackend {
                 .await
             {
                 Ok(_) => return Ok(()),
-                Err(cause) => {
+                Err(_cause) => {
                     let (current, held) = self.load(&ctx, &value.record.job_id).await?;
                     if current.value == encoded {
                         return Ok(());
                     } // committed; acknowledgement lost
                     Self::validate(&held, &token)?;
-                    if current.revision == old.revision {
-                        return Err(error(cause));
-                    }
-                    // A heartbeat changed this same owned lease. Re-evaluate its
-                    // current fence; never shorten a newer renewal.
+                    // A fresh read proved this exact lease still owns the record.
+                    // Retry only its fenced metadata transition, even if an unrelated
+                    // commit lock aborted the write without changing this job revision.
+                    // This cannot repeat a handler or overwrite a later lease.
+                    // A heartbeat may also have changed this same owned lease; never
+                    // shorten a newer renewal.
                     if let (Some(wanted), Some(actual)) =
                         (value.record.lease_until(), held.record.lease_until())
                     {
