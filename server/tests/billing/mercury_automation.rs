@@ -69,6 +69,7 @@ async fn prepared(root: &Path, driver: &typedb_driver::TypeDBDriver) -> Result<V
         .import_from_file(&target, database::import_schema(), &data)
         .await?;
     ensure!(database::snapshot::graph(driver,&target,&[]).await?==before,"Checkpoint logical records or relation roles changed; original backup untouched, generated copies retained");
+    server::business_rules::backfill(driver, &target).await?;
     database::verify_runtime(driver, &target).await?;
     saved["database"] = json!(target);
     saved["canonical_model"] = json!(true);
@@ -93,7 +94,7 @@ async fn run(phase: &str) -> Result<()> {
         );
     }
     let driver = Arc::new(
-        dog_typedb::TypeDBDriverFactory::connect(
+        crate::test_driver::connect(
             &std::env::var("TYPEDB_ADDR")?,
             &std::env::var("TYPEDB_USERNAME")?,
             &std::env::var("TYPEDB_PASSWORD")?,

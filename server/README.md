@@ -265,32 +265,52 @@ References: [Mercury invoicing](https://docs.mercury.com/docs/invoicing),
 [full invoice updates](https://docs.mercury.com/reference/updateinvoice),
 [sandbox setup](https://docs.mercury.com/docs/using-mercury-sandbox).
 
-This application uses published dog-typedb 0.3.5, dog-auth 0.3.1, and other DogRS 0.3.0 crates, dog-transport HTTP hosted by
+This application uses published dog-typedb 0.3.6, dog-auth 0.3.1, and other DogRS 0.3.0 crates, dog-transport HTTP hosted by
 Axum, and TypeDB 3.13.6 (the driver version required by dog-typedb).
 
-Development and production use the same code, TLS validation, auth strategy and
-durable TypeDB token store. Set `BUSINESS_ENV_FILE` to an owner-readable file
+Development and production use the same code and TLS validation. Authentication
+plugins own credential, session and recovery storage outside TypeDB; dog-auth
+verifies authentication, and TypeDB owns identity links and tenant permissions. Set `BUSINESS_ENV_FILE` to an owner-readable file
 outside the project. The prepared configurations are in
 `~/.config/jitpomi/business/dev.env` and `prod.env`. Their credentials must not be
 committed or pasted into logs. Use a dedicated non-admin runtime account.
 
 ## Billing execution
 
-`src/automation/` owns durable workflow execution and triggers.
-`src/billing/` owns billing recurrence rules, consent, invoice state, collection claims,
-receipts and reminders. `src/finance/` defines business-owned financial and
-notification contracts. `src/plugins/` contains Stripe, Mercury and Resend
-implementations and trusted configuration. See [plugin architecture and migration](FINANCIAL_PLUGINS.md).
+`functions.tql`, `schema-policy.tql`, `billing.tql` and `business-rules.tql`
+enforce tenant access, billing consent and decisions, workflow claims, approval,
+recovery and state transitions. Native policy facts are stored atomically beside
+preserved workflow payloads; JSON is not an alternative permission authority.
 
-The canonical tenant/account graph backs `/data`, `/financial`, authentication plugins and durable automation. `/portal` is removed.
-Provider references, consent and credentials remain private. Credentials are encrypted in private connection records and excluded from
-ordinary business records and API responses. Notification delivery does not require a financial plugin.
+Dog-queue owns generic background execution, supervision, delayed deliveries,
+retry timing, durable recurrence and anchor-preserving UTC calendar arithmetic.
+TypeDB selects billing calendar policy and atomically advances each sequence with
+its invoice. `src/automation/` and `src/billing/` supply domain handlers and storage
+adapters. `src/finance/` defines financial/notification contracts; `src/plugins/`
+translate external protocols and attest provider facts.
+See [plugin architecture and migration](FINANCIAL_PLUGINS.md).
 
-The durable automation engine owns execution and tenant-owned encrypted connections.
-Enable `AUTOMATION_ENABLED=true` after its explicit schema installation and tenant
-import; `BILLING_ENABLED=true` enables the portal and dynamic billing ingress.
-New tenants configure their connections through `/automation` rather than changing
-deployment JSON. See [automation API, security and cutover](AUTOMATION.md).
+The canonical tenant/account graph backs `/data`, `/financial`, authentication
+identity links and durable automation. `/portal` is removed. Provider credentials
+are encrypted in the private external secret store; TypeDB holds references.
+Notification delivery does not require a financial plugin.
+
+Enable `AUTOMATION_ENABLED=true` after explicit schema installation and import;
+`BILLING_ENABLED=true` enables billing plugins and financial ingress. Tenants
+configure connections through `/automation`. Request identities are bound to
+native policies on every read/write, including after asynchronous provider work.
+Background claims recheck the saved workflow owner and connection in TypeDB.
+An uncertain external write requires recorded reconciliation evidence; it is
+never automatically requeued as a fresh payment.
+See [automation API, security and cutover](AUTOMATION.md).
+
+The native business-rule upgrade uses an additive, backup-verified shadow:
+`migrate_business_rules --rehearse SOURCE PRIVATE_BACKUP_DIRECTORY`. After stopping
+writers and obtaining a fresh verified backup, `--apply` creates
+`business_native_dev_v4` from `business_native_dev_v3`. Source and backups remain
+untouched. Backfill adds native policy facts without rewriting workflow payloads,
+statuses, revisions, timers, journals or provider references. Startup rejects an
+incomplete model; there is no runtime migration or legacy-policy fallback.
 
 The previous process timer, external billing tick route and
 `BILLING_WORKER_TENANTS_JSON` list are removed. A persisted `billing-cycle`

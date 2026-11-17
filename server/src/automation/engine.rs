@@ -30,10 +30,6 @@ impl Engine {
     ) -> Result<Value> {
         identifier(id)?;
         ensure!(
-            self.store.list("connection", 100).await?.len() < 100,
-            "Connection limit reached"
-        );
-        ensure!(
             config.to_string().len() + secrets.to_string().len() <= 65536,
             "Connection too large"
         );
@@ -67,11 +63,10 @@ impl Engine {
     }
     pub async fn connection(&self, id: &str) -> Result<(Record, Connection, Value)> {
         identifier(id)?;
-        let r = self
-            .store
-            .get("connection", id)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("Connection unavailable"))?;
+        let r =
+            self.store.get("connection", id).await?.ok_or_else(|| {
+                dog_core::DogError::not_found("Connection unavailable").into_anyhow()
+            })?;
         let c: Connection = serde_json::from_value(r.value.clone())?;
         let secrets = if c.secret_ref.is_empty() {
             Value::Null
@@ -258,6 +253,14 @@ impl Engine {
             .cas(old, &serde_json::to_value(run)?, &run.status, run.wake)
             .await
     }
+    async fn failure_decision(&self, claim: &Record, oversized: bool) -> Result<String> {
+        let rows=crate::storage::read(&self.store.state,&format!("{} $r isa automation_record,has auto_key {},has auto_revision {};let $decision=automation_failure_decision($r,{oversized});fetch {{'decision':$decision}};",self.store.prefix(),super::store::q(&claim.key),super::store::q(&claim.revision))).await?;
+        Ok(rows
+            .first()
+            .and_then(|row| row["decision"].as_str())
+            .ok_or_else(|| anyhow::anyhow!("Native outcome policy unavailable; claim retained"))?
+            .into())
+    }
     pub async fn approve(&self, id: &str, actor: &str) -> Result<Value> {
         self.store.owner(actor).await?;
         let old = self
@@ -266,14 +269,32 @@ impl Engine {
             .await?
             .ok_or_else(|| anyhow::anyhow!("Run unavailable"))?;
         let mut run: Run = serde_json::from_value(old.value.clone())?;
-        ensure!(run.status == "approval", "Run is not awaiting approval");
-        let step = run.workflow.steps[run.cursor].id().to_owned();
+        let step = run
+            .workflow
+            .steps
+            .get(run.cursor)
+            .ok_or_else(|| {
+                dog_core::DogError::conflict("Run has no current approval step").into_anyhow()
+            })?
+            .id()
+            .to_owned();
         run.approved.push(step.clone());
         run.outputs
             .insert(step, json!({"approved_by":actor,"at":now()}));
         run.status = "queued".into();
         run.wake = now();
-        Ok(self.save(&old, &run).await?.value)
+        Ok(self
+            .store
+            .control(
+                &old,
+                &serde_json::to_value(&run)?,
+                &run.status,
+                run.wake,
+                actor,
+                "approve",
+            )
+            .await?
+            .value)
     }
     pub async fn cancel(&self, id: &str) -> Result<Value> {
         let old = self
@@ -282,12 +303,20 @@ impl Engine {
             .await?
             .ok_or_else(|| anyhow::anyhow!("Run unavailable"))?;
         let mut r: Run = serde_json::from_value(old.value.clone())?;
-        ensure!(
-            r.attempt.is_none() || r.wake <= now(),
-            "An action is in flight; wait for its outcome"
-        );
         r.status = "cancelled".into();
-        Ok(self.save(&old, &r).await?.value)
+        let actor = self.store.request_actor()?;
+        Ok(self
+            .store
+            .control(
+                &old,
+                &serde_json::to_value(&r)?,
+                &r.status,
+                r.wake,
+                actor,
+                "cancel",
+            )
+            .await?
+            .value)
     }
     pub async fn advance(&self, id: &str) -> Result<Value> {
         let old = self
@@ -296,16 +325,21 @@ impl Engine {
             .await?
             .ok_or_else(|| anyhow::anyhow!("Run unavailable"))?;
         let mut run: Run = serde_json::from_value(old.value.clone())?;
-        if !["queued", "running", "retry", "waiting"].contains(&run.status.as_str())
-            || run.wake > now()
-        {
+        let rows=crate::storage::read(&self.store.state,&format!("{} $r isa automation_record,has auto_key {};fetch {{'runnable':automation_runnable($r,{})}};",self.store.prefix(),super::store::q(&old.key),now())).await?;
+        if !rows.first().is_some_and(|row| row["runnable"] == true) {
             return Ok(old.value);
         }
         if run.cursor >= run.workflow.steps.len() {
             run.status = "completed".into();
             return Ok(self.save(&old, &run).await?.value);
         }
-        if self.store.owner(&run.owner).await.is_err() {
+        if let Err(cause) = self.store.owner(&run.owner).await {
+            if !cause
+                .downcast_ref::<dog_core::DogError>()
+                .is_some_and(|e| e.kind == dog_core::ErrorKind::Forbidden)
+            {
+                return Err(cause);
+            }
             run.status = "blocked".into();
             run.last_error = Some("owner_permission_changed".into());
             return Ok(self.save(&old, &run).await?.value);
@@ -357,7 +391,13 @@ impl Engine {
             } => {
                 let (connection_record, c, secrets) = match self.connection(&connection).await {
                     Ok(c) => c,
-                    Err(_) => {
+                    Err(cause) => {
+                        if !cause
+                            .downcast_ref::<dog_core::DogError>()
+                            .is_some_and(|e| e.kind == dog_core::ErrorKind::NotFound)
+                        {
+                            return Err(cause);
+                        }
                         run.status = "blocked".into();
                         run.last_error = Some("connection_unavailable".into());
                         return Ok(self.save(&old, &run).await?.value);
@@ -386,18 +426,21 @@ impl Engine {
                 };
                 let effect = spec.effect;
                 let previous = run.attempt.as_ref().map(|a| a.count).unwrap_or(0);
-                if run
-                    .attempt
-                    .as_ref()
-                    .is_some_and(|a| a.effect == Effect::AtMostOnce || a.effect != effect)
-                {
-                    run.status = "attention".into();
-                    run.last_error = Some("uncertain_external_outcome".into());
-                    return Ok(self.save(&old, &run).await?.value);
-                }
-                if previous >= 3 {
-                    run.status = "failed".into();
-                    run.last_error = Some("retry_limit".into());
+                let rows=crate::storage::read(&self.store.state,&format!("{} $r isa automation_record,has auto_key {},has auto_tenant {};let $decision=automation_recovery_decision($r,{});fetch {{'decision':$decision}};",self.store.prefix(),super::store::q(&old.key),super::store::q(&self.store.tenant),serde_json::to_value(effect)?)).await?;
+                let decision = rows
+                    .first()
+                    .and_then(|v| v["decision"].as_str())
+                    .ok_or_else(|| anyhow::anyhow!("Native execution policy unavailable"))?;
+                if decision != "claim" {
+                    run.status = decision.into();
+                    run.last_error = Some(
+                        if decision == "attention" {
+                            "uncertain_external_outcome"
+                        } else {
+                            "retry_limit"
+                        }
+                        .into(),
+                    );
                     return Ok(self.save(&old, &run).await?.value);
                 }
                 if connector
@@ -458,12 +501,7 @@ impl Engine {
                                 + 4
                                 > 1_048_576
                         {
-                            run.status = if effect == Effect::AtMostOnce {
-                                "attention"
-                            } else {
-                                "failed"
-                            }
-                            .into();
+                            run.status = self.failure_decision(&claimed, true).await?;
                             run.last_error = Some("output_limit".into());
                             return Ok(self.save(&claimed, &run).await?.value);
                         }
@@ -476,11 +514,10 @@ impl Engine {
                     }
                     _ => {
                         run.last_error = Some("connector_action_failed".into());
-                        if effect == Effect::AtMostOnce {
-                            run.status = "attention".into();
+                        run.status = self.failure_decision(&claimed, false).await?;
+                        if run.status == "attention" {
                             run.wake = 0;
                         } else {
-                            run.status = "retry".into();
                             run.wake = dog_queue::timing::retry_at(
                                 chrono::Utc::now(),
                                 previous,

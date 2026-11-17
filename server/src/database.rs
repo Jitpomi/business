@@ -8,6 +8,7 @@ pub const FUNCTIONS: &str = include_str!("functions.tql");
 pub const SCHEMA_POLICY: &str = include_str!("schema-policy.tql");
 pub const ACCOUNT_LINKS: &str = include_str!("account_links.tql");
 pub const BILLING: &str = include_str!("billing.tql");
+pub const BUSINESS_RULES: &str = include_str!("business-rules.tql");
 pub async fn documents(tx: &Transaction, query: &str) -> Result<Vec<Value>> {
     let mut stream = tx.query(query).await?.into_documents();
     let mut rows = Vec::new();
@@ -25,6 +26,7 @@ pub fn target(name: &str) -> Result<()> {
                 | "business_native_dev"
                 | "business_native_dev_v2"
                 | "business_native_dev_v3"
+                | "business_native_dev_v4"
                 | "business_prod"
         ) || name
             .strip_prefix("business_backend_test_")
@@ -67,6 +69,8 @@ pub async fn install(driver: &TypeDBDriver, name: &str) -> Result<()> {
         SCHEMA_POLICY,
         ACCOUNT_LINKS,
         crate::automation::store::SCHEMA,
+        crate::automation::store::POLICY_SCHEMA,
+        BUSINESS_RULES,
     ] {
         tx.query(source).await?;
     }
@@ -161,6 +165,8 @@ pub fn import_schema() -> String {
         SCHEMA_POLICY,
         ACCOUNT_LINKS,
         crate::automation::store::SCHEMA,
+        crate::automation::store::POLICY_SCHEMA,
+        BUSINESS_RULES,
     ] {
         schema.push_str(
             source
@@ -193,5 +199,5 @@ pub async fn verify_runtime(driver: &TypeDBDriver, name: &str) -> Result<()> {
         rows[0]["count"] == 0,
         "Backfill original invitation expiries before starting the service"
     );
-    Ok(())
+    crate::business_rules::verify(driver, name).await
 }

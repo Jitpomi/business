@@ -1,0 +1,19 @@
+define
+# Native policy facts accompany the preserved execution payload. They are never
+# readable or writable through the generic frontend /data capability.
+attribute auto_owner @meta("dog.security.hidden","true"),value string;
+attribute auto_cursor @meta("dog.security.hidden","true"),value integer @range(0..);
+attribute auto_steps @meta("dog.security.hidden","true"),value integer @range(1..64);
+attribute auto_attempts @meta("dog.security.hidden","true"),value integer @range(0..);
+attribute auto_effect @meta("dog.security.hidden","true"),value string @values("","read","idempotent","at_most_once");
+attribute auto_enabled @meta("dog.security.hidden","true"),value boolean;
+attribute auto_verified @meta("dog.security.hidden","true"),value boolean;
+attribute auto_binding_revision @meta("dog.security.hidden","true"),value string;
+entity automation_record,owns auto_owner @card(0..1),owns auto_cursor @card(0..1),owns auto_steps @card(0..1),owns auto_attempts @card(0..1),owns auto_effect @card(0..1),owns auto_enabled @card(0..1),owns auto_verified @card(0..1),owns auto_binding_revision @card(0..1);
+
+attribute auto_definition @meta("dog.security.hidden","true"),value string;
+entity automation_record,owns auto_definition @card(0..1);
+attribute auto_step @meta("dog.security.hidden","true"),value string @values("action","transform","condition","delay","approval","done");
+attribute auto_approved @meta("dog.security.hidden","true"),value boolean;
+attribute auto_approval_history @meta("dog.security.hidden","true"),value string;
+entity automation_record,owns auto_step @card(0..1),owns auto_approved @card(0..1),owns auto_approval_history @card(0..1);

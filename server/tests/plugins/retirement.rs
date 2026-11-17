@@ -21,7 +21,7 @@ async fn website_queries_retire_portal_end_to_end() -> Result<()> {
         "Website integration script missing"
     );
     let driver = Arc::new(
-        dog_typedb::TypeDBDriverFactory::connect(
+        crate::test_driver::connect(
             &std::env::var("TYPEDB_ADDR")?,
             &std::env::var("TYPEDB_USERNAME")?,
             &std::env::var("TYPEDB_PASSWORD")?,
@@ -74,6 +74,10 @@ async fn website_queries_retire_portal_end_to_end() -> Result<()> {
     if let Some(worker) = worker {
         worker.shutdown().await?;
     }
-    driver.databases().get(&name).await?.delete().await?;
+    if result.is_ok() {
+        driver.databases().get(&name).await?.delete().await?;
+    } else {
+        eprintln!("Retained retirement fixture: {name}");
+    }
     result
 }

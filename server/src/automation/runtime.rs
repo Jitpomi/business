@@ -9,10 +9,6 @@ impl Engine {
     pub async fn schedule(&self, mut s: Schedule) -> Result<Value> {
         identifier(&s.id)?;
         identifier(&s.workflow)?;
-        ensure!(
-            (60..=31_536_000).contains(&s.every_seconds),
-            "Schedule interval must be at least 60 seconds"
-        );
         ensure!(s.input.to_string().len() <= 65536, "Event too large");
         ensure!(
             self.store.get("workflow", &s.workflow).await?.is_some(),
@@ -83,10 +79,6 @@ impl Engine {
             .await?
             .ok_or_else(|| anyhow::anyhow!("Run unavailable"))?;
         let mut r: Run = serde_json::from_value(old.value.clone())?;
-        ensure!(
-            r.status == "attention",
-            "Run does not require reconciliation"
-        );
         let step = r
             .workflow
             .steps
@@ -110,7 +102,14 @@ impl Engine {
         r.wake = now();
         Ok(self
             .store
-            .cas(&old, &serde_json::to_value(&r)?, &r.status, r.wake)
+            .control(
+                &old,
+                &serde_json::to_value(&r)?,
+                &r.status,
+                r.wake,
+                actor,
+                "resolve",
+            )
             .await?
             .value)
     }
@@ -121,12 +120,18 @@ impl Engine {
             .await?
             .ok_or_else(|| anyhow::anyhow!("Run unavailable"))?;
         let mut r: Run = serde_json::from_value(old.value.clone())?;
-        ensure!(r.status == "blocked", "Only blocked runs can resume");
         r.status = "queued".into();
         r.wake = now();
         Ok(self
             .store
-            .cas(&old, &serde_json::to_value(&r)?, &r.status, r.wake)
+            .control(
+                &old,
+                &serde_json::to_value(&r)?,
+                &r.status,
+                r.wake,
+                self.store.request_actor()?,
+                "resume",
+            )
             .await?
             .value)
     }

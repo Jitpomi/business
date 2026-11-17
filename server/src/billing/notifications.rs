@@ -15,19 +15,20 @@ impl Engine {
         }
         // Fresh provider state avoids reminders based only on an old local observation.
         self.reconcile(id).await?;
-        let rows=self.read(format!(r#"{} fetch {{"email":$c.bill_email,"description":$i.name,"amount":$i.bill_amount,"due":$i.bill_next,"status":$i.bill_status,"url":$i.bill_url}};"#,self.invoice_match(id)?)).await?;
-        ensure!(rows.len() == 1, "Invoice missing");
-        let row = &rows[0];
         let now = chrono::Utc::now().timestamp();
-        let state = string(row, "status")?;
-        let due = number(row, "due")?;
         let interval = self.runtime.reminder_days;
-        ensure!(
-            (1..=30).contains(&interval),
-            "Reminder interval must be 1..30 days"
-        );
-        let Some(kind) = notice_kind(state, due, now, interval) else {
+        let rows=self.read(format!(r#"{} let $kind,$bucket=bill_notice_decision($i,{now},{interval});fetch {{"email":$c.bill_email,"description":$i.name,"amount":$i.bill_amount,"due":$i.bill_next,"status":$i.bill_status,"url":$i.bill_url,"kind":$kind,"bucket":$bucket}};"#,self.invoice_match(id)?)).await?;
+        let Some(row) = rows.first() else {
             return Ok(0);
+        };
+        ensure!(rows.len() == 1, "Ambiguous invoice notice");
+        let due = number(row, "due")?;
+        let category = string(row, "kind")?;
+        let bucket = number(row, "bucket")?;
+        let kind = if category == "reminder" {
+            format!("reminder-{bucket}")
+        } else {
+            category.into()
         };
         let key = format!("{id}-{kind}");
         let exists=self.read(format!(r#"{} (invoice:$i,notice:$n) isa bill_notice_owner;$n has bill_key {};fetch {{"status":$n.bill_status}};"#,self.invoice_match(id)?,quoted(&key))).await?;
@@ -49,8 +50,8 @@ impl Engine {
         } else {
             format!("[TEST — no real payment] {subject}")
         };
-        self.write(format!(r#"{} $i has bill_status {};not {{$n isa bill_notice,has bill_key {};}};select $t,$i;distinct;
-   insert $n isa bill_notice,has bill_key {},has bill_status "sending",has bill_updated {now};(invoice:$i,notice:$n) isa bill_notice_owner;fetch {{"id":$n.bill_key}};"#,self.invoice_match(id)?,quoted(state),quoted(&key),quoted(&key))).await?;
+        self.write(format!(r#"{} let $kind,$bucket=bill_notice_decision($i,{now},{interval});$kind=={};$bucket=={bucket};not {{$n isa bill_notice,has bill_key {};}};select $t,$i;distinct;
+   insert $n isa bill_notice,has bill_key {},has bill_status "sending",has bill_updated {now};(invoice:$i,notice:$n) isa bill_notice_owner;fetch {{"id":$n.bill_key}};"#,self.invoice_match(id)?,quoted(category),quoted(&key),quoted(&key))).await?;
         let result = self
             .runtime
             .send(crate::finance::Message {
@@ -92,22 +93,3 @@ impl Engine {
         Ok(rows)
     }
 }
-pub fn notice_kind(state: &str, due: i64, now: i64, days: i64) -> Option<String> {
-    if state == "paid" {
-        return Some("receipt".into());
-    }
-    if state != "open" {
-        return None;
-    }
-    if now < due {
-        return Some("invoice".into());
-    }
-    let bucket = (now - due) / (days * 86400);
-    if bucket > 3 {
-        return None;
-    }
-    Some(format!("reminder-{bucket}"))
-}
-#[cfg(test)]
-#[path = "../../tests/billing/notifications.rs"]
-mod tests;

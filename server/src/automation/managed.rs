@@ -31,10 +31,6 @@ impl RuntimeSource for Managed {
             return Ok(Arc::new(TenantRuntime::new(tenant.into(), true)));
         };
         let settings: Settings = serde_json::from_value(row.value)?;
-        ensure!(
-            (1..=30).contains(&settings.reminder_days),
-            "Invalid reminder interval"
-        );
         let mut r = TenantRuntime::new(tenant.into(), settings.sandbox);
         r.reminder_days = settings.reminder_days;
         r.allowed_test_recipients = settings.allowed_test_recipients;
@@ -90,10 +86,6 @@ impl RuntimeSource for Managed {
 }
 impl super::engine::Engine {
     pub async fn configure_billing(&self, s: Settings) -> Result<serde_json::Value> {
-        ensure!(
-            (1..=30).contains(&s.reminder_days),
-            "Reminder interval must be 1..30 days"
-        );
         ensure!(
             s.allowed_test_recipients.len() <= 100,
             "Too many recipients"

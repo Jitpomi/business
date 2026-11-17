@@ -23,6 +23,7 @@ async fn main() -> Result<()> {
                 | "business_native_dev"
                 | "business_native_dev_v2"
                 | "business_native_dev_v3"
+                | "business_native_dev_v4"
         ) || name
             .strip_prefix("business_backend_test_")
             .is_some_and(|suffix| uuid::Uuid::parse_str(suffix).is_ok()),

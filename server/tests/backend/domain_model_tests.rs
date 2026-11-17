@@ -41,7 +41,7 @@ async fn real_typedb_model_and_policy_matrix() -> Result<()> {
         "Development credentials only"
     );
     let driver = std::sync::Arc::new(
-        dog_typedb::TypeDBDriverFactory::connect(
+        crate::test_driver::connect(
             &std::env::var("TYPEDB_ADDR")?,
             &std::env::var("TYPEDB_USERNAME")?,
             &std::env::var("TYPEDB_PASSWORD")?,

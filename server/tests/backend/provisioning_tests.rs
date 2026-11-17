@@ -54,7 +54,7 @@ async fn canonical_tools_and_server_end_to_end() -> Result<()> {
             .is_some_and(|u| !u.is_empty() && u != "admin"),
         "Non-admin runtime credentials required"
     );
-    let driver = dog_typedb::TypeDBDriverFactory::connect(
+    let driver = crate::test_driver::connect(
         &std::env::var("TYPEDB_ADDR")?,
         &std::env::var("TYPEDB_USERNAME")?,
         &std::env::var("TYPEDB_PASSWORD")?,

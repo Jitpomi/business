@@ -27,3 +27,5 @@ pub mod portal_migration;
 pub mod consent_migration;
 
 pub mod background;
+
+pub mod business_rules;

@@ -30,13 +30,22 @@ async fn consent_shadow_preserves_graph_and_refuses_unproven_or_custom_work() ->
         std::env::var("TYPEDB_DB")? == "business_dev",
         "Development operator required"
     );
-    let root = std::path::PathBuf::from(std::env::var("CONSENT_TEST_ROOT")?);
+    let evidence = std::path::PathBuf::from(std::env::var("CONSENT_TEST_ROOT")?);
+    let root = evidence.join(format!(
+        "consent-migration-{}",
+        uuid::Uuid::new_v4().simple()
+    ));
+    std::fs::create_dir(&root)?;
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700))?;
+    }
     use std::os::unix::fs::PermissionsExt;
     ensure!(
-        root.is_absolute() && root.metadata()?.permissions().mode() & 0o077 == 0,
+        evidence.is_absolute() && evidence.metadata()?.permissions().mode() & 0o077 == 0,
         "Private absolute evidence directory required"
     );
-    let driver = dog_typedb::TypeDBDriverFactory::connect(
+    let driver = crate::test_driver::connect(
         &std::env::var("TYPEDB_ADDR")?,
         &std::env::var("TYPEDB_USERNAME")?,
         &std::env::var("TYPEDB_PASSWORD")?,
