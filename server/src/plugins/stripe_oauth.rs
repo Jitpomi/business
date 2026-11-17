@@ -1,5 +1,5 @@
 //! Stripe-specific OAuth protocol adapter.
-use super::oauth::{Grant, Provider};
+use crate::automation::oauth::{Grant, Provider};
 use anyhow::{ensure, Result};
 use serde_json::{json, Value};
 fn bad(message: &str) -> anyhow::Error {

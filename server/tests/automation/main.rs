@@ -298,7 +298,7 @@ fn mappings_are_bounded_and_never_evaluate_customer_data() -> Result<()> {
 }
 #[test]
 fn builtin_connections_validate_without_fabricating_proxy_identities() -> Result<()> {
-    use server::automation::builtin::Builtin;
+    use server::plugins::connectors::Builtin;
     Builtin("stripe").validate(
         &json!({"sandbox":true}),
         &json!({"token":"sk_test_synthetic_valid_key"}),

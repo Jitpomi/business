@@ -1,5 +1,5 @@
 //! Explicit, additive import. Existing provider aliases and invoice bindings stay intact.
-use super::{
+use crate::automation::{
     engine::{now, Engine},
     managed::Settings,
     model::{Schedule, Step, Workflow},

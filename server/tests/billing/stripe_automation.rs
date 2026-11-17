@@ -248,7 +248,7 @@ async fn run(phase: &str) -> Result<()> {
     let registry: Arc<server::finance::TenantRegistry> = app
         .get("tenant.plugins")
         .context("Plugin resolver missing")?;
-    let router = server::app::router(transport);
+    let router = server::app::runtime_router(&app, transport).await?;
     // Only fixture creation/attachment uses the raw provider transport. Every invoice
     // and collection operation below resolves the authenticated tenant's connections.
     let fixture = server::plugins::builtin_transport::Providers::connected(

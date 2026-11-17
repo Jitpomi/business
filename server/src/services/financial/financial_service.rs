@@ -10,9 +10,7 @@ use crate::{
     typedb::TypeDBState,
 };
 use anyhow::{ensure, Result};
-use dog_core::{
-    DogAppBuilder, DogError, DogService, ServiceCapabilities, ServiceMethodKind, TenantContext,
-};
+use dog_core::{DogError, DogService, ServiceCapabilities, ServiceMethodKind, TenantContext};
 use serde_json::{json, Value};
 use std::sync::Arc;
 
@@ -52,14 +50,7 @@ impl DogService<Value, BusinessParams> for FinancialService {
         params: BusinessParams,
     ) -> Result<Value> {
         let actor = actor(ctx, &params)?;
-        let action = field(&data, "action")?;
-        ensure!(
-            matches!(
-                action,
-                "history" | "payment_methods" | "setup_method" | "confirm_method" | "detach_method"
-            ),
-            DogError::bad_request("Unsupported financial plugin operation").into_anyhow()
-        );
+        let action = super::financial_schema::action(&data)?;
         let e = self.access.engine_for(ctx, &actor, &data).await?;
         if action == "history" {
             let id = crate::billing::billing_schema::id(field(&data, "invoice_id")?)?;
@@ -183,14 +174,4 @@ impl DogService<Value, BusinessParams> for FinancialService {
             _ => Err(DogError::bad_request("Unsupported financial plugin operation").into_anyhow()),
         }
     }
-}
-pub fn register_hooks(
-    builder: &mut DogAppBuilder<Value, BusinessParams>,
-    auth: Arc<dog_auth::AuthenticationService<BusinessParams>>,
-) {
-    builder.service_hooks("financial", |h| {
-        h.before_all(Arc::new(
-            dog_auth::hooks::AuthenticateHook::new(auth, vec!["jwt".into()]).strict(),
-        ));
-    });
 }

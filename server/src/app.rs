@@ -58,9 +58,7 @@ fn compose(
     if std::env::var("AUTOMATION_ENABLED").as_deref() == Ok("true") {
         let mut catalog = connectors.unwrap_or_default();
         catalog.register(Arc::new(crate::automation::connectors::Http))?;
-        for kind in ["stripe", "mercury", "resend"] {
-            catalog.register(Arc::new(crate::automation::builtin::Builtin(kind)))?;
-        }
+        crate::plugins::connectors::register(&mut catalog)?;
         let vault = crate::automation::vault::Vault::from_env()?;
         registry = Arc::new((*registry).clone().with_source(Arc::new(
             crate::automation::managed::Managed {
@@ -91,6 +89,8 @@ fn compose(
     let auth = crate::auth::strategies(&mut builder, state.clone())?;
     crate::services::configure(&mut builder, auth.clone(), state, registry)?;
     let authentication_requirements = crate::auth::requirements::configure(&mut builder)?;
+    crate::hooks::register_global_hooks(&mut builder)?;
+    crate::channels::configure(&mut builder)?;
     let app = builder.build();
     for service in authentication_requirements {
         app.service(&service).map_err(|_| {
@@ -116,7 +116,7 @@ pub fn router(http: DogHttpService<Value, BusinessParams>) -> axum::Router {
         )
         .route_service("/automation", endpoint(http.clone()))
         .merge(crate::plugins::routes(http))
-        .route_layer(axum::middleware::from_fn(crate::admission::guard))
+        .route_layer(axum::middleware::from_fn(crate::hooks::guard))
         .route(
             "/queries/data/{name}",
             axum::routing::get(
@@ -203,4 +203,37 @@ pub fn build_with_authentication(
     builder.set("auth.jwt.secret", jwt_secret);
     builder.set("authentication.plugins", authentication);
     compose(builder, finance, None)
+}
+
+/// Compose every HTTP ingress using the same application state as registered services.
+/// Worker lifetime remains owned by the process entry point.
+pub async fn runtime_router(
+    app: &DogApp<Value, BusinessParams>,
+    http: DogHttpService<Value, BusinessParams>,
+) -> Result<axum::Router> {
+    let mut router = router(http);
+    let automation: Option<std::sync::Arc<crate::automation::engine::Engine>> =
+        app.get("automation.engine");
+    if let Some(template) = automation.clone() {
+        anyhow::ensure!(
+            crate::automation::store::installed(&template.store.state).await?,
+            "Install the additive automation schema before enabling automation"
+        );
+        router = router.merge(crate::automation::events::router((*template).clone()));
+    }
+    if std::env::var("BILLING_ENABLED").as_deref() == Ok("true") {
+        anyhow::ensure!(automation.is_some(),"Billing requires the automation engine; install/import connections and billing workflows before enabling it");
+        let state = app
+            .get("typedb")
+            .ok_or_else(|| anyhow::anyhow!("Missing TypeDB state"))?;
+        let registry = app
+            .get("tenant.plugins")
+            .ok_or_else(|| anyhow::anyhow!("Missing tenant registry"))?;
+        router = router.merge(crate::billing::http::managed_router(
+            state,
+            registry,
+            std::env::var("ACCOUNT_TENANT_ID").ok(),
+        )?);
+    }
+    Ok(router)
 }
