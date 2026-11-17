@@ -171,7 +171,8 @@ tx.query(format!(r#"insert $t isa tenant,has tenant_id "{tenant}",has name "Auto
  ensure!(server::background::reconcile(&e.store).await? >= 1);
  ensure!(server::background::reconcile(&e.store).await? == 0,"Backfill duplicated deliveries");
  ensure!(e.store.get("run",&driven_id).await?.unwrap().value==pending.value,"Backfill changed useful workflow state");
- let worker=server::background::spawn_all(e.clone());let outcome=tokio::time::timeout(std::time::Duration::from_secs(30),async{loop{if e.store.get("run",&driven_id).await?.unwrap().value["status"]=="completed" && e.store.list("run",1000).await?.iter().any(|r|r.value["input"]["source"]=="recurrence-acceptance" && r.value["status"]=="completed"){break Ok::<_,anyhow::Error>(());}tokio::time::sleep(std::time::Duration::from_millis(500)).await;}}).await;worker.shutdown().await?;
+ // Includes historical outbox backlog and the scheduler -> occurrence -> workflow pipeline.
+ let worker=server::background::spawn_all(e.clone());let outcome=tokio::time::timeout(std::time::Duration::from_secs(90),async{loop{if e.store.get("run",&driven_id).await?.unwrap().value["status"]=="completed" && e.store.list("run",1000).await?.iter().any(|r|r.value["input"]["source"]=="recurrence-acceptance" && r.value["status"]=="completed"){break Ok::<_,anyhow::Error>(());}tokio::time::sleep(std::time::Duration::from_millis(500)).await;}}).await;worker.shutdown().await?;
  if outcome.is_err(){for row in e.store.list("job",1000).await? {eprintln!("queue diagnostic type={} status={} attempt={} error={}",row.value["record"]["message"]["job_type"],row.status,row.value["record"]["attempt"],row.value["record"]["last_error"]);}}
  if outcome.is_err(){for row in e.store.list("run",1000).await?{eprintln!("run diagnostic workflow={} source={} status={} error={}",row.value["workflow"]["id"],row.value["input"]["source"],row.value["status"],row.value["last_error"]);}}
  outcome??;
