@@ -46,8 +46,10 @@ work requires current native authorization.
   rejects remote addresses under that flag and preserves the supplied database
   credentials. Production connection configuration is unchanged.
 
-These are native/local plugin acceptance results, not a new live Stripe/Mercury
+At the audit merge, these were native/local plugin acceptance results, not a new live Stripe/Mercury
 payment proof or a live database cutover. The running development service and
-source database remain unchanged. Apply the documented v3-to-v4 shadow migration
+source database were unchanged at that point. Apply the documented v3-to-v4 shadow migration
 only after quiescing writers and verifying a fresh backup; startup will reject
 incomplete native policy facts rather than silently backfilling them.
+
+Deployment follow-up and sandbox evidence: `native-business-cutover-2026-11-16.json`.
