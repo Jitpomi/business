@@ -51,3 +51,7 @@ http-body-util = "0.1"
 # Reviewed maintained transport; preserves the TypeDB 3.13 protocol.
 [patch.crates-io]
 typedb-driver = { git = "https://github.com/Jitpomi/typedb-driver", rev = "548a885bc3dee18a3a84fb3092e8b45dc9a4e081" }
+
+# Maintained DogRS 0.3 auth backport; core source is identical to registry 0.3.0.
+dog-auth = { git = "https://github.com/Jitpomi/dogrs", rev = "d2756c95569f05ba81e7d6fdc0ceed92acf4d5a1" }
+dog-core = { git = "https://github.com/Jitpomi/dogrs", rev = "d2756c95569f05ba81e7d6fdc0ceed92acf4d5a1" }
