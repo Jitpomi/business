@@ -15,6 +15,21 @@ pub struct Invocation {
 }
 #[async_trait]
 pub trait Connector: Send + Sync {
+    /// Provider-owned onboarding; core execution never knows provider protocols.
+    fn oauth(&self) -> Option<Arc<dyn super::oauth::Provider>> {
+        None
+    }
+    /// Engine capabilities can stay in the action catalog without appearing as external systems.
+    fn internal(&self) -> bool {
+        false
+    }
+    fn connection_purpose(&self) -> (&'static str, &'static str) {
+        ("other", "Other systems")
+    }
+    /// Optional UI field descriptions. Unknown installed plugins use JSON objects.
+    fn connection_fields(&self) -> Value {
+        Value::Null
+    }
     fn name(&self) -> &str;
     fn validate_input(&self, _config: &Value, _action: &str, _input: &Value) -> Result<()> {
         Ok(())
@@ -76,7 +91,7 @@ impl Catalog {
         json!(self
             .entries
             .values()
-            .map(|c| json!({"id":c.name(),"actions":c.actions(),"verification":c.verification_method()}))
+            .map(|c| json!({"id":c.name(),"actions":c.actions(),"verification":c.verification_method(),"oauth":c.oauth().map(|p| p.describe()),"fields":c.connection_fields(),"internal":c.internal(),"purpose":{"id":c.connection_purpose().0,"name":c.connection_purpose().1}}))
             .collect::<Vec<_>>())
     }
 }
@@ -256,6 +271,13 @@ impl Http {
 }
 #[async_trait]
 impl Connector for Http {
+    fn connection_fields(&self) -> Value {
+        json!({
+          "config":[{"key":"origin","label":"API origin (HTTPS)","type":"text","required":true},{"key":"verify_path","label":"Read-only verification path (optional)","type":"text"},{"key":"api_key_header","label":"API-key header name (optional)","type":"text"}],
+          "secrets":[{"key":"bearer","label":"Bearer token (optional)","type":"password"},{"key":"api_key","label":"API key (optional)","type":"password"}]
+        })
+    }
+
     fn name(&self) -> &str {
         "http"
     }

@@ -14,6 +14,16 @@ use serde_json::{json, Value};
 #[derive(Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 enum Command {
+    OauthBegin {
+        id: String,
+        connector: String,
+    },
+    OauthFinish {
+        state: String,
+        code: Option<String>,
+        #[serde(default)]
+        denied: bool,
+    },
     List {
         kind: String,
         after: Option<String>,
@@ -134,6 +144,12 @@ impl DogService<Value, BusinessParams> for AutomationService {
             dog_core::DogError::bad_request("Unsupported or malformed automation request")
                 .into_anyhow()
         })? {
+            Command::OauthBegin { id, connector } => e.oauth_begin(&id, &connector).await,
+            Command::OauthFinish {
+                state,
+                code,
+                denied,
+            } => e.oauth_finish(&state, code.as_deref(), denied).await,
             Command::List { kind, after, limit } => {
                 super::automation_schema::kind(&kind)?;
                 let rows = e.store.page(&kind, after.as_deref(), limit).await?;

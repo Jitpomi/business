@@ -107,13 +107,16 @@ pub async fn verify(driver: &TypeDBDriver, target: &str) -> Result<()> {
     ensure!(
         schema.contains("fun automation_step_progress")
             && schema.contains("fun bill_notice_decision")
-            && schema.contains("fun bill_next_occurrence"),
+            && schema.contains("fun bill_next_occurrence")
+            && schema.contains("fun automation_oauth_claim")
+            && schema.contains("fun automation_oauth_finish"),
         "Explicit native business-rule migration required before runtime"
     );
     let tx = driver.transaction(target, TransactionType::Read).await?;
     let rows=documents(&tx,r#"match $r isa automation_record,has auto_kind $kind;
       {$kind=="run";not {$r has auto_owner $_,has auto_cursor $_,has auto_steps $_,has auto_attempts $_,has auto_effect $_,has auto_definition $_,has auto_step $_,has auto_approved $_,has auto_approval_history $_;};}
       or {{$kind=="workflow";} or {$kind=="workflow_version";};not {$r has auto_owner $_,has auto_enabled $_;};}
+      or {$kind=="oauth";not {$r has auto_owner $_,has auto_definition $_;};}
       or {$kind=="connection";not {$r has auto_enabled $_,has auto_verified $_,has auto_binding_revision $_;};}
       or {{$kind=="schedule";} or {$kind=="trigger";};not {$r has auto_enabled $_,has auto_definition $_;};};
       reduce $n=count;fetch {'missing':$n};"#).await?;
@@ -134,11 +137,22 @@ pub async fn import(
     database::target(source)?;
     database::target(target)?;
     ensure!(
-        (source == "business_native_dev_v3" || source.starts_with("business_backend_test_"))
-            && (target == "business_native_dev_v4" || target.starts_with("business_backend_test_"))
+        (database::development_version(source).is_some()
+            || source.starts_with("business_backend_test_"))
+            && (database::development_version(target).is_some()
+                || target.starts_with("business_backend_test_"))
             && source != target,
         "Development source and new policy shadow required"
     );
+    if let (Some(from), Some(to)) = (
+        database::development_version(source),
+        database::development_version(target),
+    ) {
+        ensure!(
+            to > from,
+            "A policy shadow must advance the development version"
+        );
+    }
     ensure!(
         !driver.databases().contains(target).await?,
         "Target exists; nothing overwritten"

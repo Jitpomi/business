@@ -133,3 +133,14 @@ fun automation_schedule_configuration($t: tenant,$workflow: string,$every: integ
   return check;
 
 entity bootstrap_record @meta("jitpomi.business.rules","native-business-v1");
+
+# One-time OAuth handoffs are bound to the initiating identity, tenant and expiry.
+# No credential, authorization code or PKCE verifier is stored in these facts.
+fun automation_oauth_claim($r:automation_record,$t:tenant,$actor:string,$now:datetime,$epoch:integer)->boolean:
+  match $t has tenant_id $tenant;$r has auto_tenant == $tenant,has auto_kind "oauth",has auto_owner == $actor,has auto_status "pending",has auto_when $expires;
+    $expires > $epoch;$u isa identity,has identity_id == $actor;let $allowed=role_at_least($u,$t,"owner",$now);$allowed==true;
+  return check;
+fun automation_oauth_finish($r:automation_record,$t:tenant,$actor:string,$now:datetime,$epoch:integer)->boolean:
+  match $t has tenant_id $tenant;$r has auto_tenant == $tenant,has auto_kind "oauth",has auto_owner == $actor,has auto_status "exchanging",has auto_when $expires;
+    $expires > $epoch;$u isa identity,has identity_id == $actor;let $allowed=role_at_least($u,$t,"owner",$now);$allowed==true;let $capacity=automation_connection_capacity($t);$capacity==true;
+  return check;

@@ -1,4 +1,5 @@
 mod background_checks;
+mod oauth_checks;
 #[path = "../support/driver.rs"]
 mod test_driver;
 use anyhow::{ensure, Result};
