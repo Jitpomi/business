@@ -147,8 +147,9 @@ async fn policy_shadow_preserves_all_backup_work_and_is_idempotent() -> Result<(
     let backup = std::path::PathBuf::from(std::env::var("BUSINESS_RULES_TEST_BACKUP")?);
     let target = format!("business_backend_test_{}", uuid::Uuid::new_v4().simple());
     eprintln!("Backup policy rehearsal shadow: {target}");
-    let report =
-        server::business_rules::import(&driver, "business_native_dev_v3", &target, &backup).await?;
+    let source = std::env::var("BUSINESS_RULES_TEST_SOURCE")
+        .unwrap_or_else(|_| "business_native_dev_v3".into());
+    let report = server::business_rules::import(&driver, &source, &target, &backup).await?;
     ensure!(
         report["preserved"] == true
             && report["idempotent"] == true
