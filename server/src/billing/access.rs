@@ -85,8 +85,5 @@ impl BillingAccess {
     }
 }
 fn now() -> String {
-    chrono::Utc::now()
-        .naive_utc()
-        .format("%Y-%m-%dT%H:%M:%S%.6f")
-        .to_string()
+    crate::clock::native_utc()
 }

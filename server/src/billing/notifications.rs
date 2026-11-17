@@ -15,7 +15,7 @@ impl Engine {
         }
         // Fresh provider state avoids reminders based only on an old local observation.
         self.reconcile(id).await?;
-        let now = chrono::Utc::now().timestamp();
+        let now = crate::clock::unix_seconds();
         let interval = self.runtime.reminder_days;
         let rows=self.read(format!(r#"{} let $kind,$bucket=bill_notice_decision($i,{now},{interval});fetch {{"email":$c.bill_email,"description":$i.name,"amount":$i.bill_amount,"due":$i.bill_next,"status":$i.bill_status,"url":$i.bill_url,"kind":$kind,"bucket":$bucket}};"#,self.invoice_match(id)?)).await?;
         let Some(row) = rows.first() else {

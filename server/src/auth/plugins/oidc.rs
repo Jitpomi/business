@@ -185,7 +185,7 @@ impl Oidc {
         validation.validate_nbf = true;
         validation.leeway = 30;
         let mut claims = decode::<Value>(token, &DecodingKey::from_jwk(jwk)?, &validation)?.claims;
-        let now = chrono::Utc::now().timestamp();
+        let now = crate::clock::unix_seconds();
         ensure!(
             claims["iat"].as_i64().is_some_and(|v| v <= now + 30),
             "Invalid issue time"

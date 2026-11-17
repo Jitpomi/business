@@ -46,3 +46,40 @@ Keep the security gate enabled and leave deployment blocked until all three
 remaining findings have a supported resolution. Authentication, native RBAC,
 provider uncertainty and independent-tenant billing tests are required for this
 partial fix; it must not be described as a completed four-dependency removal.
+
+## Upstream submissions and first-party clock migration
+
+The coordinated proposals are now public drafts for maintainer discussion:
+
+- Design/API decision: https://github.com/typedb/typedb-driver/issues/950
+- Shared build/registry: https://github.com/typedb/typedb-dependencies/pull/640
+- Protocol build imports: https://github.com/typedb/typedb-protocol/pull/265
+- Parser formatter: https://github.com/typedb/typeql/pull/477
+- Driver temporal values: https://github.com/typedb/typedb-driver/pull/951
+
+Their contribution-fork build pins exist only to review the coordinated changes.
+Business has not adopted these unreleased third-party forks. The official current
+3.15 driver/parser releases still contain the flagged crates; upstream acceptance
+and a supported release are an external prerequisite to finishing this graph.
+
+Business's trusted Unix-second clock and native TypeQL UTC inputs now use the
+maintained time library. Native inputs retain UTC and truncate to the existing
+six fractional digits. Authorization and tenancy decisions remain in TypeDB.
+The legacy date parsers and dog-queue public/persisted timestamp interfaces still
+use Chrono; their migration is not represented as finished by this clock change.
+No package alias, advisory exception, removed parser or success-only audit filter
+is used to hide these remaining paths.
+
+Validation of the clock change: 53 ordinary tests, Clippy with warnings denied,
+live hosted authentication-to-RBAC, native OAuth tenant/actor/expiry/replay checks,
+and two tenants billing through independent plugins pass. Real retained-provider
+replay initially stops at the canonical-schema check because its checkpoints
+predate onboarding. A separate shadow rehearsal, using a verified Stripe backup
+and fresh generated targets only, encountered hosted TypeDB gateway 502/404
+errors. Original checkpoint roots, invoice/payment IDs and source databases are
+retained. No provider status override, payment submission, live-schema cutover or
+runtime fallback was performed. These failed hosted checks are not called passes.
+
+The strict dependency-security check remains a required failing gate until the
+remaining first-party timestamp migrations and official upstream adoption are
+complete. Do not merge or deploy this as a completed dependency removal.

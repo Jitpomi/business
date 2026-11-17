@@ -181,7 +181,7 @@ impl Engine {
         ))
     }
     pub async fn issue(&self, id: &str) -> Result<()> {
-        let now = chrono::Utc::now().timestamp();
+        let now = crate::clock::unix_seconds();
         // Read customer settings at claim time. Revision validation below rejects a
         // preference or consent change racing the claim.
         let rows=self.read(format!(r#"{} fetch {{{CUSTOMER_DATA},"invoice_id":$i.bill_key,"description":$i.name,"amount":$i.bill_amount,"issued":$i.bill_anchor,"due":$i.bill_next,"mode":bill_plan_payment_choice($c,$p)}};"#,self.invoice_match(id)?)).await?;
@@ -225,7 +225,7 @@ impl Engine {
         opaque_id(external)?;
         let status = value.state.as_str();
         let url = &value.payment_url;
-        let now = chrono::Utc::now().timestamp();
+        let now = crate::clock::unix_seconds();
         let record = self.validate_observation(id, plugin_id, value).await?;
         let row = &record;
         // Older deliveries may never undo a paid/void observation. Refunds and disputes
@@ -309,12 +309,12 @@ impl Engine {
     // Rotate attempted work even when a provider errors or the tick is cancelled.
     // Otherwise a permanently failing first batch can starve every later invoice.
     pub async fn mark_attempt(&self, id: &str) -> Result<()> {
-        let now = chrono::Utc::now().timestamp();
+        let now = crate::clock::unix_seconds();
         self.write(format!(r#"{} select $t,$i;distinct;update $i has bill_updated {now};fetch {{"id":$i.bill_key}};"#,self.invoice_match(id)?)).await?;
         Ok(())
     }
     pub async fn tick(&self) -> Result<Value> {
-        let scheduled = self.enqueue_due(chrono::Utc::now().timestamp()).await?;
+        let scheduled = self.enqueue_due(crate::clock::unix_seconds()).await?;
         let rows=self.read(format!(r#"{} (merchant:$t,customer:$c) isa bill_account;(customer:$c,plan:$p) isa bill_plan_owner;(plan:$p,invoice:$i) isa bill_invoice_owner;not {{(invoice:$i,notice:$archive) isa bill_notice_owner;$archive has bill_status "imported-history";}};$i has bill_status "queued",has bill_updated $updated,has bill_key $id;select $i,$updated,$id;distinct;sort $updated,$id;limit 10;fetch {{"id":$i.bill_key}};"#,self.prefix())).await?;
         let mut issued = 0;
         let mut errors = 0;
@@ -335,7 +335,7 @@ impl Engine {
             if self.reconcile(id).await.is_ok() {
                 reconciled += 1;
                 if self
-                    .collect_due(id, chrono::Utc::now().timestamp())
+                    .collect_due(id, crate::clock::unix_seconds())
                     .await
                     .is_err()
                 {

@@ -44,8 +44,8 @@ impl Requirement {
                 age > 0
                     && verified["auth_time"]
                         .as_i64()
-                        .is_some_and(|v| v <= chrono::Utc::now().timestamp() + 30
-                            && chrono::Utc::now().timestamp() - v <= age),
+                        .is_some_and(|v| v <= crate::clock::unix_seconds() + 30
+                            && crate::clock::unix_seconds() - v <= age),
                 denied()
             );
         }

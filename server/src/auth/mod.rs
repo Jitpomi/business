@@ -53,7 +53,7 @@ impl Verified {
             }
             _ => anyhow::bail!("Invalid authentication methods"),
         };
-        let now = chrono::Utc::now().timestamp();
+        let now = crate::clock::unix_seconds();
         let auth_time = c
             .get("auth_time")
             .map(|v| {
@@ -198,7 +198,7 @@ impl Registry {
                 && verified.issuer == plugin.issuer()
                 && !verified.subject.is_empty()
                 && verified.subject.len() <= 255
-                && verified.expires > chrono::Utc::now().timestamp(),
+                && verified.expires > crate::clock::unix_seconds(),
             "Plugin returned inconsistent or expired identity"
         );
         Ok(verified)
@@ -293,7 +293,7 @@ impl AuthenticationStrategy<BusinessParams> for Local {
         auth: &AuthenticationBase<BusinessParams>,
     ) -> Result<AuthenticationResult> {
         let mut result = self.0.authenticate(request, params, ctx, auth).await?;
-        let at = chrono::Utc::now().timestamp();
+        let at = crate::clock::unix_seconds();
         result["accessToken"]=json!(auth.create_access_token(json!({"sub":result["user"]["id"],"credential_id":result["user"]["credential_id"],"credential_version":result["user"]["credential_version"],"auth_time":at,"amr":["pwd"]}),None).await?);
         Ok(result)
     }
@@ -439,10 +439,7 @@ pub fn strategies(
     Ok(AuthenticationService::install(builder, service))
 }
 fn now() -> String {
-    chrono::Utc::now()
-        .naive_utc()
-        .format("%Y-%m-%dT%H:%M:%S%.6f")
-        .to_string()
+    crate::clock::native_utc()
 }
 
 pub fn binding_key(issuer: &str, subject: &str) -> String {
