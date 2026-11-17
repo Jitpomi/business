@@ -85,3 +85,23 @@ Official references:
 - https://docs.stripe.com/connect/oauth-reference
 - https://docs.stripe.com/connect/oauth-standard-accounts
 - https://docs.stripe.com/connect/testing?accounts-namespace=v1
+
+## Final closure
+
+All 1,750 pre-configuration objects remain after cleanup. Their original attributes
+are preserved apart from the expected isolated test tenant fence and restoration
+of its synthetic identity status; the closed test membership retains its original
+role/start attributes and its new end time. Its native owner scope and connection
+read are now denied. All 12 retained connection ciphertexts decrypt correctly,
+and the original v4 source with 1,694 objects and graph facts remains unchanged.
+Backend health is 200. The synthetic Auth0 blocked state was restored, with its
+original email-verification state unchanged.
+
+Website commit `386cf11` deployed as Worker
+`c585afab-69c9-4759-9f5d-8d2cb982af9e`. Both expired logout and fresh-session
+revocation were verified in the live browser: native revocation returned the
+workspace to sign-in without retrying an operation. Website correctness and Pages
+checks passed. [Business correctness passed](https://github.com/Jitpomi/business/actions/runs/44189988996)
+for this configuration record. The independent strict dependency audit still
+reports only the existing RUSTSEC-2026-0543, RUSTSEC-2026-0555 and
+RUSTSEC-2026-0559 findings; no suppression or dependency change was introduced.
