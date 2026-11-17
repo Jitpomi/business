@@ -182,9 +182,7 @@ impl Store {
         actor: &str,
         connection: &Record,
     ) -> Result<Record> {
-        let now = chrono::Utc::now()
-            .naive_utc()
-            .format("%Y-%m-%dT%H:%M:%S%.6f");
+        let now = crate::clock::native_utc();
         let guard=format!("$u isa identity,has identity_id {};let $allowed=role_at_least($u,$t,\"owner\",{now});$allowed==true;$bound isa automation_record,has auto_tenant {},has auto_key {},has auto_revision {},has auto_status \"enabled\",has auto_enabled true,has auto_verified true;",q(actor),q(&self.tenant),q(&connection.key),q(&connection.revision));
         self.cas_guarded(old, value, status, when, &guard).await
     }
@@ -251,7 +249,7 @@ impl Store {
                 format!(
                     "let $policy=automation_control($r,{},{},{},{},{count},{},{});$policy==true;",
                     q(action),
-                    chrono::Utc::now().timestamp(),
+                    crate::clock::unix_seconds(),
                     run.cursor,
                     q(status),
                     q(if action == "resolve" {
@@ -273,7 +271,7 @@ impl Store {
                     super::policy::approved(&run)
                 )
             } else {
-                format!("let $policy=automation_progress($r,$t,{},{},{},{},{count},{effect});$policy==true;",native_now(),chrono::Utc::now().timestamp(),q(status),run.cursor)
+                format!("let $policy=automation_progress($r,$t,{},{},{},{},{count},{effect});$policy==true;",native_now(),crate::clock::unix_seconds(),q(status),run.cursor)
             };
             let history = if control == Some("approve") {
                 String::new()
@@ -329,10 +327,7 @@ impl Store {
         })
     }
     pub async fn owner(&self, actor: &str) -> Result<()> {
-        let now = chrono::Utc::now()
-            .naive_utc()
-            .format("%Y-%m-%dT%H:%M:%S%.6f")
-            .to_string();
+        let now = crate::clock::native_utc();
         let rows=storage::read(&self.state,&format!("{} $u isa identity,has identity_id {};let $allowed=role_at_least($u,$t,\"owner\",{now});$allowed==true;fetch {{'id':$u.identity_id}};",self.prefix(),q(actor))).await?;
         ensure!(
             rows.len() == 1,
@@ -393,8 +388,5 @@ pub async fn installed(state: &TypeDBState) -> Result<bool> {
 }
 
 pub(crate) fn native_now() -> String {
-    chrono::Utc::now()
-        .naive_utc()
-        .format("%Y-%m-%dT%H:%M:%S%.6f")
-        .to_string()
+    crate::clock::native_utc()
 }

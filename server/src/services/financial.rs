@@ -34,10 +34,7 @@ impl DogService<Value, BusinessParams> for FinancialService {
     async fn find(&self, ctx: &TenantContext, params: BusinessParams) -> Result<Vec<Value>> {
         let identity = actor(ctx, &params)?;
         let q = |s: &str| serde_json::to_string(s).unwrap();
-        let now = chrono::Utc::now()
-            .naive_utc()
-            .format("%Y-%m-%dT%H:%M:%S%.6f")
-            .to_string();
+        let now = crate::clock::native_utc();
         // The native policy checks current membership. Configuration is resolved
         // only after this succeeds; no credentials are returned to the caller.
         let rows=crate::storage::read(&self.access.state,&format!("match let $email,$tenant,$owner=request_account({},{},{}); fetch {{'tenant':$tenant}};",q(&ctx.tenant_id.0),q(&identity),now)).await?;

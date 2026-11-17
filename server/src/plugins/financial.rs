@@ -101,7 +101,7 @@ impl FinancialPlugin for BuiltinFinancial {
                 .map(String::as_str)
                 .unwrap_or(""),
             body,
-            chrono::Utc::now().timestamp(),
+            crate::clock::unix_seconds(),
         )
         .map_err(|_| WebhookError::Unauthorized)?;
         let event: Value = serde_json::from_slice(body).map_err(|_| WebhookError::Invalid)?;
