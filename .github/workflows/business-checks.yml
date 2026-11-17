@@ -1,4 +1,4 @@
-name: Business checks
+name: Business correctness
 on:
   pull_request:
     paths: ['server/**', 'deploy/**', 'render.yaml', '.github/workflows/business-checks.yml']
@@ -37,12 +37,3 @@ jobs:
       - run: cargo clippy --locked --all-targets -- -D warnings
       # Hosted tests are explicit operator runs against synthetic data. CI never
       # receives payment/database credentials or creates provider resources.
-
-  dependency-security:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - run: cargo install cargo-audit --locked
-      - run: cargo audit --file server/Cargo.lock --deny unsound --deny yanked --deny unmaintained

@@ -1,0 +1,22 @@
+name: Business dependency security
+on:
+  pull_request:
+    paths: ['server/**', 'deploy/**', 'render.yaml', '.github/workflows/business-checks.yml', '.github/workflows/dependency-security.yml']
+  push:
+    branches: [main]
+    paths: ['server/**', 'deploy/**', 'render.yaml', '.github/workflows/business-checks.yml', '.github/workflows/dependency-security.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: business-dependency-security-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  dependency-security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo install cargo-audit --locked
+      - run: cargo audit --file server/Cargo.lock --deny unsound --deny yanked --deny unmaintained
