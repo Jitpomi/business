@@ -17,6 +17,12 @@ async fn mercury_managed_new_processing_payment() -> Result<()> {
 }
 
 #[tokio::test]
+#[ignore = "Checkpointed manual Mercury bank payment must be Processing; no duplicate reminders or premature receipts"]
+async fn mercury_managed_manual_processing_payment() -> Result<()> {
+    run("processing-manual").await
+}
+
+#[tokio::test]
 #[ignore = "Approved Mercury sandbox and dev mailbox; creates one checkpointed USD 1 invoice and one reminder through native data and automation"]
 async fn mercury_managed_create_invoice_and_reminder() -> Result<()> {
     run("create").await
@@ -105,7 +111,13 @@ async fn run(phase: &str) -> Result<()> {
     for dir in ["auth", "secrets", "checkpoint"] {
         let path = root.join(dir);
         if !path.exists() {
-            std::fs::create_dir(&path)?;
+            let mut directory = std::fs::DirBuilder::new();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::DirBuilderExt;
+                directory.mode(0o700);
+            }
+            directory.create(&path)?;
         }
         #[cfg(unix)]
         {
@@ -295,7 +307,7 @@ async fn run(phase: &str) -> Result<()> {
             let query=format!("match $c isa bill_customer,has bill_key {};put $p isa bill_plan,has bill_key {},has name 'TEST ONLY Mercury managed plugin invoice',has bill_amount 100,has bill_due_days 0,has bill_anchor {},has bill_next {},has bill_sequence 0,has bill_interval 'once',has bill_status 'active';(customer:$c,plan:$p) isa bill_plan_owner;fetch {{'id':$p.bill_key}};",q(customer[0]["id"].as_str().unwrap()),q(&plan),anchor,anchor);
             let existing=read(format!("match $p isa bill_plan,has bill_key {};fetch {{'id':$p.bill_key}};",q(&plan))).await?;
             if existing.is_empty(){let answer=ok(&router,&tenant,token,"/data",json!({"query":query}),Some("write")).await?;ensure!(answer["ok"]["answers"].as_array().is_some_and(|a|a.len()==1),"Native plan creation did not commit");}
-            event(&router,&tenant,token,"mercury-cycle",if manual{"create-manual-invoice-once"}else{"create-invoice-once"}).await?;
+            event(&router,&tenant,token,"mercury-cycle",&format!("create-plan-{plan}")).await?;
             let rows=read(format!("match $p isa bill_plan,has bill_key {};(plan:$p,invoice:$i) isa bill_invoice_owner;fetch {{'id':$i.bill_key}};",q(&plan))).await?;ensure!(rows.len()==1,"Invoice duplicated or missing");let id=rows[0]["id"].as_str().unwrap().to_owned();saved[if manual{"manual_invoice"}else{"created_invoice"}]=json!(id);save(&root.join("prepared-run.json"),&saved)?;id
         }else{saved[if manual{"manual_invoice"}else{"created_invoice"}].as_str().context("Create the checkpointed test invoice first")?.to_owned()};
         let before=read(notices(&target)).await?;
@@ -310,7 +322,7 @@ async fn run(phase: &str) -> Result<()> {
         let status=observed[0]["status"].as_str().unwrap();
         save(&root.join(format!("{phase}-observation.json")),&json!({"phase":phase,"invoice":observed[0],"notices":after,"provider_paid_and_application_receipt":status=="paid"&&after.iter().any(|n|n["id"]==format!("{target}-receipt")&&n["status"].as_str().unwrap().starts_with("accepted:"))}))?;
         match phase {
-            "processing"|"processing-created"=>ensure!(status=="processing"&&before==after&&!after.iter().any(|n|n["id"].as_str().unwrap().ends_with("-receipt")),"Processing must not produce reminders or receipts"),
+            "processing"|"processing-created"|"processing-manual"=>ensure!(status=="processing"&&before==after&&!after.iter().any(|n|n["id"].as_str().unwrap().ends_with("-receipt")),"Processing must not produce reminders or receipts"),
             "create"|"create-manual"=>ensure!(status=="open"&&after.iter().filter(|n|n["id"]==format!("{target}-reminder-0")&&n["status"].as_str().unwrap().starts_with("accepted:")).count()==1,"Initial reminder missing or duplicated"),
             _=>ensure!(status=="paid"&&after.iter().filter(|n|n["id"]==format!("{target}-receipt")&&n["status"].as_str().unwrap().starts_with("accepted:")).count()==1,"Mercury must report Paid before a receipt; observed {status}; checkpoint retained"),
         }

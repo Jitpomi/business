@@ -1,0 +1,84 @@
+{
+  "deployment": {
+    "service": "jitpomi-business-validation",
+    "plan": "free",
+    "commit": "4ccaddc526cc21bc61d451973ae646b340f93c83",
+    "id": "dep-dbtssb88v5cc73b8vb70",
+    "database": "business_native_dev_v4",
+    "status": "live"
+  },
+  "preservation": {
+    "fresh_backup_restore_verified": true,
+    "rehearsal_passed": true,
+    "original_objects": 1644,
+    "projected_records": 1419,
+    "second_backfill_changes": 0,
+    "original_schema_extended": true,
+    "original_graph_preserved_after_deployment": true,
+    "original_source_database_unchanged": true,
+    "source_database": "business_native_dev_v3",
+    "queue_completed_jobs_retained": 55,
+    "source_uncertain_financial_claims": 0,
+    "migration_provider_calls": 0
+  },
+  "runtime": {
+    "existing_runtime_credentials_used": true,
+    "retained_encrypted_connections_decrypted": 2,
+    "master_key_unchanged": true,
+    "automatic_deployment": "off"
+  },
+  "hosted_checks": {
+    "auth0_login": 200,
+    "own_resource_read": 200,
+    "foreign_resource_filtered": true,
+    "foreign_tenant": 401,
+    "immutable_identity_write": 403,
+    "duplicate_resource": 409,
+    "existing_resource_unchanged": true,
+    "retired_portal": 404,
+    "synthetic_membership_closed": true,
+    "identity_status_restored": true
+  },
+  "sandbox_acceptance": {
+    "execution": "Authenticated HTTP services and dog-queue workers against isolated migrated TypeDB fixtures; real sandbox financial APIs and tenant-owned notification connections",
+    "stripe": {
+      "fresh_tenants": 3,
+      "fresh_invoice_creation": true,
+      "successful_payment_and_receipt": true,
+      "decline_without_receipt": true,
+      "revoked_and_unapproved_consent_not_collected": true,
+      "restart_replay_without_extra_charge_invoice_or_notice": true,
+      "receipt_and_reminders_received_in_dev_mailbox": true,
+      "separate_connections_per_tenant": true,
+      "shared_sandbox_provider_account": true
+    },
+    "mercury": {
+      "fresh_invoice_and_reminder": true,
+      "bank_payment_submitted_in_sandbox": true,
+      "bank_invoice_provider_status": "Processing",
+      "pending_payment_reminder_and_receipt_suppression": true,
+      "separate_manual_payment_case": {
+        "simulated_in_mercury_sandbox_ui": true,
+        "provider_status": "Paid",
+        "provider_payment_type": "manual",
+        "provider_payment_method": "Cash",
+        "provider_payment_count": 1,
+        "amount_minor": 100,
+        "currency": "USD",
+        "business_receipt_delivered": true,
+        "replay_without_duplicate_notice": true,
+        "business_database_status_override": false
+      },
+      "prior_paid_and_processing_checkpoints_preserved_and_verified": true
+    }
+  },
+  "testing_changes": {
+    "mercury_creation_key_scoped_to_plan": true,
+    "fixture_directories_created_private": true,
+    "explicit_manual_processing_case": true,
+    "acceptance_wait_covers_existing_action_and_claim_deadlines": true,
+    "production_timeouts_and_payment_retry_rules_changed": false
+  },
+  "remaining_external_condition": "The separate sandbox bank transfer remains Processing. It is not reported as settled and has no Business receipt. Paid/manual receipt coverage uses a separate invoice.",
+  "rollback": "Retain the original source, verified backups and shadows. Quiesce writers and reconcile post-cutover changes before switching database and application versions."
+}

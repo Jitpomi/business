@@ -59,7 +59,11 @@ pub(super) async fn completed(
     token: &str,
     id: &str,
 ) -> Result<Value> {
-    for _ in 0..45 {
+    // Billing actions may legitimately run for 300 seconds, followed by the
+    // durable-claim margin. Do not stop the fixture worker after only 45 polls
+    // while an at-most-once action is still within its execution deadline.
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(420);
+    while tokio::time::Instant::now() < deadline {
         let row = ok(
             app,
             tenant,
