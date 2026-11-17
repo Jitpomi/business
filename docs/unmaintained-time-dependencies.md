@@ -49,18 +49,26 @@ partial fix; it must not be described as a completed four-dependency removal.
 
 ## Upstream submissions and first-party clock migration
 
-The coordinated proposals are now public drafts for maintainer discussion:
+The active upstream submission is a bounded parser cleanup:
+https://github.com/typedb/typeql/pull/477. It removes an uncalled crate-private
+helper and its direct Chrono dependency, preserving the existing module path.
+It adds no replacement library or build-system change.
 
-- Design/API decision: https://github.com/typedb/typedb-driver/issues/950
-- Shared build/registry: https://github.com/typedb/typedb-dependencies/pull/640
-- Protocol build imports: https://github.com/typedb/typedb-protocol/pull/265
-- Parser formatter: https://github.com/typedb/typeql/pull/477
-- Driver temporal values: https://github.com/typedb/typedb-driver/pull/951
+The driver discussion at https://github.com/typedb/typedb-driver/issues/950 now
+asks maintainers about supported contracts, migration options and release scope.
+The broader prototypes have been withdrawn as merge proposals; their code and
+selected-case test material remain available as reference:
 
-Their contribution-fork build pins exist only to review the coordinated changes.
-Business has not adopted these unreleased third-party forks. The official current
-3.15 driver/parser releases still contain the flagged crates; upstream acceptance
-and a supported release are an external prerequisite to finishing this graph.
+- https://github.com/typedb/typedb-dependencies/pull/640
+- https://github.com/typedb/typedb-protocol/pull/265
+- https://github.com/typedb/typedb-driver/pull/951
+
+The archived build prototypes used contribution-fork pins only for review. The
+active parser cleanup has no such pins. Business has not adopted those forks.
+The current released driver/parser still contain the flagged dependencies; a
+supported upstream migration or another verified integration is needed before
+this graph can be called clean. The prototype's selected passing tests do not
+establish a complete SDK or cross-language compatibility contract.
 
 Business's trusted Unix-second clock and native TypeQL UTC inputs now use the
 maintained time library. Native inputs retain UTC and truncate to the existing
