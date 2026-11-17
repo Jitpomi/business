@@ -4,6 +4,7 @@ mod consent_security;
 mod financial;
 mod mercury;
 mod mercury_automation;
+mod mercury_settlement;
 mod sandbox_support;
 mod stripe_automation;
 #[path = "../support/driver.rs"]
