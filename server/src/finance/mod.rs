@@ -218,11 +218,34 @@ pub struct TenantRegistry {
     tenants: HashMap<String, Arc<TenantRuntime>>,
     source: Option<Arc<dyn RuntimeSource>>,
 }
+/// Safe configuration projection; reading account context never opens credentials.
+#[derive(Clone, serde::Serialize)]
+pub struct Configuration {
+    pub sandbox: bool,
+    pub default_financial: Option<String>,
+}
+impl From<&TenantRuntime> for Configuration {
+    fn from(runtime: &TenantRuntime) -> Self {
+        Self {
+            sandbox: runtime.sandbox,
+            default_financial: runtime.default_financial.clone(),
+        }
+    }
+}
 #[async_trait]
 pub trait RuntimeSource: Send + Sync {
     async fn resolve(&self, tenant: &str) -> Result<Arc<TenantRuntime>>;
+    async fn configuration(&self, tenant: &str) -> Result<Configuration> {
+        Ok(Configuration::from(self.resolve(tenant).await?.as_ref()))
+    }
 }
 impl TenantRegistry {
+    pub async fn configuration(&self, tenant: &str) -> Result<Configuration> {
+        match &self.source {
+            Some(source) => source.configuration(tenant).await,
+            None => Ok(Configuration::from(self.resolve(tenant).await?.as_ref())),
+        }
+    }
     pub fn with_source(mut self, source: Arc<dyn RuntimeSource>) -> Self {
         self.source = Some(source);
         self

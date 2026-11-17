@@ -19,7 +19,7 @@ async fn main() -> Result<()> {
     .await?;
     let target = if args[1] == "--apply" {
         ensure!(
-            source == "business_native_dev_v3"
+            server::database::development_version(source).is_some()
                 && std::env::var("BUSINESS_WRITERS_STOPPED").as_deref() == Ok("true"),
             "Quiesce development writers before cutover"
         );
@@ -31,7 +31,10 @@ async fn main() -> Result<()> {
             server::database::snapshot::records(&driver, source).await? == expected,
             "Backup stale; source untouched"
         );
-        "business_native_dev_v4".into()
+        let next = server::database::development_version(source).unwrap() + 1;
+        let target = format!("business_native_dev_v{next}");
+        server::database::target(&target)?;
+        target
     } else {
         format!("business_backend_test_{}", uuid::Uuid::new_v4().simple())
     };

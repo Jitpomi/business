@@ -25,6 +25,21 @@ pub struct Managed {
 }
 #[async_trait::async_trait]
 impl RuntimeSource for Managed {
+    async fn configuration(&self, tenant: &str) -> Result<crate::finance::Configuration> {
+        let store = Store::new(self.state.clone(), tenant)?;
+        let Some(row) = store.get("settings", "billing").await? else {
+            return Ok(crate::finance::Configuration {
+                sandbox: true,
+                default_financial: None,
+            });
+        };
+        let settings: Settings = serde_json::from_value(row.value)?;
+        Ok(crate::finance::Configuration {
+            sandbox: settings.sandbox,
+            default_financial: settings.default_financial,
+        })
+    }
+
     async fn resolve(&self, tenant: &str) -> Result<Arc<TenantRuntime>> {
         let store = Store::new(self.state.clone(), tenant)?;
         let Some(row) = store.get("settings", "billing").await? else {

@@ -18,19 +18,22 @@ pub async fn documents(tx: &Transaction, query: &str) -> Result<Vec<Value>> {
     }
     Ok(rows)
 }
+/// Reserved development shadow namespace; production is never inferred from it.
+pub fn development_version(name: &str) -> Option<u32> {
+    if name == "business_native_dev" {
+        return Some(1);
+    }
+    let suffix = name.strip_prefix("business_native_dev_v")?;
+    let version = suffix.parse::<u32>().ok()?;
+    ((2..=9999).contains(&version) && suffix == version.to_string()).then_some(version)
+}
 pub fn target(name: &str) -> Result<()> {
     ensure!(
-        matches!(
-            name,
-            "business_dev"
-                | "business_native_dev"
-                | "business_native_dev_v2"
-                | "business_native_dev_v3"
-                | "business_native_dev_v4"
-                | "business_prod"
-        ) || name
-            .strip_prefix("business_backend_test_")
-            .is_some_and(|s| uuid::Uuid::parse_str(s).is_ok()),
+        matches!(name, "business_dev" | "business_prod")
+            || development_version(name).is_some()
+            || name
+                .strip_prefix("business_backend_test_")
+                .is_some_and(|s| uuid::Uuid::parse_str(s).is_ok()),
         "Use an explicit Business database"
     );
     Ok(())
@@ -200,4 +203,33 @@ pub async fn verify_runtime(driver: &TypeDBDriver, name: &str) -> Result<()> {
         "Backfill original invitation expiries before starting the service"
     );
     crate::business_rules::verify(driver, name).await
+}
+
+#[cfg(test)]
+mod shadow_names {
+    use super::*;
+    #[test]
+    fn only_reserved_development_versions_are_accepted() {
+        for (name, version) in [
+            ("business_native_dev", 1),
+            ("business_native_dev_v4", 4),
+            ("business_native_dev_v5", 5),
+        ] {
+            assert_eq!(development_version(name), Some(version));
+            assert!(target(name).is_ok());
+        }
+        for name in [
+            "business_prod",
+            "business_native_prod_v5",
+            "business_native_dev_v0",
+            "business_native_dev_v01",
+            "business_native_dev_v5/../../business_prod",
+            "business_native_dev_v10000",
+        ] {
+            assert_eq!(development_version(name), None);
+            if name != "business_prod" {
+                assert!(target(name).is_err());
+            }
+        }
+    }
 }

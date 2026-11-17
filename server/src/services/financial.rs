@@ -45,10 +45,8 @@ impl DogService<Value, BusinessParams> for FinancialService {
             rows.len() == 1,
             DogError::forbidden("Financial configuration unavailable").into_anyhow()
         );
-        let runtime = self.access.registry.resolve(&ctx.tenant_id.0).await?;
-        Ok(vec![
-            json!({"sandbox":runtime.sandbox,"default_financial":runtime.default_financial}),
-        ])
+        let configuration = self.access.registry.configuration(&ctx.tenant_id.0).await?;
+        Ok(vec![serde_json::to_value(configuration)?])
     }
     async fn create(
         &self,

@@ -12,6 +12,9 @@ pub struct Billing {
 }
 #[async_trait::async_trait]
 impl Connector for Billing {
+    fn internal(&self) -> bool {
+        true
+    }
     fn timeout_seconds(&self) -> u64 {
         300
     }
