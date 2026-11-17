@@ -35,6 +35,34 @@ fn transport(kind: &str, ctx: &Invocation) -> Result<crate::plugins::builtin_tra
 }
 #[async_trait::async_trait]
 impl Connector for Builtin {
+    fn oauth(&self) -> Option<Arc<dyn super::oauth::Provider>> {
+        (self.0 == "stripe")
+            .then(|| Arc::new(super::builtin_oauth::Stripe) as Arc<dyn super::oauth::Provider>)
+    }
+    fn connection_purpose(&self) -> (&'static str, &'static str) {
+        match self.0 {
+            "stripe" | "mercury" => ("finance", "Payments and banking"),
+            "resend" => ("communications", "Email and notifications"),
+            _ => ("other", "Other systems"),
+        }
+    }
+    fn connection_fields(&self) -> Value {
+        let mut config = vec![
+            json!({"key":"sandbox","label":"Environment","type":"environment","required":true}),
+        ];
+        match self.0 {
+          "stripe" => config.push(json!({"key":"connected_account","label":"Connected account ID (optional)","type":"text"})),
+          "mercury" => config.push(json!({"key":"destination","label":"Receiving account ID","type":"text","required":true})),
+          "resend" => {config.push(json!({"key":"from","label":"Sender email","type":"text","required":true}));config.push(json!({"key":"allowed_test_recipients","label":"Allowed test emails (one per line)","type":"list"}));},
+          _ => {}
+        }
+        let mut secrets =
+            vec![json!({"key":"token","label":"API key","type":"password","required":true})];
+        if self.0 != "resend" {
+            secrets.push(json!({"key":"webhook_secret","label":"Webhook signing secret (optional)","type":"password"}));
+        }
+        json!({"config":config,"secrets":secrets})
+    }
     fn verification_method(&self) -> &str {
         if self.0 == "resend" {
             "configuration"

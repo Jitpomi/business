@@ -456,3 +456,32 @@ The disposable database workflow also tests acceptance, renewal, revocation,
 expiry, existing-identity protection, gateway access, tenant boundaries,
 concurrent reset consumption and old-session invalidation. It never resets an
 existing user's password.
+
+
+### Actual Mercury bank settlement acceptance
+
+`mercury_actual_bank_settlement_is_automatic_and_once` resumes an existing,
+preservation-verified Mercury sandbox checkpoint; it never creates or submits
+another payment. Supply private `BUSINESS_ENV_FILE`, `BILLING_TEST_ENV`,
+`MERCURY_TEST_ROOT`, and the exact existing `MERCURY_BANK_INVOICE_ID`, then run:
+
+```sh
+MERCURY_SETTLEMENT_WAIT_SECONDS=180 cargo test --locked --test billing \
+  mercury_actual_bank_settlement_is_automatic_and_once \
+  -- --ignored --nocapture --test-threads=1
+```
+
+The bounded campaign uses generic dog-queue recurrence to invoke the tenant's
+billing reconciliation and notification plugins. Provider invoice/payment GETs
+are independent assertions, not manual status updates. Passing requires a Paid
+invoice backed by exactly one USD 1 `transaction` payment, native Paid state,
+and one accepted receipt delivery ID unchanged across two further completed
+scheduled runs. A provider `manual` payment cannot satisfy this test. Provider
+acceptance of email is distinct from independently verifying inbox delivery.
+
+Processing is an incomplete acceptance result, even when pending-payment
+checks pass. Every attempt retains evidence in its own private campaign folder,
+drains the worker, pauses its schedule without resetting its cursor, and exports
+the checkpoint. Lifecycle failures remain visible alongside the original test
+result. Resume with a new bounded campaign after provider settlement; do not
+mark invoices Paid or resubmit a bank payment to force this gate to pass.

@@ -49,6 +49,9 @@ pub(crate) fn facts(kind: &str, value: &Value, status: &str) -> Result<BTreeMap<
             let w: Workflow = serde_json::from_value(value["workflow"].clone())?;
             json!({"auto_owner":value["owner"].as_str().ok_or_else(||anyhow::anyhow!("Workflow owner missing"))?,"auto_enabled":w.enabled})
         }
+        "oauth" => {
+            json!({"auto_owner":value["owner"].as_str().ok_or_else(||anyhow::anyhow!("OAuth owner missing"))?,"auto_definition":digest(value)?})
+        }
         "connection" => {
             let c: Connection = serde_json::from_value(value.clone())?;
             json!({"auto_enabled":c.enabled,"auto_verified":c.verified,"auto_binding_revision":c.revision})

@@ -272,7 +272,25 @@ async fn real_https_errors_are_redacted_and_redirects_are_not_followed() -> Resu
 async fn timed_out_mutation_is_not_retried() -> Result<()> {
     let mut reply = Reply::json(StatusCode::OK, "{}");
     reply.delay = Duration::from_secs(10);
-    let fixture = Fixture::new(vec![reply], Duration::from_secs(2)).await?;
+    let fixture = Fixture::new(
+        vec![Reply::json(StatusCode::OK, "{}"), reply],
+        Duration::from_secs(2),
+    )
+    .await?;
+    // Establish the verified TLS connection before timing the mutation's
+    // response. Otherwise a busy test host can time out before sending any
+    // bytes, which never exercises the uncertain-write contract being tested.
+    fixture
+        .client
+        .http
+        .get(format!("{}/accounts", fixture.base))
+        .bearer_auth(&Fixture::access().token)
+        .timeout(Duration::from_secs(30))
+        .send()
+        .await?
+        .error_for_status()?
+        .bytes()
+        .await?;
     let error = fixture
         .client
         .request_at(
@@ -287,6 +305,9 @@ async fn timed_out_mutation_is_not_retried() -> Result<()> {
         .await
         .unwrap_err();
     assert!(error.to_string().contains("reconcile"));
-    assert_eq!(fixture.calls.lock().unwrap().len(), 1);
+    let calls = fixture.calls.lock().unwrap();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0].method, Method::GET);
+    assert_eq!(calls[1].method, Method::POST);
     Ok(())
 }
