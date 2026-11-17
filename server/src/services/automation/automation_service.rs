@@ -76,9 +76,9 @@ pub struct AutomationService {
     pub template: std::sync::Arc<Engine>,
 }
 impl AutomationService {
-    fn engine(&self, tenant: &str) -> Result<Engine> {
+    fn engine(&self, tenant: &str, actor: &str) -> Result<Engine> {
         Ok(Engine {
-            store: Store::new(self.template.store.state.clone(), tenant)?,
+            store: Store::new(self.template.store.state.clone(), tenant)?.for_owner(actor)?,
             catalog: self.template.catalog.clone(),
             vault: self.template.vault.clone(),
         })
@@ -91,7 +91,7 @@ impl DogService<Value, BusinessParams> for AutomationService {
     }
     async fn find(&self, ctx: &TenantContext, params: BusinessParams) -> Result<Vec<Value>> {
         let actor = super::automation_schema::actor(ctx, &params)?;
-        let e = self.engine(&ctx.tenant_id.0)?;
+        let e = self.engine(&ctx.tenant_id.0, &actor)?;
         e.store.owner(&actor).await?;
         let mut connections = vec![];
         for r in e.store.list("connection", 100).await? {
@@ -128,7 +128,7 @@ impl DogService<Value, BusinessParams> for AutomationService {
         params: BusinessParams,
     ) -> Result<Value> {
         let actor = super::automation_schema::actor(ctx, &params)?;
-        let e = self.engine(&ctx.tenant_id.0)?;
+        let e = self.engine(&ctx.tenant_id.0, &actor)?;
         e.store.owner(&actor).await?;
         match serde_json::from_value::<Command>(data).map_err(|_| {
             dog_core::DogError::bad_request("Unsupported or malformed automation request")

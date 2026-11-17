@@ -16,7 +16,7 @@ async fn concurrent_review_reproduction() -> Result<()> {
         "Development credentials only"
     );
     let driver = Arc::new(
-        dog_typedb::TypeDBDriverFactory::connect(
+        crate::test_driver::connect(
             &std::env::var("TYPEDB_ADDR")?,
             &std::env::var("TYPEDB_USERNAME")?,
             &std::env::var("TYPEDB_PASSWORD")?,

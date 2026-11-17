@@ -1,0 +1,135 @@
+define
+# Domain decisions are native functions, shared by selection and atomic claims.
+fun bill_valid_reminder_days($days: integer) -> boolean:
+  match $days >= 1; $days <= 30;
+  return check;
+
+fun bill_notice_decision($i: bill_invoice,$now: integer,$days: integer) -> string,integer:
+  match let $valid=bill_valid_reminder_days($days);$valid==true;
+    not {(invoice:$i,notice:$archive) isa bill_notice_owner;$archive has bill_status "imported-history";};
+    $i has bill_status $status,has bill_next $due;
+    {$status=="paid";let $kind="receipt";let $bucket=0;}
+    or {$status=="open";$now < $due;let $kind="invoice";let $bucket=0;}
+    or {$status=="open";$now >= $due;let $bucket=floor(($now - $due)/($days*86400));$bucket <= 3;let $kind="reminder";};
+  return first $kind,$bucket;
+
+fun bill_can_collect($c: bill_customer,$p: bill_plan,$i: bill_invoice,$now: integer) -> boolean:
+  match (customer:$c,plan:$p) isa bill_plan_owner;(plan:$p,invoice:$i) isa bill_invoice_owner;
+    $i has bill_status "open",has bill_choice "automatic",has bill_provider $plugin,has bill_next $due,has bill_revision $consent;
+    $due <= $now;$consent!="";
+    $c has bill_revision == $consent,has bill_method_plugin == $plugin;
+    $p has bill_status $plan_status;$plan_status!="paused";
+    let $approved=bill_plan_has_consent($c,$p);$approved==true;
+  return check;
+
+fun bill_can_issue($c: bill_customer,$p: bill_plan,$i: bill_invoice,$revision: string,$mode: string) -> boolean:
+  match (customer:$c,plan:$p) isa bill_plan_owner;(plan:$p,invoice:$i) isa bill_invoice_owner;
+    $c has bill_revision == $revision;$i has bill_status "queued";
+    let $current=bill_plan_payment_choice($c,$p);$current==$mode;
+  return check;
+
+fun bill_observation_matches($i: bill_invoice,$local: string,$plugin: string,$external: string,$amount: integer,$currency: string) -> boolean:
+  match $i has bill_key == $local,has bill_provider == $plugin,has bill_external_id == $external,has bill_amount == $amount;
+    $external!="";$currency=="USD";
+  return check;
+
+fun bill_observation_transition($i: bill_invoice,$next: string) -> boolean:
+  match $i has bill_status $old;
+    {$next=="scheduled";} or {$next=="open";} or {$next=="processing";} or {$next=="paid";} or {$next=="void";} or {$next=="uncollectible";};
+    {$old=="paid";$next=="paid";} or {$old=="void";$next=="void";} or {$old!="paid";$old!="void";};
+  return check;
+
+fun automation_owner_scope($tenant: string,$actor: string,$now: datetime,$t: tenant) -> boolean:
+  match $t has tenant_id == $tenant;
+    $i isa identity,has identity_id == $actor;
+    let $allowed=role_at_least($i,$t,"owner",$now);$allowed==true;
+  return check;
+
+fun automation_run_owner($r: automation_record,$t: tenant,$now: datetime) -> boolean:
+  match $t has tenant_id $tenant_attr;let $tenant=$tenant_attr;$r has auto_tenant == $tenant,has auto_owner $actor_attr;let $actor=$actor_attr;
+    let $allowed=automation_owner_scope($tenant,$actor,$now,$t);$allowed==true;
+  return check;
+
+fun automation_recovery_decision($r: automation_record,$effect: string) -> string:
+  match $r has auto_attempts $attempts,has auto_effect $previous;
+    {$attempts > 0;{$previous=="at_most_once";} or {$previous!=$effect;};let $decision="attention";}
+    or {{$attempts==0;} or {$attempts > 0;$previous!="at_most_once";$previous==$effect;};
+      {$attempts >= 3;let $decision="failed";} or {$attempts < 3;let $decision="claim";};};
+  return first $decision;
+
+fun automation_control($r: automation_record,$action: string,$now: integer,$cursor: integer,$next: string,$count: integer,$evidence: string,$approved: boolean) -> boolean:
+  match $r has auto_status $status,has auto_cursor $old_cursor,has auto_steps $steps,has auto_attempts $attempts,has auto_when $deadline;
+    {$action=="approve";$r has auto_step "approval",has auto_approved false;$approved==true;$next=="queued";$count==$attempts;$status=="approval";$old_cursor < $steps;$cursor==$old_cursor;}
+    or {$action=="resolve";len($evidence) >= 8;len($evidence) <= 2000;$next=="queued";$count==0;$status=="attention";$old_cursor < $steps;$cursor==$old_cursor + 1;}
+    or {$action=="resume";$next=="queued";$count==$attempts;$status=="blocked";$cursor==$old_cursor;}
+    or {$action=="cancel";$next=="cancelled";$count==$attempts;$cursor==$old_cursor;{$attempts==0;} or {$deadline <= $now;};
+      {$status=="queued";} or {$status=="running";} or {$status=="retry";} or {$status=="waiting";} or {$status=="approval";} or {$status=="blocked";} or {$status=="attention";};};
+  return check;
+
+fun automation_claim_allowed($r: automation_record,$t: tenant,$at: datetime,$now: integer,$effect: string,$count: integer) -> boolean:
+  match let $owner=automation_run_owner($r,$t,$at);$owner==true;
+    $r has auto_step "action",has auto_when $due,has auto_cursor $cursor,has auto_steps $steps,has auto_status $status,has auto_attempts $previous;
+    $due <= $now;$cursor < $steps;$count==$previous + 1;
+    {$status=="queued";} or {$status=="retry";} or {$status=="running";} or {$status=="waiting";};
+    let $decision=automation_recovery_decision($r,$effect);$decision=="claim";
+  return check;
+
+fun automation_runnable($r: automation_record,$now: integer) -> boolean:
+  match $r has auto_status $status,has auto_when $due;$due <= $now;
+    {$status=="queued";} or {$status=="running";} or {$status=="retry";} or {$status=="waiting";};
+  return check;
+
+fun automation_progress($r: automation_record,$t: tenant,$at: datetime,$now: integer,$next: string,$cursor: integer,$count: integer,$effect: string) -> boolean:
+  match $r has auto_status $status,has auto_cursor $old_cursor,has auto_steps $steps,has auto_attempts $attempts;
+    $cursor >= $old_cursor;$cursor <= $old_cursor + 1;$cursor <= $steps;
+    {$next=="running";$cursor==$old_cursor;let $claim=automation_claim_allowed($r,$t,$at,$now,$effect,$count);$claim==true;}
+    or {$status=="running";$r has auto_effect $claimed_effect;
+      { {$next=="queued";} or {$next=="completed";$cursor==$steps;};$cursor==$old_cursor + 1;$count==0;$effect==""; }
+      or {{$next=="attention";} or {$next=="retry";$claimed_effect!="at_most_once";} or {$next=="failed";$claimed_effect!="at_most_once";};$effect==$claimed_effect;$cursor==$old_cursor;$count==$attempts;};}
+    or {let $due=automation_runnable($r,$now);$due==true;
+      {$next=="blocked";$cursor==$old_cursor;$count==$attempts;}
+      or {let $owner=automation_run_owner($r,$t,$at);$owner==true;$count==$attempts;
+        let $step=automation_step_progress($r,$next,$cursor);$step==true;};};
+  return check;
+
+fun automation_failure_decision($r: automation_record,$oversized: boolean) -> string:
+  match $r has auto_status "running",has auto_effect $effect;
+    {$effect=="at_most_once";let $decision="attention";}
+    or {$effect!="at_most_once";
+      {$oversized==true;let $decision="failed";} or {$oversized==false;let $decision="retry";};};
+  return first $decision;
+
+# Billing selects its recurrence policy; dog-queue computes UTC calendar dates.
+fun bill_next_occurrence($p: bill_plan) -> integer,string,string,integer:
+  match $p has bill_sequence $sequence,has bill_interval $interval;
+    let $next_sequence=$sequence + 1;
+    {$interval=="once";let $status="finished";let $unit="once";let $every=0;}
+    or {$interval=="week";let $status="active";let $unit="days";let $every=7;}
+    or {$interval=="month";let $status="active";let $unit="months";let $every=1;}
+    or {$interval=="year";let $status="active";let $unit="months";let $every=12;};
+  return first $next_sequence,$status,$unit,$every;
+
+fun automation_step_progress($r: automation_record,$next: string,$cursor: integer) -> boolean:
+  match $r has auto_step $step,has auto_cursor $old;
+    {$step=="done";$next=="completed";$cursor==$old;}
+    or {{$step=="transform";} or {$step=="condition";};$cursor==$old + 1;{$next=="queued";} or {$next=="completed";};}
+    or {$step=="condition";$next=="filtered";$cursor==$old;}
+    or {$step=="delay";$next=="waiting";$cursor==$old + 1;}
+    or {$step=="approval";
+      {$r has auto_approved false;$next=="approval";$cursor==$old;}
+      or {$r has auto_approved true;$cursor==$old + 1;{$next=="queued";} or {$next=="completed";};};}
+    or {$cursor==$old;{$next=="failed";} or {$next=="attention";};};
+  return check;
+
+fun automation_connection_count($t: tenant) -> integer:
+  match $t has tenant_id $tenant;$r isa automation_record,has auto_tenant == $tenant,has auto_kind "connection";
+  return count;
+fun automation_connection_capacity($t: tenant) -> boolean:
+  match let $count=automation_connection_count($t);$count < 100;
+  return check;
+fun automation_schedule_configuration($t: tenant,$workflow: string,$every: integer) -> boolean:
+  match $every >= 60;$every <= 31536000;
+    $t has tenant_id $tenant;$w isa automation_record,has auto_tenant == $tenant,has auto_kind "workflow",has auto_key == $workflow;
+  return check;
+
+entity bootstrap_record @meta("jitpomi.business.rules","native-business-v1");

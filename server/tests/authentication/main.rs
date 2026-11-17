@@ -1,4 +1,6 @@
 mod live_auth0;
+#[path = "../support/driver.rs"]
+mod test_driver;
 // Real asymmetric token verification, external account persistence and policy contracts.
 use anyhow::{ensure, Result};
 use base64::Engine;
@@ -255,7 +257,7 @@ async fn oidc_dog_auth_identity_linking_and_tenant_rbac_end_to_end() -> Result<(
         "Development configuration required"
     );
     let driver = Arc::new(
-        dog_typedb::TypeDBDriverFactory::connect(
+        crate::test_driver::connect(
             &std::env::var("TYPEDB_ADDR")?,
             &std::env::var("TYPEDB_USERNAME")?,
             &std::env::var("TYPEDB_PASSWORD")?,
@@ -367,7 +369,7 @@ async fn encrypted_plugin_credentials_migrate_to_external_references() -> Result
         std::env::var("TYPEDB_DB")? == "business_dev",
         "Development database required"
     );
-    let driver = dog_typedb::TypeDBDriverFactory::connect(
+    let driver = crate::test_driver::connect(
         &std::env::var("TYPEDB_ADDR")?,
         &std::env::var("TYPEDB_USERNAME")?,
         &std::env::var("TYPEDB_PASSWORD")?,

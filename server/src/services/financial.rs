@@ -72,9 +72,6 @@ impl DogService<Value, BusinessParams> for FinancialService {
             let row = rows
                 .first()
                 .ok_or_else(|| DogError::not_found("Invoice not found").into_anyhow())?;
-            self.access
-                .allowed(&e, ctx, &actor, field(row, "customer")?, "reader")
-                .await?;
             let binding = e
                 .read(format!(
                     "{} fetch {{'external':$i.bill_external_id}};",
@@ -96,7 +93,8 @@ impl DogService<Value, BusinessParams> for FinancialService {
         }
 
         let id = crate::billing::billing_schema::id(field(&data, "customer_id")?)?;
-        self.access.allowed(&e, ctx, &actor, &id, "buyer").await?;
+        let e = e.with_permission(BillingAccess::permission(ctx, &actor, &id, "buyer")?);
+        e.require_access().await?;
         let customer = e.customer(&id).await?;
         let bindings: std::collections::HashMap<String, String> =
             serde_json::from_str(field(&customer, "bindings")?)?;

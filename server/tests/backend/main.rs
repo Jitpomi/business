@@ -1,4 +1,6 @@
 //! Public API acceptance tests for frontend TypeQL, authentication and tenant policy.
+#[path = "../support/driver.rs"]
+mod test_driver;
 use server::app::{build_with_state, router};
 use server::database::*;
 

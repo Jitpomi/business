@@ -1,5 +1,5 @@
 //! Durable scheduling and reconciliation. External requests never run inside a DB transaction.
-use super::billing_schema::{self as schema, Interval, Mode};
+use super::billing_schema::{self as schema, Mode};
 use crate::{
     finance::{opaque_id, InvoiceObservation, InvoiceRequest, TenantRuntime},
     typedb::TypeDBState,
@@ -13,6 +13,7 @@ pub struct Engine {
     pub state: Arc<TypeDBState>,
     pub merchant: String,
     pub runtime: Arc<TenantRuntime>,
+    permission: Option<super::access::Permission>,
 }
 pub const CUSTOMER_DATA: &str = r#""customer_id":$c.bill_key,"name":$c.name,"email":$c.bill_email,"policy":$c.bill_policy,"choice":bill_payment_choice($c),"manual_provider":$c.bill_provider,"bindings":$c.bill_bindings,"method_plugin":$c.bill_method_plugin,"payment_method":$c.bill_payment_method,"consent":bill_approved_revision($c),"revision":$c.bill_revision"#;
 impl Engine {
@@ -27,6 +28,7 @@ impl Engine {
             state,
             merchant,
             runtime,
+            permission: None,
         })
     }
     pub fn binding(customer: &Value, plugin: &str) -> Result<String> {
@@ -46,11 +48,35 @@ impl Engine {
             .into_anyhow()
         })
     }
+    /// Fixed trusted scope, repeated in every native read and write. It cannot be
+    /// replaced by an unverified request field or a cached Rust role decision.
+    pub(crate) fn with_permission(mut self, permission: super::access::Permission) -> Self {
+        self.permission = Some(permission);
+        self
+    }
     pub fn prefix(&self) -> String {
         format!(
-            r#"match $t isa tenant,has tenant_id "{}",has status "active",has revision $revision;"#,
-            self.merchant
+            r#"match $t isa tenant,has tenant_id "{}",has status "active",has revision $revision;{}"#,
+            self.merchant,
+            self.permission
+                .as_ref()
+                .map(|p| p.clause())
+                .unwrap_or_default()
         )
+    }
+    pub(crate) async fn require_access(&self) -> Result<()> {
+        let rows = self
+            .read(format!(
+                "{} fetch {{'tenant':$t.tenant_id}};",
+                self.prefix()
+            ))
+            .await?;
+        ensure!(
+            rows.len() == 1,
+            dog_core::DogError::forbidden("You do not have access to this billing account")
+                .into_anyhow()
+        );
+        Ok(())
     }
     pub async fn read(&self, query: String) -> Result<Vec<Value>> {
         super::store::read(&self.state, &query).await
@@ -115,28 +141,34 @@ impl Engine {
     pub async fn enqueue_due(&self, now: i64) -> Result<usize> {
         let rows=self.read(format!(r#"{} (merchant:$t,customer:$c) isa bill_account;(customer:$c,plan:$p) isa bill_plan_owner;
    $p has bill_status "active",has bill_next $next;$next <= {now};
-   select $c,$p,$next;distinct;sort $next;limit 10;
-   fetch {{"plan_id":$p.bill_key,"anchor":$p.bill_anchor,"sequence":$p.bill_sequence,"interval":$p.bill_interval,"next":$next}};"#,self.prefix())).await?;
+   let $following,$status,$unit,$every=bill_next_occurrence($p);select $c,$p,$next,$following,$status,$unit,$every;distinct;sort $next;limit 10;
+   fetch {{"plan_id":$p.bill_key,"anchor":$p.bill_anchor,"sequence":$p.bill_sequence,"following":$following,"status":$status,"unit":$unit,"every":$every,"next":$next}};"#,self.prefix())).await?;
         let mut count = 0;
         for row in rows {
             let sequence = number(&row, "sequence")?;
-            let interval: Interval = serde_json::from_value(row["interval"].clone())?;
-            let next = schema::occurrence(
-                number(&row, "anchor")?,
-                interval,
-                u32::try_from(sequence + 1)?,
-            )?;
-            let status = if next.is_some() { "active" } else { "finished" };
-            let next = next.unwrap_or(0);
+            let following = number(&row, "following")?;
+            let status = string(&row, "status")?;
+            let every = u32::try_from(number(&row, "every")?)?;
+            let period = match string(&row, "unit")? {
+                "once" => dog_queue::calendar::CalendarPeriod::Once,
+                "days" => dog_queue::calendar::CalendarPeriod::Days { every },
+                "months" => dog_queue::calendar::CalendarPeriod::Months { every },
+                _ => anyhow::bail!("Unsupported native calendar unit"),
+            };
+            let anchor = number(&row, "anchor")?;
+            let unit = schema::quoted(string(&row, "unit")?);
+            let next = period
+                .occurrence(anchor, u32::try_from(following)?)?
+                .unwrap_or(0);
             let plan = schema::id(string(&row, "plan_id")?)?;
             let invoice = uuid::Uuid::new_v4();
             self.write(format!(r#"{} (merchant:$t,customer:$c) isa bill_account;(customer:$c,plan:$p) isa bill_plan_owner;
-    $p has bill_key "{plan}",has bill_status "active",has bill_sequence {sequence},has bill_next $issued,has bill_due_days $days,has bill_amount $amount,has name $name;
-    $issued <= {now};let $due=$issued+($days*86400);
-    select $t,$p,$name,$amount,$issued,$due;distinct;
-    update $p has bill_sequence {},has bill_next {next},has bill_status "{status}";
+    $p has bill_key "{plan}",has bill_status "active",has bill_sequence {sequence},has bill_anchor {anchor},has bill_next $issued,has bill_due_days $days,has bill_amount $amount,has name $name;
+    $issued <= {now};let $due=$issued+($days*86400);let $following,$next_status,$unit,$every=bill_next_occurrence($p);$following=={following};$next_status=="{status}";$unit=={unit};$every=={every};
+    select $t,$p,$name,$amount,$issued,$due,$following;distinct;
+    update $p has bill_sequence == $following,has bill_next {next},has bill_status "{status}";
     insert $i isa bill_invoice,has bill_key "{invoice}",has name == $name,has bill_amount == $amount,has bill_anchor == $issued,has bill_next == $due,has bill_sequence {sequence},has bill_choice "manual",has bill_provider "",has bill_status "queued",has bill_external_id "",has bill_url "",has bill_updated {now},has bill_revision "initial";
-    (plan:$p,invoice:$i) isa bill_invoice_owner;fetch {{"id":$i.bill_key}};"#,self.prefix(),sequence+1)).await?;
+    (plan:$p,invoice:$i) isa bill_invoice_owner;fetch {{"id":$i.bill_key}};"#,self.prefix())).await?;
             count += 1;
         }
         Ok(count)
@@ -168,7 +200,7 @@ impl Engine {
             mode != Mode::Automatic || plugin.capabilities().automatic_collection,
             "Selected plugin cannot collect automatically"
         );
-        self.write(format!(r#"{} $i has bill_status "queued";$c has bill_revision {};select $t,$i;distinct;update $i has bill_status "issuing",has bill_provider {},has bill_choice "{}",has bill_updated {now},has bill_revision {};fetch {{"id":$i.bill_key}};"#,self.invoice_match(id)?,schema::quoted(string(row,"revision")?),schema::quoted(&plugin_id),schema::word(mode),schema::quoted(string(row,"revision")?))).await?;
+        self.write(format!(r#"{} let $allowed=bill_can_issue($c,$p,$i,{},"{}");$allowed==true;select $t,$i;distinct;update $i has bill_status "issuing",has bill_provider {},has bill_choice "{}",has bill_updated {now},has bill_revision {};fetch {{"id":$i.bill_key}};"#,self.invoice_match(id)?,schema::quoted(string(row,"revision")?),schema::word(mode),schema::quoted(&plugin_id),schema::word(mode),schema::quoted(string(row,"revision")?))).await?;
         // Once claimed, an ambiguous failure is attention-required, never a fresh charge retry.
         let result=async{
    let customer=self.ensure_customer(row,&plugin_id).await?;
@@ -198,10 +230,10 @@ impl Engine {
         let row = &record;
         // Older deliveries may never undo a paid/void observation. Refunds and disputes
         // are distinct events, not a transition back to unpaid.
-        if matches!(string(row, "status")?, "paid" | "void") && row["status"] != status {
+        if row["transition"] != true {
             return Ok(());
         }
-        self.write(format!(r#"{} $i has bill_status {};select $t,$i;distinct;update $i has bill_status "{status}",has bill_external_id {},has bill_url {},has bill_updated {now};fetch {{"id":$i.bill_key}};"#,self.invoice_match(id)?,schema::quoted(string(row,"status")?),schema::quoted(external),schema::quoted(url))).await?;
+        self.write(format!(r#"{} $i has bill_status {};$c has bill_bindings {};let $allowed=bill_observation_transition($i,"{status}");$allowed==true;select $t,$i;distinct;update $i has bill_status "{status}",has bill_external_id {},has bill_url {},has bill_updated {now};fetch {{"id":$i.bill_key}};"#,self.invoice_match(id)?,schema::quoted(string(row,"status")?),schema::quoted(string(row,"bindings")?),schema::quoted(external),schema::quoted(url))).await?;
         Ok(())
     }
     pub async fn validate_observation(
@@ -219,20 +251,14 @@ impl Engine {
                 "Unsafe payment destination"
             );
         }
-        let rows=self.read(format!(r#"{} fetch {{"provider":$i.bill_provider,"external":$i.bill_external_id,"amount":$i.bill_amount,"bindings":$c.bill_bindings,"status":$i.bill_status}};"#,self.invoice_match(id)?)).await?;
+        let rows=self.read(format!(r#"{} let $valid=bill_observation_matches($i,{},{},{},{},{});$valid==true;let $transition=bill_observation_transition($i,{});fetch {{"bindings":$c.bill_bindings,"status":$i.bill_status,"transition":$transition}};"#,self.invoice_match(id)?,schema::quoted(&value.invoice_id),schema::quoted(plugin_id),schema::quoted(&value.external_id),value.amount_minor,schema::quoted(&value.currency),schema::quoted(value.state.as_str()))).await?;
         ensure!(rows.len() == 1, "Invoice missing");
         let row = &rows[0];
-        ensure!(row["provider"] == plugin_id, "Financial plugin mismatch");
+        // Customer reference decoding is a provider-binding attestation. Domain
+        // invoice binding, money, currency and terminal-state decisions are native.
         ensure!(
-            !string(row, "external")?.is_empty() && row["external"] == value.external_id,
-            "Invoice ID mismatch"
-        );
-        ensure!(
-            Self::binding(row, plugin_id)? == value.customer
-                && value.currency == "USD"
-                && value.amount_minor == number(row, "amount")?
-                && value.invoice_id == id,
-            "Invoice customer, currency, amount or local binding mismatch"
+            Self::binding(row, plugin_id)? == value.customer,
+            "Invoice customer binding mismatch"
         );
         Ok(row.clone())
     }
@@ -258,19 +284,12 @@ impl Engine {
     /// One off-session attempt per invoice. A failed or uncertain attempt is
     /// reconciled and the customer receives a payment link; it is never recharged.
     pub async fn collect_due(&self, id: &str, now: i64) -> Result<()> {
-        let rows=self.read(format!(r#"{} $i has bill_status "open",has bill_choice "automatic",has bill_provider $plugin,has bill_next $due;$due <= {now};
-   $i has bill_revision $consent;$c has bill_revision $consent;let $approved=bill_plan_has_consent($c,$p);$approved==true;
-   $consent!=""; $p has bill_status $plan_status;$plan_status!="paused";
-   fetch {{{CUSTOMER_DATA},"external":$i.bill_external_id,"plugin":$i.bill_provider}};"#,self.invoice_match(id)?)).await?;
+        let rows=self.read(format!(r#"{} let $allowed=bill_can_collect($c,$p,$i,{now});$allowed==true;fetch {{{CUSTOMER_DATA},"external":$i.bill_external_id,"plugin":$i.bill_provider}};"#,self.invoice_match(id)?)).await?;
         if rows.is_empty() {
             return Ok(());
         }
         ensure!(rows.len() == 1, "Ambiguous invoice");
         let row = &rows[0];
-        ensure!(
-            row["method_plugin"] == row["plugin"],
-            "Saved method belongs to a different financial plugin"
-        );
         let selected = self.runtime.financial(string(row, "plugin")?)?;
         ensure!(
             selected.capabilities().automatic_collection,
@@ -279,7 +298,7 @@ impl Engine {
         selected.ready()?;
         let consent = string(row, "revision")?;
         let attempted = format!("attempted:{consent}");
-        self.write(format!(r#"{} $i has bill_status "open",has bill_revision {}; $c has bill_revision {};let $approved=bill_plan_has_consent($c,$p);$approved==true;$p has bill_status $ps;$ps!="paused";select $t,$i;distinct;update $i has bill_revision {},has bill_updated {now};fetch {{"id":$i.bill_key}};"#,self.invoice_match(id)?,schema::quoted(consent),schema::quoted(consent),schema::quoted(&attempted))).await?;
+        self.write(format!(r#"{} $i has bill_revision {};$c has bill_revision {};let $approved=bill_can_collect($c,$p,$i,{now});$approved==true;select $t,$i;distinct;update $i has bill_revision {},has bill_updated {now};fetch {{"id":$i.bill_key}};"#,self.invoice_match(id)?,schema::quoted(consent),schema::quoted(consent),schema::quoted(&attempted))).await?;
         let _result = selected
             .collect(string(row, "external")?, id, string(row, "payment_method")?)
             .await;

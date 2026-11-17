@@ -64,7 +64,7 @@ async fn run(processing_only: bool) -> Result<()> {
         .await
         .context("Mercury destination preflight")?;
     let driver = Arc::new(
-        dog_typedb::TypeDBDriverFactory::connect(
+        crate::test_driver::connect(
             &std::env::var("TYPEDB_ADDR")?,
             &std::env::var("TYPEDB_USERNAME")?,
             &std::env::var("TYPEDB_PASSWORD")?,

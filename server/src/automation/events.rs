@@ -74,14 +74,20 @@ impl Engine {
                 && bool::from(digest(token).as_bytes().ct_eq(expected.as_bytes())),
             "Event rejected"
         );
-        self.enqueue(
-            r.value["workflow"]
-                .as_str()
-                .ok_or_else(|| anyhow::anyhow!("Event rejected"))?,
-            &format!("event:{id}:{}", digest(key)),
-            input,
-        )
-        .await
+        let scoped = Engine {
+            store: self.store.for_origin(&r)?,
+            catalog: self.catalog.clone(),
+            vault: self.vault.clone(),
+        };
+        scoped
+            .enqueue(
+                r.value["workflow"]
+                    .as_str()
+                    .ok_or_else(|| anyhow::anyhow!("Event rejected"))?,
+                &format!("event:{id}:{}", digest(key)),
+                input,
+            )
+            .await
     }
 }
 #[derive(Clone)]

@@ -69,9 +69,9 @@ configuration to resume after fixing the workflow/owner/connection. Changing its
 workflow, input or interval requires a new schedule ID. This prevents an occurrence
 identity being silently reused for different work.
 
-The worker discovers due tenants every two seconds and processes up to four
-records per tenant per pass, with up to four tenants concurrently. It discovers
-at most 1,000 due tenants per pass. Ordinary lists return at most 100 records;
+`dog-queue` supervises tenant workers, durable execution and recurring dispatch.
+TypeDB adapters supply tenant namespaces, persisted schedules and outbox records;
+Business does not run a parallel scheduling loop. Worker capacity is bounded. Ordinary lists return at most 100 records;
 run lists contain metadata rather than all outputs. Use `inspect` for a known ID.
 `{"action":"list","kind":"workflow_version","limit":100,"after":null}` returns
 metadata and a `next` cursor; pass that cursor as `after` to continue. Pagination
@@ -184,7 +184,7 @@ billing settings gets an empty runtime with no payment/mail capabilities.
 
 Dynamic `/tenants/<UUID>/webhooks/<plugin ID>`, `/onboarding` and `/recovery`
 resolve the same managed runtime. Optional `ACCOUNT_TENANT_ID` adds root aliases.
-`BILLING_ENABLED` installs the billing adapter and portal/ingress; turning it off
+`BILLING_ENABLED` installs the billing adapter and financial ingress; turning it off
 blocks new billing adapter actions as well. Other automation connectors remain
 available. The old billing tick HTTP endpoint, process timer and per-tenant worker list are
 removed. `deploy/automation-wake` only requests `/health` to wake a sleeping host;
@@ -235,3 +235,29 @@ review the preserved database/connection state before any rollback. The additive
 schema itself does not require deleting or rewriting existing business data.
 
 Development deployment evidence: [November 15 cutover](ops/development-automation-cutover-2026-11-15.md).
+
+## Native business-policy boundary
+
+TypeDB owns current tenant/owner authorization, run transition eligibility,
+approval state, evidence requirements, retry eligibility, connection capacity,
+schedule configuration, payment consent and notice/collection claims. Native
+facts are stored atomically alongside preserved workflow payloads. Human controls
+and background claims use the same policies; a service preflight cannot authorize
+a later write after permission revocation. A disabled trigger or schedule cannot
+insert a new run using an earlier preflight.
+
+Rust decodes workflow input, validates plugin protocols, encrypts secrets and
+performs external calls. It formats notifications after a native claim. Provider
+capabilities and effects come from trusted plugin definitions. Infrastructure
+errors propagate rather than being interpreted as permission revocation or a
+missing connection. Uncertain external writes retain their journals for review.
+
+Calendar arithmetic, durable execution, recurrence, delays, leases and worker
+supervision belong to `dog-queue`. TypeDB selects the business interval and next
+sequence; the SDK computes each UTC occurrence from the original anchor.
+
+Existing development data requires the explicit v3-to-v4 shadow migration in
+README.md. Startup only verifies policy readiness; it never backfills records.
+The migration preserves the exported schema and all original graph facts, adds
+policy projections in bounded transactions and verifies a second pass changes
+nothing. It makes no provider calls.

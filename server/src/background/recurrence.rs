@@ -39,7 +39,7 @@ impl ScheduledJob for TriggerWorkflow {
             .acquire()
             .await
             .map_err(|_| JobError::permanent("Background capacity closed"))?;
-        let engine = context.engine;
+        let mut engine = context.engine;
         let old = engine
             .store
             .get("schedule", &occurrence.schedule_id)
@@ -56,6 +56,10 @@ impl ScheduledJob for TriggerWorkflow {
                 "Schedule definition changed; occurrence retained",
             ));
         }
+        engine.store = engine
+            .store
+            .for_origin(&old)
+            .map_err(|_| JobError::permanent("Invalid schedule origin"))?;
         // This is business dispatch, not recurrence. Native owner/connection/consent
         // checks remain in the existing TypeDB business paths and payment journal.
         match engine

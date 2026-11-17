@@ -188,7 +188,7 @@ async fn run(phase: &str) -> Result<()> {
         std::fs::read_to_string(root.join("vault-key"))?,
     );
     let driver = Arc::new(
-        dog_typedb::TypeDBDriverFactory::connect(
+        crate::test_driver::connect(
             &std::env::var("TYPEDB_ADDR")?,
             &std::env::var("TYPEDB_USERNAME")?,
             &std::env::var("TYPEDB_PASSWORD")?,

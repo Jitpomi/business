@@ -12,8 +12,11 @@ must not decide who owns an invoice, whether consent exists, or when to charge.
   delivery key. It has no dependency on a financial provider or payment credentials.
 - `finance::TenantRuntime` / `TenantRegistry`: tenant-scoped plugin instances and
   delivery policy. Lookups never borrow another tenant's credentials or default.
-- `billing::engine::Engine`: schedule advancement, consent, ownership, amounts,
-  durable claims, one-attempt collection, terminal states and normalized reconciliation.
+- Native TypeDB functions decide consent, ownership, collection eligibility, notice
+  eligibility, terminal-state transitions and the next billing sequence.
+- `billing::engine::Engine` orchestrates provider calls and submits atomic native
+  claims. `dog-queue` computes anchored calendar dates and owns execution, leases
+  and scheduling; the engine does not run a separate billing timer.
 - `plugins`: built-in adapters, HTTP transport, signatures, provider history and raw
   provider services. Vendor payloads and credentials stop at this boundary.
 - `/data`: account discovery is a frontend TypeQL query using native context

@@ -1,4 +1,6 @@
 mod background_checks;
+#[path = "../support/driver.rs"]
+mod test_driver;
 use anyhow::{ensure, Result};
 use serde_json::{json, Value};
 use server::automation::{
@@ -116,7 +118,7 @@ async fn durable_workflows_preserve_tenant_boundaries_and_uncertain_writes() -> 
     support::auth()?;
     ensure!(std::env::var("TYPEDB_DB")? == "business_dev");
     let driver = Arc::new(
-        dog_typedb::TypeDBDriverFactory::connect(
+        crate::test_driver::connect(
             &std::env::var("TYPEDB_ADDR")?,
             &std::env::var("TYPEDB_USERNAME")?,
             &std::env::var("TYPEDB_PASSWORD")?,
@@ -324,7 +326,7 @@ async fn additive_install_checks_backup_and_preserves_existing_work() -> Result<
     support::auth()?;
     ensure!(std::env::var("TYPEDB_DB")? == "business_dev");
     let driver = Arc::new(
-        dog_typedb::TypeDBDriverFactory::connect(
+        crate::test_driver::connect(
             &std::env::var("TYPEDB_ADDR")?,
             &std::env::var("TYPEDB_USERNAME")?,
             &std::env::var("TYPEDB_PASSWORD")?,
@@ -464,7 +466,7 @@ async fn generic_schedule_dispatches_workflow_end_to_end() -> Result<()> {
     support::auth()?;
     ensure!(std::env::var("TYPEDB_DB")? == "business_dev");
     let driver = Arc::new(
-        dog_typedb::TypeDBDriverFactory::connect(
+        crate::test_driver::connect(
             &std::env::var("TYPEDB_ADDR")?,
             &std::env::var("TYPEDB_USERNAME")?,
             &std::env::var("TYPEDB_PASSWORD")?,

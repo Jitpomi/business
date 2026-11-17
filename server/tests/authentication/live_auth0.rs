@@ -37,7 +37,7 @@ async fn browser_auth0_proofs_enforce_native_multitenant_policies() -> Result<()
         "Wrong audience accepted"
     );
     let driver = Arc::new(
-        dog_typedb::TypeDBDriverFactory::connect(
+        crate::test_driver::connect(
             &std::env::var("TYPEDB_ADDR")?,
             &std::env::var("TYPEDB_USERNAME")?,
             &std::env::var("TYPEDB_PASSWORD")?,

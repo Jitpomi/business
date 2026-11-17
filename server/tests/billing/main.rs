@@ -6,6 +6,8 @@ mod mercury;
 mod mercury_automation;
 mod sandbox_support;
 mod stripe_automation;
+#[path = "../support/driver.rs"]
+mod test_driver;
 use anyhow::{ensure, Context, Result};
 use serde_json::json;
 use server::{
@@ -58,7 +60,7 @@ async fn scheduled_payment_receipt_and_decline_reminder() -> Result<()> {
         "Plaintext is restricted to disposable loopback testing"
     );
     let driver = Arc::new(
-        dog_typedb::TypeDBDriverFactory::connect(
+        crate::test_driver::connect(
             &address,
             &std::env::var("TYPEDB_USERNAME")?,
             &std::env::var("TYPEDB_PASSWORD")?,
@@ -197,7 +199,7 @@ async fn account_and_invoice_workflow_without_provider_effects() -> Result<()> {
         "Development credentials only"
     );
     let driver = Arc::new(
-        dog_typedb::TypeDBDriverFactory::connect(
+        crate::test_driver::connect(
             &std::env::var("TYPEDB_ADDR")?,
             &std::env::var("TYPEDB_USERNAME")?,
             &std::env::var("TYPEDB_PASSWORD")?,

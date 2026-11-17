@@ -16,7 +16,7 @@ async fn driver() -> Result<Arc<TypeDBDriver>> {
         "Disposable development tests only"
     );
     Ok(Arc::new(
-        dog_typedb::TypeDBDriverFactory::connect(
+        crate::test_driver::connect(
             &std::env::var("TYPEDB_ADDR")?,
             &std::env::var("TYPEDB_USERNAME")?,
             &std::env::var("TYPEDB_PASSWORD")?,

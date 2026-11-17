@@ -1,4 +1,6 @@
 //! Contract proof using a third-party-style bank and mail plugin, without vendor credentials.
+#[path = "../support/driver.rs"]
+mod test_driver;
 use anyhow::{ensure, Context, Result};
 use async_trait::async_trait;
 use server::finance::*;
@@ -263,7 +265,7 @@ async fn two_tenants_complete_billing_using_independent_plugins() -> Result<()> 
         "Development credentials only"
     );
     let driver = Arc::new(
-        dog_typedb::TypeDBDriverFactory::connect(
+        crate::test_driver::connect(
             &std::env::var("TYPEDB_ADDR")?,
             &std::env::var("TYPEDB_USERNAME")?,
             &std::env::var("TYPEDB_PASSWORD")?,
@@ -348,7 +350,11 @@ tx.query(format!(r#"insert $t isa tenant,has tenant_id "{tenant}",has name "Plug
         ensure!(account_profile(&router,&b.merchant,token).await?.0>=400,"Portal crossed tenant membership");
         Ok::<_,anyhow::Error>(())
     }.await;
-    driver.databases().get(&name).await?.delete().await?;
+    if result.is_ok() {
+        driver.databases().get(&name).await?.delete().await?;
+    } else {
+        eprintln!("Retained plugin fixture: {name}");
+    }
     result
 }
 
@@ -363,7 +369,7 @@ async fn explicit_migration_preserves_legacy_work_and_is_repeatable() -> Result<
         std::env::var("TYPEDB_DB")? == "business_dev",
         "Development credentials only"
     );
-    let driver = dog_typedb::TypeDBDriverFactory::connect(
+    let driver = crate::test_driver::connect(
         &std::env::var("TYPEDB_ADDR")?,
         &std::env::var("TYPEDB_USERNAME")?,
         &std::env::var("TYPEDB_PASSWORD")?,
@@ -400,7 +406,11 @@ async fn explicit_migration_preserves_legacy_work_and_is_repeatable() -> Result<
         ensure!(invoices.len()==1&&invoices[0]["id"]=="old-invoice"&&invoices[0]["external"]=="in_kept"&&invoices[0]["status"]=="paid","Invoice history changed");
         tx.close().await?;Ok::<_,anyhow::Error>(())
     }.await;
-    driver.databases().get(&name).await?.delete().await?;
+    if result.is_ok() {
+        driver.databases().get(&name).await?.delete().await?;
+    } else {
+        eprintln!("Retained plugin fixture: {name}");
+    }
     result
 }
 
@@ -480,7 +490,7 @@ async fn account_discovery_and_financial_metadata_enforce_tenant_scope() -> Resu
         "Development only"
     );
     let driver = Arc::new(
-        dog_typedb::TypeDBDriverFactory::connect(
+        crate::test_driver::connect(
             &std::env::var("TYPEDB_ADDR")?,
             &std::env::var("TYPEDB_USERNAME")?,
             &std::env::var("TYPEDB_PASSWORD")?,
@@ -540,7 +550,11 @@ async fn account_discovery_and_financial_metadata_enforce_tenant_scope() -> Resu
 
         Ok::<_,anyhow::Error>(())
     }.await;
-    driver.databases().get(&name).await?.delete().await?;
+    if result.is_ok() {
+        driver.databases().get(&name).await?.delete().await?;
+    } else {
+        eprintln!("Retained plugin fixture: {name}");
+    }
     result
 }
 

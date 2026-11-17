@@ -98,6 +98,7 @@ pub async fn import(
     tx.close().await?;
     ensure!(active.is_empty(),"Legacy active consent has no verifiable native grant. Original records preserved; do not cut over. Obtain buyer re-consent before migrating these customers: {active:?}");
     ensure!(approved_before.len()==approved_after.len()&&approved_before.iter().all(|row|approved_after.contains(row)),"Source and shadow authorized-plan sets differ. All original records preserved; review explicit buyer plan scope before cutover");
+    crate::business_rules::backfill(driver, target).await?;
     database::verify_runtime(driver, target).await?;
     driver.databases().get(&reference).await?.delete().await?;
     Ok(expected.len())

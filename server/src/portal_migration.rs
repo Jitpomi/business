@@ -118,6 +118,7 @@ pub async fn import(
         "Original attributes or relation roles changed"
     );
     driver.databases().get(&reference).await?.delete().await?;
+    crate::business_rules::backfill(driver, target).await?;
     database::verify_runtime(driver, target).await?;
     Ok(expected.len())
 }
