@@ -131,7 +131,7 @@ impl DogService<Value, BusinessParams> for PluginAuthentication {
             );
             return Ok(json!({"linked":true}));
         }
-        let query=format!("match $t isa tenant,has tenant_id {};$p isa person,has identity_id {};let $active=active_member($p,$t,{});$active==true;not {{$l isa external_identity,has auth_binding_key {};}};select $t,$p;distinct;insert $l isa external_identity,links(identity:$p),has auth_binding_key {},has auth_issuer {},has auth_subject {};fetch {{'linked':true}};",q(&ctx.tenant_id.0),q(person),chrono::Utc::now().naive_utc().format("%Y-%m-%dT%H:%M:%S%.6f"),q(&key),q(&key),q(&verified.issuer),q(&verified.subject));
+        let query=format!("match $t isa tenant,has tenant_id {};$p isa person,has identity_id {};let $active=active_member($p,$t,{});$active==true;not {{$l isa external_identity,has auth_binding_key {};}};select $t,$p;distinct;insert $l isa external_identity,links(identity:$p),has auth_binding_key {},has auth_issuer {},has auth_subject {};fetch {{'linked':true}};",q(&ctx.tenant_id.0),q(person),crate::clock::native_utc(),q(&key),q(&key),q(&verified.issuer),q(&verified.subject));
         crate::storage::write(&self.state, &query).await
     }
 }

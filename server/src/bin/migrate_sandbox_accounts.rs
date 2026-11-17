@@ -121,10 +121,7 @@ async fn run() -> Result<()> {
         r#"match $m isa company,has biz_id "{OLD}";(merchant:$m,buyer:$b,customer:$c) isa bill_account;"#
     );
     let customers=documents(&tx,&format!(r#"{prefix} fetch {{"id":$c.bill_key,"buyer":$b.biz_id,"name":$c.name,"email":$c.bill_email,"policy":$c.bill_policy,"provider":$c.bill_provider,"stripe":$c.bill_stripe_id,"mercury":$c.bill_mercury_id,"method":$c.bill_payment_method,"removed":[$c.bill_removed_method]}};"#)).await?;
-    let now = chrono::Utc::now()
-        .naive_utc()
-        .format("%Y-%m-%dT%H:%M:%S%.6f")
-        .to_string();
+    let now = server::clock::native_utc();
     let mut members=documents(&tx,&format!(r#"match $t isa company;
  $u isa user; $membership isa biz_membership,links(tenant:$t,person:$u),has biz_state "active";
  let $active=biz_account_active($u,$t);$active==true;let $member=biz_member($u,$t,{now});$member==true;
@@ -257,7 +254,7 @@ async fn run() -> Result<()> {
         out.query(format!(r#"match $c isa bill_customer,has bill_key {};insert $p isa bill_plan{},has bill_status "{status}";(customer:$c,plan:$p) isa bill_plan_owner;"#,q(s(p,"customer")?),attrs(p,&[("id","bill_key"),("name","name"),("amount","bill_amount"),("due_days","bill_due_days"),("anchor","bill_anchor"),("next","bill_next"),("sequence","bill_sequence"),("interval","bill_interval")])?)).await?;
     }
     for i in &invoices {
-        out.query(format!(r#"match $p isa bill_plan,has bill_key {};insert $i isa bill_invoice{};(plan:$p,invoice:$i) isa bill_invoice_owner;$n isa bill_notice,has bill_key {},has bill_status "imported-history",has bill_updated {}; (invoice:$i,notice:$n) isa bill_notice_owner;"#,q(s(i,"plan")?),attrs(i,&[("id","bill_key"),("name","name"),("amount","bill_amount"),("anchor","bill_anchor"),("next","bill_next"),("sequence","bill_sequence"),("choice","bill_choice"),("provider","bill_provider"),("status","bill_status"),("external","bill_external_id"),("url","bill_url"),("updated","bill_updated"),("revision","bill_revision")])?,q(&format!("{}-migration-archive",s(i,"id")?)),chrono::Utc::now().timestamp())).await?;
+        out.query(format!(r#"match $p isa bill_plan,has bill_key {};insert $i isa bill_invoice{};(plan:$p,invoice:$i) isa bill_invoice_owner;$n isa bill_notice,has bill_key {},has bill_status "imported-history",has bill_updated {}; (invoice:$i,notice:$n) isa bill_notice_owner;"#,q(s(i,"plan")?),attrs(i,&[("id","bill_key"),("name","name"),("amount","bill_amount"),("anchor","bill_anchor"),("next","bill_next"),("sequence","bill_sequence"),("choice","bill_choice"),("provider","bill_provider"),("status","bill_status"),("external","bill_external_id"),("url","bill_url"),("updated","bill_updated"),("revision","bill_revision")])?,q(&format!("{}-migration-archive",s(i,"id")?)),server::clock::unix_seconds())).await?;
         for h in i["history"]
             .as_array()
             .ok_or_else(|| anyhow::anyhow!("Invalid history"))?

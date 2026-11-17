@@ -27,7 +27,7 @@ impl TokenStore for LocalTokenStore {
         Ok(())
     }
     async fn consume_refresh(&self, issuer: &str, jti: &str, expires: i64) -> Result<bool> {
-        if expires <= chrono::Utc::now().timestamp() {
+        if expires <= crate::clock::unix_seconds() {
             return Ok(false);
         }
         self.store.revoke(&Self::key(issuer, jti), expires)
