@@ -42,9 +42,9 @@ requested constraints. No such workaround was made. Existing TypeDB transport
 pins remain unchanged; this change does not claim to retire them.
 
 No runtime database or checkpoint is migrated, reset or deleted by this change.
-Keep the security gate enabled. Samson accepted the existing maintenance
-findings for merging verified first-party fixes while upstream work continues;
-this does not turn the failing audit into a pass or authorize deployment.
+Keep the security gate enabled. Verified first-party fixes are merged separately
+from the remaining upstream dependency work. The existing maintenance findings
+remain unresolved; this is not a clean audit or a deployment verification.
 Authentication, native RBAC, provider uncertainty and independent-tenant billing
 tests remain required; this is not a completed four-dependency removal.
 
