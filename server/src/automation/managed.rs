@@ -96,7 +96,12 @@ impl super::engine::Engine {
         ] {
             if let Some(id) = id {
                 let (_, c, secrets) = self.connection(id).await?;
-                ensure!(c.enabled && c.verified, "Verify selected connections first");
+                if !c.enabled || !c.verified {
+                    return Err(dog_core::DogError::conflict(
+                        "Verify an enabled connection before selecting it",
+                    )
+                    .into_anyhow());
+                }
                 ensure!(
                     c.config["sandbox"].as_bool() == Some(s.sandbox),
                     "Connection environment mismatch"

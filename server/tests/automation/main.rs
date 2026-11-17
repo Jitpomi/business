@@ -190,6 +190,17 @@ tx.query(format!(r#"insert $t isa tenant,has tenant_id "{tenant}",has name "Auto
  let forged=format!("insert $r isa automation_record,has auto_key \"{tenant}/run/forged\",has auto_tenant \"{tenant}\",has auto_kind \"run\",has auto_payload \"{{}}\",has auto_revision \"forged\",has auto_status \"queued\",has auto_when 0;fetch {{'key':$r.auto_key}};");ensure!(call(&router,&tenant,jwt,"/data",Some(json!({"query":forged}))).await?.0>=400,"Generic data forged a run");ensure!(e.store.get("run","forged").await?.is_none());
  let(status,_)=call(&router,&tenant,jwt,"/automation",Some(json!({"action":"connect","id":"http-api","connector":"http","config":{"origin":"https://example.com"},"secrets":{"bearer":"PRIVATE-HTTP-TOKEN"},"tenant_id":other}))).await?;ensure!(status>=400,"Body tenant override accepted");
  let(status,connected)=call(&router,&tenant,jwt,"/automation",Some(json!({"action":"connect","id":"owner-http","connector":"http","config":{"origin":"https://example.com"},"secrets":{"bearer":"PRIVATE-HTTP-TOKEN"}}))).await?;ensure!(status<300,"Owner connection failed: {connected}");ensure!(!connected.to_string().contains("PRIVATE-HTTP-TOKEN")&&!connected.to_string().contains("secret_ref"));
+ // A known connection that is disabled or unverified is a state conflict,
+ // not an internal error. Reject before settings writes or provider calls.
+ let calls_before=recorder.calls.load(Ordering::SeqCst);
+ for connection in ["crm","owner-http"] {
+  let before=e.store.get("connection",connection).await?.unwrap();
+  let(status,body)=call(&router,&tenant,jwt,"/automation",Some(json!({"action":"configure_billing","settings":{"sandbox":true,"default_financial":connection,"notification":null,"reminder_days":7,"allowed_test_recipients":[]}}))).await?;
+  ensure!(status==409&&body.to_string().contains("Verify an enabled connection"),"Unavailable connection was not a clear conflict: {status} {body}");
+  ensure!(e.store.get("settings","billing").await?.is_none(),"Rejected selection changed settings");
+  let after=e.store.get("connection",connection).await?.unwrap();ensure!(before.value==after.value&&before.revision==after.revision,"Rejected selection changed connection history");
+ }
+ ensure!(recorder.calls.load(Ordering::SeqCst)==calls_before,"Rejected selection invoked a provider");
  let revoked=e.enqueue("scheduled","revoked-owner",Value::Null).await?;let tx=driver.transaction(&db,typedb_driver::TransactionType::Write).await?;tx.query(format!("match $u isa person,has identity_id \"{owner}\";$t isa tenant,has tenant_id \"{tenant}\";$m isa membership,links(tenant:$t,member:$u);update $m has membership_role \"member\";")).await?;tx.commit().await?;ensure!(e.advance(revoked["id"].as_str().unwrap()).await?["status"]=="blocked");ensure!(call(&router,&tenant,jwt,"/automation",None).await?.0>=400,"Revoked owner retained automation access");
 
  Ok::<_,anyhow::Error>(())
