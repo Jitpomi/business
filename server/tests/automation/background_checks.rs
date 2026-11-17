@@ -6,11 +6,11 @@ use std::time::Duration;
 pub async fn exercise(store: &Store, other: &Store) -> Result<()> {
     let backend = TypeDBBackend {
         store: store.clone(),
-        lease_duration: Duration::from_secs(3),
+        lease_duration: Duration::from_secs(30),
     };
     let second = TypeDBBackend {
         store: store.clone(),
-        lease_duration: Duration::from_secs(3),
+        lease_duration: Duration::from_secs(30),
     };
     let ctx = QueueCtx::new(&store.tenant);
     let foreign = QueueCtx::new(&other.tenant);
@@ -21,7 +21,7 @@ pub async fn exercise(store: &Store, other: &Store) -> Result<()> {
     ensure!(backend.enqueue(foreign.clone(), message).await.is_err());
     let outsider = TypeDBBackend {
         store: other.clone(),
-        lease_duration: Duration::from_secs(3),
+        lease_duration: Duration::from_secs(30),
     };
     ensure!(outsider.get_record(foreign, id.clone()).await.is_err());
     let (a, b) = tokio::join!(
@@ -41,7 +41,7 @@ pub async fn exercise(store: &Store, other: &Store) -> Result<()> {
         .ack_complete(ctx.clone(), id.clone(), LeaseToken::new(), None)
         .await
         .is_err());
-    tokio::time::sleep(Duration::from_millis(3100)).await;
+    tokio::time::sleep(Duration::from_millis(30100)).await;
     ensure!(backend
         .ack_complete(ctx.clone(), id.clone(), first.lease_token.clone(), None)
         .await

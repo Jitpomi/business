@@ -1,37 +1,16 @@
 //! dog-queue owns execution, leases, retries and graceful worker draining.
-//! This supervisor only discovers tenant namespaces and backfills pre-cutover outboxes.
+//! TypeDB adapters supply namespaces, schedules and durable outboxes; dog-queue owns supervision.
 pub mod backend;
 pub(crate) mod jobs;
+pub mod recurrence;
 use crate::automation::{
     engine::Engine,
     store::{q, Store},
 };
 use anyhow::Result;
 use dog_queue::{Job, QueueAdapter, QueueConfig, QueueCtx, WorkerHandle};
-use std::{collections::BTreeMap, time::Duration};
-#[must_use = "Await shutdown before retiring a database"]
-pub struct Worker {
-    stop: Option<tokio::sync::oneshot::Sender<()>>,
-    task: Option<tokio::task::JoinHandle<Result<()>>>,
-}
-impl Worker {
-    pub async fn shutdown(mut self) -> Result<()> {
-        if let Some(stop) = self.stop.take() {
-            let _ = stop.send(());
-        }
-        if let Some(task) = self.task.take() {
-            task.await??;
-        }
-        Ok(())
-    }
-}
-impl Drop for Worker {
-    fn drop(&mut self) {
-        if let Some(stop) = self.stop.take() {
-            let _ = stop.send(());
-        }
-    }
-}
+use std::time::Duration;
+pub type Worker = dog_queue::supervisor::SupervisorHandle;
 /// Add only missing deliveries. Revision matching and absence are checked in the
 /// same transaction, so this is safe against a writer or a second supervisor.
 pub async fn reconcile(store: &Store) -> Result<usize> {
@@ -89,103 +68,79 @@ pub async fn reconcile(store: &Store) -> Result<usize> {
     }
     Ok(inserted)
 }
-pub fn spawn_all(template: Engine) -> Worker {
-    let (stop, mut stopped) = tokio::sync::oneshot::channel();
-    let task = tokio::spawn(async move {
-        let mut pools: BTreeMap<String, WorkerHandle> = BTreeMap::new();
-        let mut cursor = String::new();
-        let mut clock = tokio::time::interval(Duration::from_secs(5));
-        clock.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        let capacity = std::sync::Arc::new(tokio::sync::Semaphore::new(4));
-        let supervision: Result<()> = async {
-        loop {
-            tokio::select! {biased;_=&mut stopped=>break,_=clock.tick()=>{}}
-            let after = if cursor.is_empty() {
-                String::new()
-            } else {
-                format!("$tenant > {};", q(&cursor))
-            };
-            let query=format!("match $r isa automation_record,has auto_tenant $tenant;{after}select $tenant;distinct;sort $tenant;limit 100;fetch {{'tenant':$tenant}};");
-            let rows = match crate::storage::read(&template.store.state, &query).await {
-                Ok(rows) => rows,
-                Err(_) => {
-                    tracing::warn!("Background tenant discovery failed");
-                    continue;
-                }
-            };
-            if rows.is_empty() {
-                cursor.clear();
-                continue;
-            }
-            for row in rows {
-                let Some(tenant) = row["tenant"].as_str() else {
-                    continue;
-                };
-                cursor = tenant.into();
-                if pools.get(tenant).is_some_and(|pool| !pool.is_finished()) { continue; }
-                if let Some(pool) = pools.remove(tenant) {
-                    if pool.shutdown().await.is_err() { tracing::error!(tenant,"Background pool failed; recovering durable deliveries"); }
-                }
-                let store = Store::new(template.store.state.clone(), tenant)?;
-                if reconcile(&store).await.is_err() {
-                    tracing::warn!(tenant, "Background outbox recovery deferred");
-                    continue;
-                }
-                let config = QueueConfig {
-                    max_workers: 4,
-                    poll_interval: Duration::from_secs(2),
-                    worker_idle_timeout: Duration::MAX,
-                    lease_duration: Duration::from_secs(300),
-                    heartbeat_interval: Duration::from_secs(60),
-                    ..Default::default()
-                };
-                let backend = backend::TypeDBBackend {
-                    store: store.clone(),
-                    lease_duration: config.lease_duration,
-                };
-                let queue = QueueAdapter::try_with_config(backend, config)?;
-                queue.register_job::<jobs::Advance>().await?;
-                let engine = Engine {
-                    store,
-                    catalog: template.catalog.clone(),
-                    vault: template.vault.clone(),
-                };
-                pools.insert(
-                    tenant.into(),
-                    queue
-                        .start_workers(
-                            QueueCtx::new(tenant),
-                            jobs::Context {engine, capacity:capacity.clone()},
-                            vec![jobs::Advance::JOB_TYPE.into()],
-                        )
-                        .await?,
-                );
-            }
-        }
-        Ok(())
-        }.await;
-        // Signal all pools together so another tenant cannot keep starting work
-        // while an earlier pool is draining.
-        let results =
-            futures::future::join_all(pools.into_values().map(WorkerHandle::shutdown)).await;
-        let errors: Vec<_> = results
-            .into_iter()
-            .filter_map(Result::err)
-            .map(|e| e.to_string())
-            .collect();
-        supervision?;
-        anyhow::ensure!(
-            errors.is_empty(),
-            "Background drain failed: {}",
-            errors.join("; ")
-        );
-        Ok(())
-    });
-    Worker {
-        stop: Some(stop),
-        task: Some(task),
+struct TenantSource {
+    template: Engine,
+    capacity: std::sync::Arc<tokio::sync::Semaphore>,
+}
+#[async_trait::async_trait]
+impl dog_queue::supervisor::TenantWorkers for TenantSource {
+    async fn page(&self, after: Option<&str>) -> dog_queue::QueueResult<Vec<String>> {
+        let after = after
+            .map(|cursor| format!("$tenant > {};", q(cursor)))
+            .unwrap_or_default();
+        let query=format!("match $r isa automation_record,has auto_tenant $tenant;{after}select $tenant;distinct;sort $tenant;limit 100;fetch {{'tenant':$tenant}};");
+        let rows = crate::storage::read(&self.template.store.state, &query)
+            .await
+            .map_err(|_| {
+                dog_queue::QueueError::Internal("TypeDB tenant discovery unavailable".into())
+            })?;
+        rows.into_iter()
+            .map(|row| {
+                row["tenant"].as_str().map(str::to_owned).ok_or_else(|| {
+                    dog_queue::QueueError::Internal("Invalid tenant discovery row".into())
+                })
+            })
+            .collect()
+    }
+    async fn start(&self, tenant: &str) -> dog_queue::QueueResult<WorkerHandle> {
+        let store = Store::new(self.template.store.state.clone(), tenant)
+            .map_err(|_| dog_queue::QueueError::InvalidConfig("Invalid tenant namespace".into()))?;
+        reconcile(&store).await.map_err(|_| {
+            dog_queue::QueueError::Internal("Durable outbox recovery deferred".into())
+        })?;
+        let config = QueueConfig {
+            max_workers: 4,
+            poll_interval: Duration::from_secs(2),
+            worker_idle_timeout: Duration::MAX,
+            lease_duration: Duration::from_secs(300),
+            heartbeat_interval: Duration::from_secs(60),
+            ..Default::default()
+        };
+        let queue = QueueAdapter::try_with_config(
+            backend::TypeDBBackend {
+                store: store.clone(),
+                lease_duration: config.lease_duration,
+            },
+            config,
+        )?;
+        queue.register_job::<jobs::Advance>().await?;
+        queue
+            .register_job::<dog_queue::recurrence::Scheduled<recurrence::TriggerWorkflow>>()
+            .await?;
+        let engine = Engine {
+            store,
+            catalog: self.template.catalog.clone(),
+            vault: self.template.vault.clone(),
+        };
+        queue
+            .start_workers(
+                QueueCtx::new(tenant),
+                jobs::Context {
+                    engine,
+                    capacity: self.capacity.clone(),
+                },
+                vec![
+                    jobs::Advance::JOB_TYPE.into(),
+                    <recurrence::TriggerWorkflow as dog_queue::recurrence::ScheduledJob>::JOB_TYPE
+                        .into(),
+                ],
+            )
+            .await
     }
 }
-#[cfg(test)]
-#[path = "../../tests/unit/automation_worker.rs"]
-mod worker_tests;
+pub fn spawn_all(template: Engine) -> Worker {
+    dog_queue::supervisor::start(std::sync::Arc::new(TenantSource {
+        template,
+        capacity: std::sync::Arc::new(tokio::sync::Semaphore::new(4)),
+    }))
+}

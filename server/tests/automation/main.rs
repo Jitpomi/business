@@ -106,6 +106,10 @@ impl Connector for Recorder {
 #[tokio::test]
 #[ignore = "Development credentials, disposable database only; no external payment or mail calls"]
 async fn durable_workflows_preserve_tenant_boundaries_and_uncertain_writes() -> Result<()> {
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter("off,dog_queue=debug")
+        .with_test_writer()
+        .try_init();
     let _environment =
         environment::Environment::capture(&["AUTOMATION_ENABLED", "AUTOMATION_MASTER_KEY_B64"]);
     dotenvy::from_path(std::env::var("BUSINESS_ENV_FILE")?)?;
@@ -138,7 +142,20 @@ tx.query(format!(r#"insert $t isa tenant,has tenant_id "{tenant}",has name "Auto
  // Reconstructing the engine simulates a worker restart; persisted state is authoritative.
  let restarted=e.clone();for _ in 0..5{restarted.advance(id).await?;}let completed=e.store.get("run",id).await?.unwrap().value;ensure!(completed["status"]=="completed","{completed}");ensure!(!completed.to_string().contains("DO-NOT-LEAK"));ensure!(recorder.calls.load(Ordering::SeqCst)==1);
  let mut uncertain=w.clone();uncertain.id="uncertain".into();uncertain.steps=vec![Step::Action{id:"write".into(),connection:"crm".into(),action:"send".into(),input:json!({"uncertain":true})}];e.publish(uncertain.clone(),&owner).await?;let r=e.enqueue(&uncertain.id,"one",Value::Null).await?;let rid=r["id"].as_str().unwrap();ensure!(e.advance(rid).await?["status"]=="attention");e.advance(rid).await?;ensure!(recorder.calls.load(Ordering::SeqCst)==2);e.resolve(rid,&owner,"Checked the external system; action succeeded",json!({"id":"verified"})).await?;ensure!(e.advance(rid).await?["status"]=="completed");ensure!(recorder.calls.load(Ordering::SeqCst)==2);
- let mut sw=w;sw.id="scheduled".into();sw.steps=vec![Step::Transform{id:"one".into(),value:json!(true)}];e.publish(sw,&owner).await?;e.schedule(Schedule{id:"daily".into(),workflow:"scheduled".into(),every_seconds:60,next:server::automation::engine::now(),sequence:999,input:Value::Null,enabled:true}).await?;e.fire_schedule("daily").await?;e.fire_schedule("daily").await?;ensure!(e.store.get("schedule","daily").await?.unwrap().value["sequence"]==1);
+ let mut sw=w;sw.id="scheduled".into();sw.steps=vec![Step::Transform{id:"one".into(),value:json!(true)}];e.publish(sw,&owner).await?;e.schedule(Schedule{id:"daily".into(),workflow:"scheduled".into(),every_seconds:60,next:server::automation::engine::now(),sequence:999,input:json!({"source":"recurrence-acceptance"}),enabled:true}).await?;let schedule=e.store.get("schedule","daily").await?.unwrap();let scheduler=server::background::recurrence::TypeDBRecurrence{store:e.store.clone()};dog_queue::recurrence::dispatch(&scheduler,&dog_queue::QueueCtx::new(&tenant),"daily",&schedule.revision,chrono::Utc::now()).await?;dog_queue::recurrence::dispatch(&scheduler,&dog_queue::QueueCtx::new(&tenant),"daily",&schedule.revision,chrono::Utc::now()).await?;ensure!(e.store.get("schedule","daily").await?.unwrap().value["sequence"]==1);
+ // The generic scheduler publishes exactly one durable occurrence and next wake
+ // atomically, including across two independent TypeDB scheduler instances.
+ let race=Schedule{id:"race".into(),workflow:"scheduled".into(),every_seconds:60,next:server::automation::engine::now(),sequence:0,input:json!({"source":"disabled-recurrence"}),enabled:true};
+ e.schedule(race.clone()).await?;let current=e.store.get("schedule","race").await?.unwrap();
+ let a=server::background::recurrence::TypeDBRecurrence{store:e.store.clone()};let b=server::background::recurrence::TypeDBRecurrence{store:e.store.clone()};let ctx=dog_queue::QueueCtx::new(&tenant);
+ let (first,second)=tokio::join!(dog_queue::recurrence::dispatch(&a,&ctx,"race",&current.revision,chrono::Utc::now()),dog_queue::recurrence::dispatch(&b,&ctx,"race",&current.revision,chrono::Utc::now()));
+ ensure!([first,second].into_iter().filter(|v|matches!(v,Ok(dog_queue::recurrence::Dispatch::Published(_)))).count()==1,"Concurrent schedulers duplicated an occurrence");
+ ensure!(e.store.list("job",1000).await?.iter().filter(|r|r.value["record"]["message"]["idempotency_key"]=="schedule:race:0").count()==1,"Occurrence delivery duplicated");
+ ensure!(e.store.get("schedule","race").await?.unwrap().value["sequence"]==1);
+ ensure!(dog_queue::recurrence::dispatch(&a,&dog_queue::QueueCtx::new(&other),"race",&current.revision,chrono::Utc::now()).await.is_err(),"Scheduler accepted another tenant");
+ let mut disabled=race;disabled.enabled=false;e.schedule(disabled).await?;let stopped=e.store.get("schedule","race").await?.unwrap();
+ ensure!(dog_queue::recurrence::dispatch(&b,&ctx,"race",&stopped.revision,chrono::Utc::now()).await?==dog_queue::recurrence::Dispatch::Obsolete);
+
 
  let literal=Workflow{id:"literal-data".into(),revision:String::new(),name:"Keep customer data literal".into(),enabled:true,steps:vec![Step::Transform{id:"copy".into(),value:json!({"$ref":"input/customer"})}]};e.publish(literal,&owner).await?;let literal=e.enqueue("literal-data","literal",json!({"customer":{"$ref":"steps/never-evaluate"}})).await?;let copied=e.advance(literal["id"].as_str().unwrap()).await?;ensure!(copied["status"]=="completed"&&copied["outputs"]["copy"]==json!({"$ref":"steps/never-evaluate"}),"Customer data was evaluated as a template");
  let concurrent=Workflow{id:"concurrent".into(),revision:String::new(),name:"Concurrent claim".into(),enabled:true,steps:vec![Step::Action{id:"once".into(),connection:"crm".into(),action:"send".into(),input:Value::Null}]};e.publish(concurrent,&owner).await?;let run_once=e.enqueue("concurrent","race",Value::Null).await?;let once=run_once["id"].as_str().unwrap();let before=recorder.calls.load(Ordering::SeqCst);let(a,b)=tokio::join!(e.advance(once),e.advance(once));ensure!(a.is_ok()||b.is_ok());ensure!(recorder.calls.load(Ordering::SeqCst)==before+1,"Concurrent workers duplicated a write");
@@ -154,9 +171,13 @@ tx.query(format!(r#"insert $t isa tenant,has tenant_id "{tenant}",has name "Auto
  ensure!(server::background::reconcile(&e.store).await? >= 1);
  ensure!(server::background::reconcile(&e.store).await? == 0,"Backfill duplicated deliveries");
  ensure!(e.store.get("run",&driven_id).await?.unwrap().value==pending.value,"Backfill changed useful workflow state");
- let worker=server::background::spawn_all(e.clone());let outcome=tokio::time::timeout(std::time::Duration::from_secs(30),async{loop{if e.store.get("run",&driven_id).await?.unwrap().value["status"]=="completed"{break Ok::<_,anyhow::Error>(());}tokio::time::sleep(std::time::Duration::from_millis(500)).await;}}).await;worker.shutdown().await?;
- if outcome.is_err(){for row in e.store.list("job",1000).await? {eprintln!("queue diagnostic status={} attempt={} error={}",row.status,row.value["record"]["attempt"],row.value["record"]["last_error"]);}}
+ // Includes historical outbox backlog and the scheduler -> occurrence -> workflow pipeline.
+ let worker=server::background::spawn_all(e.clone());let outcome=tokio::time::timeout(std::time::Duration::from_secs(90),async{loop{if e.store.get("run",&driven_id).await?.unwrap().value["status"]=="completed" && e.store.list("run",1000).await?.iter().any(|r|r.value["input"]["source"]=="recurrence-acceptance" && r.value["status"]=="completed"){break Ok::<_,anyhow::Error>(());}tokio::time::sleep(std::time::Duration::from_millis(500)).await;}}).await;worker.shutdown().await?;
+ if outcome.is_err(){for row in e.store.list("job",1000).await? {eprintln!("queue diagnostic type={} status={} attempt={} error={}",row.value["record"]["message"]["job_type"],row.status,row.value["record"]["attempt"],row.value["record"]["last_error"]);}}
+ if outcome.is_err(){for row in e.store.list("run",1000).await?{eprintln!("run diagnostic workflow={} source={} status={} error={}",row.value["workflow"]["id"],row.value["input"]["source"],row.value["status"],row.value["last_error"]);}}
  outcome??;
+ ensure!(!e.store.list("job",1000).await?.iter().any(|r|r.status=="processing"),"Graceful drain left an unacknowledged queue lease");
+ ensure!(!e.store.list("run",1000).await?.iter().any(|r|r.value["input"]["source"]=="disabled-recurrence"),"Disabled schedule dispatched business work");
  // Real authentication and schema-policy ingress must not expose or forge records.
  std::env::set_var("AUTOMATION_ENABLED","true");std::env::set_var("AUTOMATION_MASTER_KEY_B64","AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=");
  let (_,http)=server::app::build_with_plugins(state.clone(),"automation-test-signing-secret-with-at-least-32-bytes".into(),Arc::new(server::finance::TenantRegistry::default()))?;
@@ -171,8 +192,12 @@ tx.query(format!(r#"insert $t isa tenant,has tenant_id "{tenant}",has name "Auto
 
  Ok::<_,anyhow::Error>(())
  }.await;
-    if driver.databases().contains(&db).await? {
-        driver.databases().get(&db).await?.delete().await?;
+    if result.is_ok() {
+        if driver.databases().contains(&db).await? {
+            driver.databases().get(&db).await?.delete().await?;
+        }
+    } else {
+        eprintln!("Retained automation fixture for diagnosis: {db}");
     }
     result
 }
@@ -427,3 +452,93 @@ mod support;
 
 #[path = "../support/environment.rs"]
 mod environment;
+
+#[tokio::test]
+#[ignore = "Real TypeDB, isolated schedule-to-workflow dispatch; generated database only"]
+async fn generic_schedule_dispatches_workflow_end_to_end() -> Result<()> {
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter("off,dog_queue=debug")
+        .with_test_writer()
+        .try_init();
+    dotenvy::from_path(std::env::var("BUSINESS_ENV_FILE")?)?;
+    support::auth()?;
+    ensure!(std::env::var("TYPEDB_DB")? == "business_dev");
+    let driver = Arc::new(
+        dog_typedb::TypeDBDriverFactory::connect(
+            &std::env::var("TYPEDB_ADDR")?,
+            &std::env::var("TYPEDB_USERNAME")?,
+            &std::env::var("TYPEDB_PASSWORD")?,
+            true,
+        )
+        .await?,
+    );
+    let db = format!("business_backend_test_{}", uuid::Uuid::new_v4().simple());
+    server::database::install(&driver, &db).await?;
+    let tenant = uuid::Uuid::new_v4().to_string();
+    let owner = uuid::Uuid::new_v4().to_string();
+    let tx = driver
+        .transaction(&db, typedb_driver::TransactionType::Write)
+        .await?;
+    tx.query(format!("insert $t isa tenant,has tenant_id \"{tenant}\",has name 'Schedule test',has status 'active',has revision 'initial';$u isa person,has identity_id \"{owner}\",has name 'Schedule owner',has email 'schedule@example.invalid',has status 'active';(tenant:$t,member:$u) isa membership,has membership_role 'owner',has start_at 2020-01-01T00:00:00;")).await?;
+    tx.commit().await?;
+    let state = Arc::new(server::typedb::TypeDBState {
+        driver: driver.clone(),
+        database: db.clone(),
+    });
+    let engine = Engine {
+        store: Store::new(state, &tenant)?,
+        catalog: Arc::new(Catalog::default()),
+        vault: Vault::default(),
+    };
+    engine
+        .publish(
+            Workflow {
+                id: "recurring".into(),
+                revision: String::new(),
+                name: "Generic recurrence".into(),
+                enabled: true,
+                steps: vec![Step::Transform {
+                    id: "done".into(),
+                    value: json!(true),
+                }],
+            },
+            &owner,
+        )
+        .await?;
+    engine
+        .schedule(Schedule {
+            id: "schedule".into(),
+            workflow: "recurring".into(),
+            every_seconds: 60,
+            next: server::automation::engine::now(),
+            sequence: 0,
+            input: json!({"source":"generic"}),
+            enabled: true,
+        })
+        .await?;
+    let worker = server::background::spawn_all(engine.clone());
+    let result = tokio::time::timeout(std::time::Duration::from_secs(90), async {
+        loop {
+            if engine
+                .store
+                .list("run", 100)
+                .await?
+                .iter()
+                .any(|r| r.value["status"] == "completed")
+            {
+                return Ok::<_, anyhow::Error>(());
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        }
+    })
+    .await;
+    let drain = worker.shutdown().await;
+    if matches!(&result, Ok(Ok(()))) && drain.is_ok() {
+        driver.databases().get(&db).await?.delete().await?;
+    } else {
+        eprintln!("Retained isolated recurrence fixture: {db}");
+    }
+    drain?;
+    result??;
+    Ok(())
+}

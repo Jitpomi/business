@@ -335,7 +335,9 @@ impl Engine {
                 }
             }
             Step::Delay { id, seconds } => {
-                run.wake = now() + seconds;
+                run.wake =
+                    dog_queue::timing::delayed_at(chrono::Utc::now(), u64::try_from(seconds)?)?
+                        .timestamp();
                 run.status = "waiting".into();
                 run.outputs.insert(id, json!({"resume_at":run.wake}));
                 run.cursor += 1;
@@ -414,7 +416,14 @@ impl Engine {
                     started: now(),
                 });
                 run.status = "running".into();
-                run.wake = now() + connector.timeout_seconds() as i64 + 60;
+                run.wake = dog_queue::timing::delayed_at(
+                    chrono::Utc::now(),
+                    connector
+                        .timeout_seconds()
+                        .checked_add(60)
+                        .ok_or_else(|| anyhow::anyhow!("Action deadline exhausted"))?,
+                )?
+                .timestamp();
                 let claimed = self
                     .store
                     .claim(
@@ -472,7 +481,14 @@ impl Engine {
                             run.wake = 0;
                         } else {
                             run.status = "retry".into();
-                            run.wake = now() + (1i64 << previous.min(6));
+                            run.wake = dog_queue::timing::retry_at(
+                                chrono::Utc::now(),
+                                previous,
+                                1,
+                                64,
+                                false,
+                            )?
+                            .timestamp();
                         }
                     }
                 }

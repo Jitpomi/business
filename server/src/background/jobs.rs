@@ -40,7 +40,16 @@ impl Job for Advance {
                     engine.advance(&self.id).await?;
                 }
                 "schedule" => {
-                    engine.fire_schedule(&self.id).await?;
+                    dog_queue::recurrence::dispatch(
+                        &super::recurrence::TypeDBRecurrence {
+                            store: engine.store.clone(),
+                        },
+                        &dog_queue::QueueCtx::new(&engine.store.tenant),
+                        &self.id,
+                        &self.revision,
+                        chrono::Utc::now(),
+                    )
+                    .await?;
                 }
                 _ => anyhow::bail!("Invalid workflow delivery kind"),
             }
