@@ -159,3 +159,14 @@ missing queue deliveries and checks original objects, business attributes and
 relation roles. A second backfill must insert nothing. No providers are called;
 the source and backup remain untouched and the shadow is retained as evidence.
 See `src/background/README.md` for execution and rollback responsibilities.
+
+## Rehearse a retained checkpoint with current policies
+
+The restore-only `policy_shadow_preserves_all_backup_work_and_is_idempotent`
+test accepts `BUSINESS_RULES_TEST_SOURCE` alongside
+`BUSINESS_RULES_TEST_BACKUP`. The source defaults to
+`business_native_dev_v3`; an explicit retained generated checkpoint can be
+selected instead. The existing development/source guards still apply. It
+restores only into new UUID databases, compares records and relationship roles,
+verifies additive policy backfill twice, and makes no provider calls. It never
+changes the source database or its immutable backup.
