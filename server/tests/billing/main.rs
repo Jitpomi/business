@@ -35,20 +35,12 @@ async fn scheduled_payment_receipt_and_decline_reminder() -> Result<()> {
         .context("Missing test key")?;
     ensure!(token.starts_with("sk_test_"), "Sandbox only");
     let merchant = uuid::Uuid::new_v4().to_string();
-    std::env::set_var("BILLING_MERCHANT_ID", &merchant);
-    std::env::set_var("BILLING_LIVE", "false");
     std::env::set_var("MERCURY_CONNECTIONS_JSON", json!([{"tenant_id":merchant,"identity_ids":["sandbox-fixture"],"environment":"sandbox","token":"readonly-fixture-never-sent","write":false}]).to_string());
     std::env::set_var("STRIPE_CONNECTIONS_JSON", json!([{"tenant_id":merchant,"identity_ids":["sandbox-fixture"],"environment":"test","token":token,"write":true}]).to_string());
-    for key in ["RESEND_API_KEY", "BILLING_EMAIL_FROM", "BILLING_TEST_EMAIL"] {
-        std::env::set_var(
-            key,
-            secrets
-                .get(key)
-                .context("Missing test mail configuration")?,
-        );
-    }
-    std::env::set_var("BILLING_MAIL_ENABLED", "true");
-    let recipient = std::env::var("BILLING_TEST_EMAIL")?;
+    let recipient = secrets
+        .get("BILLING_TEST_EMAIL")
+        .context("Missing test mail recipient")?
+        .clone();
     ensure!(
         recipient == "dev@jitpomi.com",
         "Only approved validation mailbox"
@@ -76,7 +68,7 @@ async fn scheduled_payment_receipt_and_decline_reminder() -> Result<()> {
     });
     let providers = server::plugins::configuration::transport(&merchant)?;
     std::env::set_var("TENANT_FINANCIAL_SETTINGS_JSON",json!([{"tenant_id":merchant,"default_financial":"stripe","webhook_secret":"whsec_synthetic_signature_test"}]).to_string());
-    std::env::set_var("TENANT_NOTIFICATION_PLUGINS_JSON",json!([{"tenant_id":merchant,"plugin":"resend","token":std::env::var("RESEND_API_KEY")?,"from":std::env::var("BILLING_EMAIL_FROM")?,"allowed_test_recipients":[recipient]}]).to_string());
+    std::env::set_var("TENANT_NOTIFICATION_PLUGINS_JSON",json!([{"tenant_id":merchant,"plugin":"resend","token":secrets.get("RESEND_API_KEY").context("Missing test mail key")?,"from":secrets.get("BILLING_EMAIL_FROM").context("Missing test mail sender")?,"allowed_test_recipients":[recipient]}]).to_string());
     let engine = server::plugins::configuration::engine(state, &merchant)?;
     let adapter = server::plugins::BuiltinFinancial {
         transport: providers.clone(),
@@ -153,9 +145,9 @@ async fn scheduled_payment_receipt_and_decline_reminder() -> Result<()> {
         use hmac::{Hmac,Mac};
         use sha2::Sha256;
         use axum::{body::Body,http::Request};
-        std::env::set_var("BILLING_TICK_SECRET","sandbox-tick-secret-at-least-32-characters");
-        std::env::set_var("STRIPE_WEBHOOK_SECRET","whsec_synthetic_signature_test");
-        let router=server::billing::http::router(engine.clone())?;
+        let mut registry=server::finance::TenantRegistry::default();
+        registry.register((*engine.runtime).clone())?;
+        let router=server::billing::http::managed_router(engine.state.clone(),Arc::new(registry),Some(merchant.clone()))?;
         let denied=router.clone().oneshot(Request::post("/internal/billing/tick").body(Body::empty())?).await?;
         ensure!(denied.status()==404,"Removed scheduler endpoint still exists");
         let paid=evidence.iter().find(|r|r["status"]=="paid").unwrap();
@@ -210,16 +202,9 @@ async fn account_and_invoice_workflow_without_provider_effects() -> Result<()> {
     let name = format!("business_backend_test_{}", uuid::Uuid::new_v4().simple());
     let merchant = uuid::Uuid::new_v4().to_string();
     for (key, value) in [
-        ("BILLING_MERCHANT_ID", merchant.as_str()),
         ("BILLING_ENABLED", "true"),
-        ("BILLING_LIVE", "false"),
-        ("BILLING_MAIL_ENABLED", "false"),
         ("STRIPE_CONNECTIONS_JSON", "[]"),
         ("MERCURY_CONNECTIONS_JSON", "[]"),
-        (
-            "BILLING_TICK_SECRET",
-            "fixture-tick-secret-with-at-least-32-bytes",
-        ),
     ] {
         std::env::set_var(key, value);
     }

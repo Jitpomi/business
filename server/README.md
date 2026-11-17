@@ -313,7 +313,8 @@ statuses, revisions, timers, journals or provider references. Startup rejects an
 incomplete model; there is no runtime migration or legacy-policy fallback.
 
 The previous process timer, external billing tick route and
-`BILLING_WORKER_TENANTS_JSON` list are removed. A persisted `billing-cycle`
+`BILLING_WORKER_TENANTS_JSON` list are removed. The unused `scheduler_secret`
+field is no longer accepted in standalone tenant financial settings. A persisted `billing-cycle`
 workflow invokes the existing business engine. Provider webhooks use
 `/tenants/<UUID>/webhooks/<plugin ID>`; onboarding and recovery use that same tenant
 prefix. `ACCOUNT_TENANT_ID` optionally mounts root aliases for the account website.
@@ -419,7 +420,7 @@ See `PORTAL_RETIREMENT.md` for the shadow migration, preservation evidence and
 release checks. Do not run the new backend against the old development schema;
 startup rejects it and never performs an implicit migration.
 
-The portal now adapts billing reads/writes to protected canonical data queries.
+The account website sends billing reads/writes as protected canonical data queries.
 The approved sandbox accounts were migrated from `business_dev` without changing
 the source database. Imported unfinished schedules are paused, payment consent is
 cleared, and historical invoices are excluded from charging and notifications.

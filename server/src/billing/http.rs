@@ -16,24 +16,6 @@ struct Ingress {
     slots: Arc<tokio::sync::Semaphore>,
     account_slots: Arc<tokio::sync::Semaphore>,
 }
-fn configured(engine: Engine) -> Result<Ingress> {
-    Ok(Ingress {
-        engine,
-        slots: Arc::new(tokio::sync::Semaphore::new(1)),
-        account_slots: Arc::new(tokio::sync::Semaphore::new(4)),
-    })
-}
-fn routes(state: Ingress) -> Router {
-    Router::new()
-        .route("/webhooks/{plugin}", post(webhook))
-        .route("/onboarding", post(accept_invitation))
-        .route("/recovery", post(recover_account))
-        .layer(DefaultBodyLimit::max(64 * 1024))
-        .with_state(state)
-}
-pub fn router(engine: Engine) -> Result<Router> {
-    Ok(routes(configured(engine)?))
-}
 async fn webhook(
     State(state): State<Ingress>,
     Path(plugin_id): Path<String>,
@@ -163,10 +145,11 @@ impl ManagedIngress {
             .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
         let engine =
             Engine::new(self.state.clone(), &id, runtime).map_err(|_| StatusCode::NOT_FOUND)?;
-        let mut ingress = configured(engine).map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
-        ingress.slots = self.slots.clone();
-        ingress.account_slots = self.accounts.clone();
-        Ok(ingress)
+        Ok(Ingress {
+            engine,
+            slots: self.slots.clone(),
+            account_slots: self.accounts.clone(),
+        })
     }
 }
 pub fn managed_router(

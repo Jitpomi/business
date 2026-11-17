@@ -330,8 +330,16 @@ tx.query(format!(r#"insert $t isa tenant,has tenant_id "{tenant}",has name "Plug
         let invoice=a.read(format!("{} (merchant:$t,customer:$c) isa bill_account;(customer:$c,plan:$p) isa bill_plan_owner;(plan:$p,invoice:$i) isa bill_invoice_owner;fetch {{'id':$i.bill_key}};",a.prefix())).await?;
         ensure!(b.reconcile(invoice[0]["id"].as_str().unwrap()).await.is_err(),"Tenant crossed invoice boundary");
         std::env::set_var("BILLING_ENABLED","true");
-        let (_,http)=server::app::build_with_plugins(state.clone(),"plugin-test-signing-secret-with-at-least-32-bytes".into(),Arc::new(registry))?;
-        let router=server::app::router(http);
+        let registry=Arc::new(registry);
+        let (_,http)=server::app::build_with_plugins(state.clone(),"plugin-test-signing-secret-with-at-least-32-bytes".into(),registry.clone())?;
+        let router=server::app::router(http).merge(server::billing::http::managed_router(state.clone(),registry,Some(a.merchant.clone()))?);
+        // External ingress must retain plugin authentication on tenant and primary
+        // routes. A tenant header cannot turn an unsigned event into authority.
+        for (path,expected) in [("/webhooks/community-bank".to_owned(),400),(format!("/tenants/{}/webhooks/community-bank",a.merchant),400),("/webhooks/unknown".to_owned(),404),("/internal/billing/tick".to_owned(),404)] {
+            use tower::ServiceExt;
+            let response=router.clone().oneshot(axum::http::Request::post(path).header("x-tenant-id",&b.merchant).body(axum::body::Body::empty())?).await?;
+            ensure!(response.status().as_u16()==expected,"External ingress accepted unsigned or retired operation: {}",response.status());
+        }
         let (status,login)=portal_call(&router,&a.merchant,"","/authentication",Some(serde_json::json!({"strategy":"local","email":email,"password":"plugin-owner-test-password"}))).await?;
         ensure!(status==200,"Custom-plugin tenant login failed: {status}");
         let token=login["accessToken"].as_str().ok_or_else(||anyhow::anyhow!("Missing login token"))?;
