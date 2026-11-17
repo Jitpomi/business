@@ -42,10 +42,11 @@ requested constraints. No such workaround was made. Existing TypeDB transport
 pins remain unchanged; this change does not claim to retire them.
 
 No runtime database or checkpoint is migrated, reset or deleted by this change.
-Keep the security gate enabled and leave deployment blocked until all three
-remaining findings have a supported resolution. Authentication, native RBAC,
-provider uncertainty and independent-tenant billing tests are required for this
-partial fix; it must not be described as a completed four-dependency removal.
+Keep the security gate enabled. Samson accepted the existing maintenance
+findings for merging verified first-party fixes while upstream work continues;
+this does not turn the failing audit into a pass or authorize deployment.
+Authentication, native RBAC, provider uncertainty and independent-tenant billing
+tests remain required; this is not a completed four-dependency removal.
 
 ## Upstream submissions and first-party clock migration
 
@@ -92,10 +93,35 @@ The strict dependency-security check remains a required failing gate until the
 remaining first-party timestamp migrations and official upstream adoption are
 complete. Do not merge or deploy this as a completed dependency removal.
 
-## Separate migration follow-up
+## Merge scope and remaining ownership
 
-This draft is stacked on the tenant-onboarding review (#29). It restores the
-previously tested first-party clock migration without mixing it into that
-review. The original combined history remains at
-`preserve/business-29-before-split`. This is partial progress, not a completed
-dependency removal, and must remain draft while the strict audit fails.
+PR #29 merged tenant onboarding, the completed authentication-duration fix and
+payment safeguards. PR #30 brings the verified Business clock changes into main:
+trusted Unix seconds and native UTC literals use time 0.3.55, retaining UTC and
+six-digit precision. No TypeDB temporal prototype is adopted. Original commits
+and the full pre-split state at `preserve/business-29-before-split` are retained.
+
+### Awaiting TypeDB
+
+- Parser cleanup and maintainer review: https://github.com/typedb/typeql/pull/477.
+- Driver temporal compatibility and supported migration direction:
+  https://github.com/typedb/typedb-driver/issues/950.
+- Supported releases must remove the driver's Chrono/timezone paths and the
+  parser's Chrono path before normal dependency adoption can clear that graph.
+  Acceptance of a proposal is not the same as an available compatible release.
+
+### Still owned by JITPOMI
+
+- Legacy date parsing/formatting in Business remains on Chrono.
+- DogRS queue public/persisted timestamps and their Business adapters still use
+  Chrono; this is a first-party compatibility migration, not a TypeDB task.
+- Adopt compatible supported upstream releases when available, verify timestamp
+  and parser behavior, rerun the strict audit and payment/RBAC regressions.
+- Framework publication, development migration and deployment remain separate
+  actions. This merge performs none of them.
+
+The existing first-party fixes can ship to main independently of that future
+work. It would be inaccurate to say all remaining work belongs to TypeDB.
+The strict audit remains unchanged and reports chrono, chrono-tz and
+chrono-tz-build. Native TypeDB RBAC and payment uncertainty safeguards remain
+in force; a pending bank payment never counts as settled.
