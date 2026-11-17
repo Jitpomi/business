@@ -20,9 +20,6 @@ struct Settings {
     mercury_card_enabled: bool,
     #[serde(default)]
     mercury_ach_debit_enabled: bool,
-    // Accepted only in old private operator/test input. Scheduling no longer uses it.
-    #[serde(rename = "scheduler_secret")]
-    _retired_scheduler_secret: Option<String>,
     reminder_days: Option<i64>,
 }
 fn sandbox() -> bool {
