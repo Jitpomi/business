@@ -128,14 +128,25 @@ changes; changing the recipient requires a coordinated new capsule and a tested
 recovery identity, never silently rotating away the only usable key.
 
 The [native TypeDB online export](https://typedb.com/docs/maintenance-operation/database-export-import/) is transactionally consistent while source
-writes continue. Its schema/data are imported into an isolated generated database
-before inventory, records and relationship-role manifests are computed. The
+writes continue. The source cluster performs only the export. Its schema/data are
+imported into a generated database in a separate TypeDB 3.14.1 runner container,
+pinned by the official multi-platform image digest, before inventory, records and
+relationship-role manifests are computed. This keeps restore load away from the
+application cluster. The container publishes gRPC only on runner IPv4 loopback;
+its disposable default account receives no cloud credentials or runtime keys.
+`BUSINESS_RECOVERY_LOCAL_ADDR` is required and rejects remote addresses. The
 ciphertext store is immutable and is captured *after* the TypeDB export, ensuring
 all committed connection references are included. A second independent graph
-restore verifies the checkpoint. Temporary databases are removed only when this
-job created them and verification succeeded; failed targets remain for review.
+restore in that same isolated container verifies the checkpoint. Temporary databases are removed only when this
+job created them and verification succeeded. A failed run publishes no successful
+checkpoint receipt; runner diagnostics identify the failed stage.
 The job checks ciphertext reference completeness but cannot decrypt credentials
 without the separately held recovery identity. Operator drills test that stage.
+The runner container and its volumes are discarded after the job, including on
+failure; existing source databases, offsite artifacts and operator checkpoints
+are retained. No restore or failed-run replay is attempted on the application
+cluster. An operator using `database_backup export-online` must also start the
+explicit loopback verifier; the command has no source-cluster fallback.
 
 The offsite artifact is acknowledged to the monitor only after upload succeeds,
 with its SHA-256, checkpoint time and verified-graph result. Old receipts cannot

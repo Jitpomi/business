@@ -75,6 +75,11 @@ def checkpoint(destination):
         if line.strip():
             k,v=line.split('=',1);parsed[k]=shlex.split(v)[0]
     if not valid_database_configuration(parsed):raise ValueError('Explicit non-admin TLS development backup credentials required')
+    # Refuse a fallback to the application cluster. The local container has only
+    # its disposable default account, never cloud credentials or runtime keys.
+    local=os.environ['BUSINESS_RECOVERY_LOCAL_ADDR']
+    if not re.fullmatch(r'http://127\.0\.0\.1:[1-9][0-9]{0,4}',local) or int(local.rsplit(':',1)[1])>65535:
+        raise ValueError('Explicit loopback recovery container required')
     private(destination/'database.env',db_env.encode())
     env={k:v for k,v in os.environ.items() if not k.startswith(('TYPEDB_','BUSINESS_ENV_FILE'))};env['BUSINESS_ENV_FILE']=str(destination/'database.env')
     files=destination/'payload';files.mkdir(mode=0o700);cp=files/'checkpoint';cp.mkdir(mode=0o700)
@@ -90,7 +95,9 @@ def checkpoint(destination):
     # Exact source at this checkpoint, including locked dependencies and recovery tools.
     run(['git','archive','HEAD','-o',files/'business-source.tar'],cwd=ROOT)
     private(files/'RUNBOOK.md',(ROOT/'docs/operations-and-recovery.md').read_bytes())
-    verification=json.loads(run([binary/'recovery','rehearse',cp,parsed['TYPEDB_DB']],env=env))
+    recovery_env={k:v for k,v in os.environ.items() if k in {'PATH','HOME','TMPDIR','SSL_CERT_FILE','SSL_CERT_DIR'}}
+    recovery_env['BUSINESS_RECOVERY_LOCAL_ADDR']=local
+    verification=json.loads(run([binary/'recovery','rehearse-local',cp,parsed['TYPEDB_DB']],env=recovery_env))
     if verification.get('graph_verified') is not True:raise ValueError('Graph rehearsal did not pass')
     vault=sqlite3.connect(':memory:');vault.executescript((files/'secrets.sql').read_text());known={r[0] for r in vault.execute('SELECT id FROM secrets')}
     records=json.loads((cp/(parsed['TYPEDB_DB']+'.records.json')).read_text());references=0
@@ -100,7 +107,7 @@ def checkpoint(destination):
             if ref:
                 if ref.removeprefix('secret:') not in known:raise ValueError('Checkpoint references missing ciphertext')
                 references+=1
-    metadata={'version':1,'checkpoint_at':started,'source_database':parsed['TYPEDB_DB'],'source_commit':run(['git','rev-parse','HEAD'],cwd=ROOT).decode().strip(),'records':len(records),'ciphertext_rows':len(known),'connection_references':references,'graph_verified':True,'native_schema_verified':True,'credential_decryption':'Requires separately held recovery identity; verified in operator restore drills'}
+    metadata={'version':1,'checkpoint_at':started,'source_database':parsed['TYPEDB_DB'],'source_commit':run(['git','rev-parse','HEAD'],cwd=ROOT).decode().strip(),'records':len(records),'ciphertext_rows':len(known),'connection_references':references,'graph_verified':True,'native_schema_verified':True,'rehearsal_location':'isolated runner loopback container','credential_decryption':'Requires separately held recovery identity; verified in operator restore drills'}
     private(files/'checkpoint.json',json.dumps(metadata,indent=2).encode())
     bundle.pack(files,destination/'bundle.zip')
     recipient=os.environ['BUSINESS_BACKUP_RECIPIENT']
