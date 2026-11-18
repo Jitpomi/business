@@ -53,3 +53,18 @@ then recovered to HTTP 200 with all seven operational counters clear. Read-only
 inspection confirmed its existing settled payment, successful partial refund and
 original payment/refund receipt IDs were unchanged. This feature remains in its
 pull requests, pending a controlled development migration and deployment.
+
+## Sequential hosted verification
+
+The follow-up run passed on the hosted development TypeDB 3.14.1 cluster in
+542.33 seconds, using a generated isolated database and no simultaneous schema
+or restore test. It exercised the actual Worker, dog-auth, native policies and
+dog-queue, including JPY settlement, wrong-currency rejection, one partial refund,
+read-only recovery after a lost acknowledgement, independent consent, finite
+instalments, recurring donations and restart deduplication. The successful test
+removed only its generated fixture database. It did not migrate the deployed
+application database or enable real payments.
+
+The deployment target for the explicit v6-to-v7 cutover is
+`business_native_dev_v7`. Keep the source database and fresh encrypted checkpoint
+before switching the runtime and scheduled backup configuration.
