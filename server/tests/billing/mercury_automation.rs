@@ -244,7 +244,7 @@ async fn run(phase: &str) -> Result<()> {
     )?;
     let template: Arc<server::automation::engine::Engine> =
         app.get("automation.engine").context("Automation missing")?;
-    let router = server::app::router(transport);
+    let router = server::app::runtime_router(&app, transport).await?;
     let tenant_store = server::automation::store::Store::new(state.clone(), &tenant)?;
     let login=ok(&router,&tenant,"","/authentication",json!({"strategy":"local","email":"mercury-automation-owner@example.invalid","password":"mercury-automation-test-password"}),None).await?;
     let token = login["accessToken"]

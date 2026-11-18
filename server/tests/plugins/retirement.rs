@@ -7,6 +7,7 @@ async fn website_queries_retire_portal_end_to_end() -> Result<()> {
         "BILLING_ENABLED",
         "AUTOMATION_ENABLED",
         "AUTOMATION_MASTER_KEY_B64",
+        "ACCOUNT_TENANT_ID",
     ]);
     use server::{database, typedb::TypeDBState};
     dotenvy::from_path(std::env::var("BUSINESS_ENV_FILE")?)?;
@@ -49,7 +50,8 @@ async fn website_queries_retire_portal_end_to_end() -> Result<()> {
   let mut catalog=server::automation::connectors::Catalog::default();catalog.register(Arc::new(BankConnector{tenants:HashMap::from([(tenant.clone(),(bank.clone(),mail.clone()))])}))?;
   let(app,http)=server::app::build_with_connectors(state.clone(),"retirement-test-signing-secret-long-enough".into(),Arc::new(registry.clone()),catalog)?;
   let template:Arc<server::automation::engine::Engine>=app.get("automation.engine").unwrap();
-  let router=server::app::router(http).merge(server::billing::http::managed_router(state.clone(),Arc::new(registry),Some(tenant.clone()))?);
+  std::env::set_var("ACCOUNT_TENANT_ID",&tenant);
+  let router=server::app::runtime_router(&app,http).await?;
   let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await?;let base=format!("http://{}",listener.local_addr()?);
   let (stop_http, stopped_http) = tokio::sync::oneshot::channel();
   http_server = Some((stop_http, tokio::spawn(async move {

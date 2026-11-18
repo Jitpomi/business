@@ -99,7 +99,7 @@ pub fn router(template: Engine) -> Router {
     Router::new()
         .route("/automation/events/{tenant}/{trigger}", post(receive))
         .layer(DefaultBodyLimit::max(65536))
-        .route_layer(axum::middleware::from_fn(crate::admission::external_guard))
+        .route_layer(axum::middleware::from_fn(crate::hooks::external_guard))
         .with_state(Ingress {
             template,
             slots: Arc::new(tokio::sync::Semaphore::new(4)),

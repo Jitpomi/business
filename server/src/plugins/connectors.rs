@@ -1,5 +1,5 @@
 //! Provider adapters are installed capabilities, never workflow-engine dependencies.
-use super::{
+use crate::automation::{
     connectors::{Connector, Invocation},
     model::{ActionSpec, Effect},
 };
@@ -35,9 +35,10 @@ fn transport(kind: &str, ctx: &Invocation) -> Result<crate::plugins::builtin_tra
 }
 #[async_trait::async_trait]
 impl Connector for Builtin {
-    fn oauth(&self) -> Option<Arc<dyn super::oauth::Provider>> {
-        (self.0 == "stripe")
-            .then(|| Arc::new(super::builtin_oauth::Stripe) as Arc<dyn super::oauth::Provider>)
+    fn oauth(&self) -> Option<Arc<dyn crate::automation::oauth::Provider>> {
+        (self.0 == "stripe").then(|| {
+            Arc::new(super::stripe_oauth::Stripe) as Arc<dyn crate::automation::oauth::Provider>
+        })
     }
     fn connection_purpose(&self) -> (&'static str, &'static str) {
         match self.0 {
@@ -212,8 +213,8 @@ impl Connector for Builtin {
         let response = r
             .send()
             .await
-            .map_err(|_| super::verification::Failure::Unavailable)?;
-        super::verification::response(response.status())
+            .map_err(|_| crate::automation::verification::Failure::Unavailable)?;
+        crate::automation::verification::response(response.status())
     }
     fn financial(
         &self,
@@ -280,4 +281,12 @@ impl Connector for Builtin {
             json!({"id":i.external_id,"customer":i.customer,"amount_minor":i.amount_minor,"currency":i.currency,"state":i.state,"payment_url":i.payment_url}),
         )
     }
+}
+
+/// Install the same trusted provider packages for the server and import tools.
+pub fn register(catalog: &mut crate::automation::connectors::Catalog) -> Result<()> {
+    for kind in ["stripe", "mercury", "resend"] {
+        catalog.register(Arc::new(Builtin(kind)))?;
+    }
+    Ok(())
 }

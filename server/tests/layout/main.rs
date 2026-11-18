@@ -113,6 +113,39 @@ fn every_service_uses_the_common_dogrs_modules() -> Result<()> {
         }
         Ok(())
     }
+    // Every registered service must be a directory, so a flat file cannot silently
+    // evade the common-module check.
+    for entry in std::fs::read_dir(&root)? {
+        let path = entry?.path();
+        if path.is_file() {
+            ensure!(
+                matches!(
+                    path.file_name().and_then(|n| n.to_str()),
+                    Some("mod.rs" | "types.rs")
+                ),
+                "Flat service module: {}",
+                path.display()
+            );
+        } else if path.is_dir() {
+            let name = path.file_name().unwrap().to_str().unwrap();
+            ensure!(
+                path.join(format!("{name}_service.rs")).is_file(),
+                "Missing service implementation: {name}"
+            );
+        }
+    }
+    let src = root.parent().unwrap();
+    let lib = std::fs::read_to_string(src.join("lib.rs"))?;
+    for name in ["app", "hooks", "channels", "services"] {
+        ensure!(
+            src.join(format!("{name}.rs")).is_file() || src.join(name).join("mod.rs").is_file(),
+            "Missing application module: {name}"
+        );
+        ensure!(
+            regex::Regex::new(&format!(r"\bmod\s+{name}\s*;"))?.is_match(&lib),
+            "Undeclared application module: {name}"
+        );
+    }
     walk(&root)?;
     walk(&Path::new(env!("CARGO_MANIFEST_DIR")).join("src/plugins"))
 }
@@ -125,7 +158,7 @@ fn business_rules_do_not_import_vendor_protocols_or_credentials() -> Result<()> 
         rust_files(&root.join(dir), &mut files)?;
     }
     files.push(root.join("src/services/types.rs"));
-    files.push(root.join("src/services/financial.rs"));
+    rust_files(&root.join("src/services/financial"), &mut files)?;
     for file in files {
         let source = std::fs::read_to_string(&file)?;
         for forbidden in [
@@ -144,6 +177,26 @@ fn business_rules_do_not_import_vendor_protocols_or_credentials() -> Result<()> 
             ensure!(
                 !source.contains(forbidden),
                 "Vendor dependency {forbidden} in {}",
+                file.display()
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn generic_automation_does_not_import_builtin_provider_packages() -> Result<()> {
+    let mut files = Vec::new();
+    rust_files(
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("src/automation"),
+        &mut files,
+    )?;
+    for file in files {
+        let source = std::fs::read_to_string(&file)?;
+        for forbidden in ["crate::plugins::", "STRIPE_", "MERCURY_", "RESEND_"] {
+            ensure!(
+                !source.contains(forbidden),
+                "Provider package dependency {forbidden} in {}",
                 file.display()
             );
         }

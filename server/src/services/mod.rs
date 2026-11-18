@@ -35,11 +35,7 @@ pub fn configure(
         .ok_or_else(|| anyhow::anyhow!("Authentication service missing"))?;
     data::data_shared::register_hooks(builder, authentication.clone())?;
     if std::env::var("BILLING_ENABLED").as_deref() == Ok("true") {
-        builder.register_service(
-            "financial",
-            Arc::new(financial::FinancialService::new(state, registry)),
-        );
-        financial::register_hooks(builder, authentication.clone());
+        financial::financial_shared::register(builder, state, registry, authentication.clone());
     }
     if std::env::var("AUTOMATION_ENABLED").as_deref() == Ok("true") {
         let template = builder

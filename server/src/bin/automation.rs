@@ -73,9 +73,7 @@ async fn main() -> Result<()> {
     let tenant = std::env::var("AUTOMATION_IMPORT_TENANT")?;
     let owner = std::env::var("AUTOMATION_IMPORT_OWNER")?;
     let mut catalog = server::automation::connectors::Catalog::default();
-    for kind in ["stripe", "mercury", "resend"] {
-        catalog.register(Arc::new(server::automation::builtin::Builtin(kind)))?;
-    }
+    server::plugins::connectors::register(&mut catalog)?;
     let vault = server::automation::vault::Vault::from_env()?;
     let registry = Arc::new(
         server::finance::TenantRegistry::default().with_source(Arc::new(
@@ -95,7 +93,7 @@ async fn main() -> Result<()> {
         catalog: Arc::new(catalog),
         vault,
     };
-    server::automation::migration::import(&engine, &owner).await?;
+    server::plugins::migration::import(&engine, &owner).await?;
     preserve(
         &before,
         &server::database::snapshot::records(&state.driver, target).await?,

@@ -179,7 +179,7 @@ pub fn managed_router(
             .with_state((state, primary));
         routes = routes.merge(alias);
     }
-    Ok(routes.route_layer(axum::middleware::from_fn(crate::admission::external_guard)))
+    Ok(routes.route_layer(axum::middleware::from_fn(crate::hooks::external_guard)))
 }
 async fn managed_webhook(
     State(state): State<ManagedIngress>,

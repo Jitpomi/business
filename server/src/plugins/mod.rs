@@ -15,3 +15,10 @@ pub fn routes(
 ) -> axum::Router {
     crate::plugins::mercury::router(http.clone()).merge(crate::plugins::stripe::router(http))
 }
+
+// Provider implementations of the generic automation connector/OAuth contracts.
+pub mod connectors;
+mod stripe_oauth;
+
+// Explicit import of older provider configuration; never selected at startup.
+pub mod migration;
