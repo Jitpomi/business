@@ -32,7 +32,7 @@ async fn operational_readiness_and_full_graph_recovery() -> Result<()> {
   std::env::set_var("BUSINESS_WRITERS_STOPPED","true");
   server::operations::refresh_control_policy(&driver,&source,&dir.path().join(format!("{source}.graph.json"))).await?;
   std::env::remove_var("BUSINESS_WRITERS_STOPPED");
-  let tx=driver.transaction(&source,typedb_driver::TransactionType::Write).await?;tx.query(format!("insert $r isa resource,has resource_id '{}',has name 'Written after checkpoint',has status 'active';",uuid::Uuid::new_v4())).await?;tx.commit().await?;
+  let tx=driver.transaction(&source,typedb_driver::TransactionType::Write).await?;tx.query(format!("match $t isa tenant,has tenant_id '{t}';insert $r isa resource,has resource_id '{}',has name 'Written after checkpoint',has status 'active';(tenant:$t,resource:$r) isa resource_ownership;",uuid::Uuid::new_v4())).await?;tx.commit().await?;
   let newer=server::database::snapshot::graph(&driver,&source,&[]).await?;ensure!(newer!=original);
   let proof=server::recovery::rehearse(&driver,online.path(),&source).await?;ensure!(proof["graph_verified"]==true&&proof["generated_shadow_removed"]==true);ensure!(server::database::snapshot::graph(&driver,&source,&[]).await?==newer,"Rehearsal rolled back source writes");
   // The fence runs before transport dispatch. A forged custom write cannot reach a service.

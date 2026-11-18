@@ -79,7 +79,8 @@ export default {
    const text=await request.text();if(text.length>4096)return response({},413);
    let b;try{b=JSON.parse(text);}catch{return response({},400);}
    if(!Number.isSafeInteger(b.checkpoint_at)||b.checkpoint_at>now()+60||b.checkpoint_at<now()-86400||!/^[a-f0-9]{64}$/.test(b.sha256)||!/^https:\/\/github\.com\/Jitpomi\/business\/actions\/runs\/[0-9]+\/artifacts\/[0-9]+$/.test(b.artifact_url)||b.graph_verified!==true)return response({},400);
-   return response(await locked(env,async()=>{const old=await state(env,'backup');if(old.checkpoint_at&&b.checkpoint_at<old.checkpoint_at)return {rejected:'older_checkpoint'};await env.MONITOR.prepare('INSERT INTO monitors(id,state) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET state=excluded.state').bind('backup',JSON.stringify({...b,checked_at:now()})).run();return {accepted:true};}));
+   const accepted=await env.MONITOR.prepare("INSERT INTO monitors(id,state) VALUES('backup',?) ON CONFLICT(id) DO UPDATE SET state=excluded.state WHERE CAST(json_extract(monitors.state,'$.checkpoint_at') AS INTEGER)<=? RETURNING state").bind(JSON.stringify({...b,checked_at:now()}),b.checkpoint_at).first();
+   return response(accepted?{accepted:true}:{rejected:'older_checkpoint'});
   }
   if(path==='/status'&&request.method==='GET'){
    if(!auth(request,env.MONITOR_STATUS_TOKEN))return response({},401);
