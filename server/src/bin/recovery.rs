@@ -9,6 +9,14 @@ async fn main() -> Result<()> {
             .map(String::as_str)
             .ok_or_else(|| anyhow::anyhow!("Missing explicit recovery argument"))
     };
+    // A downloaded checkpoint is rehearsed away from the source cluster. This
+    // path never loads source credentials or starts application workers.
+    if a(1)? == "rehearse-local" {
+        let driver = server::recovery::local_driver().await?;
+        let report = server::recovery::rehearse(&driver, Path::new(a(2)?), a(3)?).await?;
+        println!("{report}");
+        return Ok(());
+    }
     match a(1)? {
         "encrypt" => {
             server::recovery::encrypt(Path::new(a(2)?), Path::new(a(3)?), Path::new(a(4)?))

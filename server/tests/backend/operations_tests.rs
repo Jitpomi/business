@@ -28,7 +28,7 @@ async fn operational_readiness_and_full_graph_recovery() -> Result<()> {
   ensure!(server::recovery::restore(&driver,dir.path(),&source,&source).await.is_err());ensure!(server::recovery::restore(&driver,dir.path(),&source,"business_dev").await.is_err());
   server::recovery::restore(&driver,dir.path(),&source,&target).await?;ensure!(server::database::snapshot::graph(&driver,&source,&[]).await?==original);ensure!(server::database::snapshot::graph(&driver,&target,&[]).await?==original);ensure!(server::recovery::restore(&driver,dir.path(),&source,&target).await.is_err());
   // The online checkpoint is manifested from its own transactionally exported graph.
-  let online=tempfile::tempdir()?;server::database::snapshot::online_checkpoint(&driver,&source,online.path()).await?;
+  let online=tempfile::tempdir()?;server::database::snapshot::online_checkpoint(&driver,&driver,&source,online.path()).await?;
   std::env::set_var("BUSINESS_WRITERS_STOPPED","true");
   server::operations::refresh_control_policy(&driver,&source,&dir.path().join(format!("{source}.graph.json"))).await?;
   std::env::remove_var("BUSINESS_WRITERS_STOPPED");

@@ -30,3 +30,19 @@ fn encrypted_recovery_requires_original_key_and_rejects_tampering_without_output
     assert!(!bad.exists());
     Ok(())
 }
+#[test]
+fn isolated_rehearsal_never_accepts_remote_or_ambiguous_endpoints() {
+    assert!(super::validate_local_address("http://127.0.0.1:1729").is_ok());
+    for address in [
+        "https://cluster.example:1729",
+        "http://example.com:1729",
+        "http://127.0.0.1.example.com:1729",
+        "http://127.0.0.1:1729@evil.example",
+        "http://127.0.0.1:1729/path",
+        "http://127.0.0.1:0",
+        "http://127.0.0.1:65536",
+        "http://127.0.0.1:+1729",
+    ] {
+        assert!(super::validate_local_address(address).is_err(), "{address}");
+    }
+}

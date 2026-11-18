@@ -81,7 +81,8 @@ async fn main() -> Result<()> {
         return Ok(());
     }
     if command == "export-online" {
-        server::database::snapshot::online_checkpoint(&driver, name, directory).await?;
+        let verifier = server::recovery::local_driver().await?;
+        server::database::snapshot::online_checkpoint(&driver, &verifier, name, directory).await?;
         println!("Transactional online checkpoint exported and independently manifested");
     } else if command == "export" {
         server::database::snapshot::checkpoint(&driver, name, directory).await?;

@@ -32,6 +32,15 @@ jobs:
         run: cargo build --locked --manifest-path server/Cargo.toml --bin database_backup --bin recovery
         env:
           CARGO_INCREMENTAL: '0'
+      - name: Start isolated restore verification server
+        run: |
+          docker run --detach --name business-backup-rehearsal --memory=4g --cpus=2 --publish 127.0.0.1:1729:1729 typedb/typedb@sha256:d39d4f29eb571ee856cb221e8175b76dcb96dfa39939ebde5360cffa0e5bb680
+          for attempt in $(seq 1 60); do
+            if docker logs business-backup-rehearsal 2>&1 | grep -q '^Ready!'; then exit 0; fi
+            sleep 1
+          done
+          docker logs business-backup-rehearsal
+          exit 1
       - name: Export, rehearse and encrypt
         run: |
           umask 077
@@ -42,6 +51,7 @@ jobs:
           BUSINESS_BACKUP_MONITOR_TOKEN: ${{ secrets.BUSINESS_BACKUP_MONITOR_TOKEN }}
           BUSINESS_BACKUP_CONFIG_AGE: ${{ secrets.BUSINESS_BACKUP_CONFIG_AGE }}
           BUSINESS_BACKUP_RECIPIENT: ${{ vars.BUSINESS_BACKUP_RECIPIENT }}
+          BUSINESS_RECOVERY_LOCAL_ADDR: http://127.0.0.1:1729
       - name: Store only recipient-encrypted backup
         id: archive
         uses: actions/upload-artifact@v4
@@ -70,3 +80,6 @@ jobs:
       - name: Remove runner plaintext
         if: always()
         run: rm -rf -- "$RUNNER_TEMP/business-checkpoint"
+      - name: Stop isolated restore verification server
+        if: always()
+        run: docker rm --force --volumes business-backup-rehearsal

@@ -212,6 +212,25 @@ pub async fn verify_vault(
         json!({"ciphertext_rows":total,"connection_credentials_verified":verified,"wrong_key_rejected":true,"wrong_tenant_rejected":true,"source_secret_store_contacted":false}),
     )
 }
+/// Disposable runner container only. Source credentials are never sent here,
+/// and plaintext transport cannot be selected for a remote recovery target.
+pub async fn local_driver() -> Result<typedb_driver::TypeDBDriver> {
+    let address = std::env::var("BUSINESS_RECOVERY_LOCAL_ADDR")?;
+    validate_local_address(&address)?;
+    dog_typedb::TypeDBDriverFactory::connect(&address, "admin", "password", false).await
+}
+fn validate_local_address(address: &str) -> Result<()> {
+    let endpoint = address
+        .strip_prefix("http://127.0.0.1:")
+        .ok_or_else(|| anyhow::anyhow!("Local rehearsal requires explicit IPv4 loopback"))?;
+    let port: u16 = endpoint.parse()?;
+    ensure!(
+        port > 0 && endpoint.bytes().all(|c| c.is_ascii_digit()),
+        "Local rehearsal requires a valid loopback port"
+    );
+    Ok(())
+}
+
 #[cfg(test)]
 #[path = "../tests/unit/recovery.rs"]
 mod tests;

@@ -252,6 +252,7 @@ pub async fn checkpoint(
 /// Online exports are transactional at the server. Build manifests from an isolated import of
 /// that exact export, never from separately timed source reads while writers are active.
 pub async fn online_checkpoint(
+    source_driver: &TypeDBDriver,
     driver: &TypeDBDriver,
     name: &str,
     directory: &std::path::Path,
@@ -270,7 +271,7 @@ pub async fn online_checkpoint(
     }
     let schema = directory.join(format!("{name}.tql"));
     let data = directory.join(format!("{name}.typedb"));
-    driver
+    source_driver
         .databases()
         .get(name)
         .await?
