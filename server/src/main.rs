@@ -16,7 +16,12 @@ async fn main() -> Result<()> {
     let router = server::app::runtime_router(&app, http).await?;
     let automation: Option<std::sync::Arc<server::automation::engine::Engine>> =
         app.get("automation.engine");
-    let worker = automation.map(|template| server::background::spawn_all((*template).clone()));
+    let worker = if server::operations::recovery_mode()? {
+        tracing::warn!("Recovery validation: background execution and HTTP writes disabled");
+        None
+    } else {
+        automation.map(|template| server::background::spawn_all((*template).clone()))
+    };
     tracing::info!("Business HTTP services and configured workers started");
     let served = axum::serve(listener, router)
         .with_graceful_shutdown(async {

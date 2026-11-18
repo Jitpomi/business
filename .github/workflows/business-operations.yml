@@ -1,0 +1,33 @@
+name: Business monitor watchdog
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+    inputs:
+      drill:
+        description: Send a clearly labelled alert delivery drill
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: business-monitor-watchdog
+  cancel-in-progress: false
+jobs:
+  heartbeat:
+    if: vars.BUSINESS_MONITOR_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node deploy/automation-wake/watchdog.mjs
+        env:
+          MONITOR_URL: ${{ vars.BUSINESS_MONITOR_URL }}
+          MONITOR_STATUS_TOKEN: ${{ secrets.BUSINESS_MONITOR_STATUS_TOKEN }}
+          ALERT_TOKEN: ${{ secrets.BUSINESS_OPERATIONS_ALERT_TOKEN }}
+          ALERT_TO: ${{ vars.BUSINESS_OPERATIONS_ALERT_TO }}
+          ALERT_FROM: ${{ vars.BUSINESS_OPERATIONS_ALERT_FROM }}
+          WATCHDOG_DRILL: ${{ inputs.drill && 'true' || 'false' }}

@@ -22,3 +22,5 @@ fn seed_accounts(database: &str) -> anyhow::Result<()> {
     }
     Ok(())
 }
+
+mod operations_tests;
