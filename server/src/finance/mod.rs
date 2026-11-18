@@ -5,12 +5,14 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{collections::HashMap, sync::Arc};
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, Serialize)]
 pub struct Capabilities {
     pub idempotent_customers: bool,
     pub automatic_collection: bool,
     pub saved_methods: bool,
     pub payment_history: bool,
+    pub hosted_checkout: bool,
+    pub refunds: bool,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -67,9 +69,48 @@ pub struct SavedMethod {
     pub exp_month: Option<u64>,
     pub exp_year: Option<u64>,
 }
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RefundState {
+    Pending,
+    Succeeded,
+    Failed,
+}
+impl RefundState {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Succeeded => "succeeded",
+            Self::Failed => "failed",
+        }
+    }
+}
+/// The plugin proved that submission never happened. Timeouts and unknown acknowledgements
+/// must not use this error; they remain reserved until read-only reconciliation succeeds.
+#[derive(Debug)]
+pub struct RefundNotSubmitted;
+impl std::fmt::Display for RefundNotSubmitted {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "The provider did not submit this refund")
+    }
+}
+impl std::error::Error for RefundNotSubmitted {}
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct RefundObservation {
+    pub external_id: String,
+    pub request_id: String,
+    pub invoice_id: String,
+    pub customer: String,
+    pub amount_minor: i64,
+    pub currency: String,
+    pub state: RefundState,
+}
 #[async_trait]
 pub trait FinancialPlugin: Send + Sync {
     fn capabilities(&self) -> Capabilities;
+    fn brand(&self) -> Option<&'static str> {
+        None
+    }
     fn ready(&self) -> Result<()>;
     async fn webhook(
         &self,
@@ -116,6 +157,28 @@ pub trait FinancialPlugin: Send + Sync {
     }
     async fn detach_method(&self, _customer: &str, _method: &str, _key: &str) -> Result<()> {
         bail!("Saved methods unsupported")
+    }
+    async fn refund(
+        &self,
+        _invoice: &str,
+        _request_id: &str,
+        _amount: i64,
+    ) -> Result<RefundObservation> {
+        Err(
+            dog_core::DogError::bad_request("Refunds are unsupported by this financial plugin")
+                .into_anyhow(),
+        )
+    }
+    /// Read-only recovery by immutable request reference. Absence is never permission to replay.
+    async fn find_refund(
+        &self,
+        _invoice: &str,
+        _request_id: &str,
+    ) -> Result<Option<RefundObservation>> {
+        Err(dog_core::DogError::bad_request(
+            "Refund reconciliation is unsupported by this financial plugin",
+        )
+        .into_anyhow())
     }
     async fn history(&self, _external: &str) -> Result<Value> {
         bail!("Payment history unsupported")
@@ -164,6 +227,11 @@ impl TenantRuntime {
         );
         self.financial.insert(id.into(), plugin);
         Ok(())
+    }
+    pub fn checkout_plugins(&self) -> Vec<serde_json::Value> {
+        let mut plugins: Vec<_> = self.financial.iter().map(|(id,p)| serde_json::json!({"id":id,"capabilities":p.capabilities(),"brand":p.brand(),"sandbox":self.sandbox})).collect();
+        plugins.sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));
+        plugins
     }
     pub fn financial(&self, id: &str) -> Result<Arc<dyn FinancialPlugin>> {
         self.financial.get(id).cloned().ok_or_else(|| {

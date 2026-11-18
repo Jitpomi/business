@@ -51,7 +51,14 @@ impl DogService<Value, BusinessParams> for FinancialService {
     ) -> Result<Value> {
         let actor = actor(ctx, &params)?;
         let action = super::financial_schema::action(&data)?;
+        if action == "checkout_configuration" {
+            let e = self.access.owner_engine(ctx, &actor).await?;
+            return Ok(json!({"plugins":e.attest_checkout_plugins().await?}));
+        }
         let e = self.access.engine_for(ctx, &actor, &data).await?;
+        if action == "checkout_options" {
+            return Ok(json!({"plugins":e.attest_checkout_plugins().await?}));
+        }
         if action == "history" {
             let id = crate::billing::billing_schema::id(field(&data, "invoice_id")?)?;
             let rows=e.read(format!("{} fetch {{'customer':$c.bill_key,'status':$i.bill_status,'amount':$i.bill_amount,'provider':$i.bill_provider,'updated':$i.bill_updated}};",e.invoice_match(&id)?)).await?;
@@ -160,12 +167,23 @@ impl DogService<Value, BusinessParams> for FinancialService {
                     DogError::bad_request("Save a payment method first").into_anyhow()
                 );
                 let external = e.ensure_customer(&customer, &plugin_id).await?;
+                let mut return_url = reqwest::Url::parse(if data["checkout"] == true {
+                    "https://jitpomi.com/checkout/"
+                } else {
+                    "https://jitpomi.com/account/"
+                })?;
+                if data["checkout"] == true {
+                    return_url
+                        .query_pairs_mut()
+                        .append_pair("merchant", &e.merchant)
+                        .append_pair("plugin", &plugin_id);
+                }
                 let url = plugin
                     .setup_method(
                         &external,
                         &id,
                         data["bank_account"] == true,
-                        "https://jitpomi.com/account/",
+                        return_url.as_str(),
                         &format!("save-method-{}", uuid::Uuid::new_v4()),
                     )
                     .await?;

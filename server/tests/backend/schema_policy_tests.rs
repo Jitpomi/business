@@ -96,10 +96,7 @@ async fn schema_policy_real_http_migration() -> Result<()> {
     eprintln!("Disposable schema-policy database: {database}");
     let outcome = std::panic::AssertUnwindSafe(async {
         let tx=driver.transaction(&database,TransactionType::Schema).await?;
-        tx.query(SCHEMA).await.context("base schema")?;
-        tx.query(FUNCTIONS).await.context("domain functions")?;
-        tx.query(BILLING).await.context("native billing model")?;
-        tx.query(SCHEMA_POLICY).await.context("schema policy batch")?;
+        tx.query(import_schema()).await.context("canonical native schema")?;
         tx.commit().await?;
         let state=Arc::new(server::typedb::TypeDBState{driver:driver.clone(),database:database.clone()});
         let trusted=dog_typedb::TypeDBAdapter::new(state.clone());

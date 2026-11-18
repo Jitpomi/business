@@ -170,3 +170,50 @@ selected instead. The existing development/source guards still apply. It
 restores only into new UUID databases, compares records and relationship roles,
 verifies additive policy backfill twice, and makes no provider calls. It never
 changes the source database or its immutable backup.
+
+## Commerce foundation
+
+`BUSINESS_ENV_FILE=/private/dev.env cargo test --locked --test backend native_commerce_pricing_isolation_and_immutable_orders -- --ignored --nocapture --test-threads=1`
+provisions a new UUID database and exercises the real scoped `/data` adapter.
+It verifies catalogue ownership, immutable pricing and accepted order lines,
+bounded donations, recurring terms, merchant-approved instalments/deposits,
+integer rounding, discounts/shipping/tax, company isolation and revoked membership.
+It makes no payment or mail calls and does not migrate the existing development
+database. See `../docs/commerce-and-checkout.md` for the implementation boundary. This pricing test alone is not checkout certification.
+
+
+## Shared checkout acceptance
+
+`checkout_gateway_queue_payment_and_refund_recovery` in the plugins suite runs the
+actual website Worker against a generated native database and tenant-owned bank/
+notification connector. Set `BUSINESS_WEBSITE_DIR` to the website checkout and
+`BUSINESS_ENV_FILE` to explicit development credentials. It covers quote versus
+acceptance, scoped access, dog-queue invoices, processing versus settlement,
+refund lost-acknowledgement recovery, independent order grants, finite instalment
+rounding, recurring donations, an unapproved subscription and worker restart.
+It counts provider submissions and notification sends, not only deduplicated rows.
+Future clock tests select obligations through native functions; they never invent
+provider settlement for a real bank or change a real payment's status.
+
+`checkout_identity_enrolment_and_native_tenant_isolation` in authentication verifies
+signed local HTTPS IdP proofs, verified contact, independent identities sharing an
+email, private shops, buyer-only membership and revoked access.
+
+`checkout_checkpoint_preserves_full_graph_and_existing_approvals` in backend takes
+explicit `BUSINESS_CHECKOUT_CHECKPOINT` and `BUSINESS_CHECKOUT_SOURCE` inputs. It
+restores only new UUID shadows and compares every original logical object,
+attribute, relation role and existing payment approval. No providers or source
+writes run. The CLI `migrate_checkout --rehearse SOURCE DIRECTORY` provides the
+same preservation checks for hosted development before a quiesced `--apply`.
+
+Stripe's managed suite adds `stripe_managed_checkout_refund`, after create and pay,
+to prove a real TEST partial refund and one receipt through tenant plugins and
+dog-queue. Keep new acceptance roots separate from old journals. Native consent
+security still tests seller/foreign scope, forged methods/revisions/timestamps,
+concurrent identical request IDs, revocation and unapproved future plans. Different
+explicit request IDs may now approve different orders at the same revision.
+
+All real database tests remain explicitly ignored by default. Local runs require
+`BUSINESS_TEST_LOCAL_ONLY=true` and an explicit loopback test environment; this
+flag cannot disable TLS for any remote address. Hosted acceptance uses verified
+TLS. A local pass does not establish hosted deployment health or bank settlement.

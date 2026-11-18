@@ -139,8 +139,9 @@ impl Engine {
     /// At most ten due occurrences per invocation; each sequence advances atomically
     /// with its invoice. A conflict aborts before any provider request.
     pub async fn enqueue_due(&self, now: i64) -> Result<usize> {
+        let at = crate::clock::native_utc();
         let rows=self.read(format!(r#"{} (merchant:$t,customer:$c) isa bill_account;(customer:$c,plan:$p) isa bill_plan_owner;
-   $p has bill_status "active",has bill_next $next;$next <= {now};
+   $p has bill_status "active",has bill_next $next;$next <= {now};let $live=cx_plan_live($t,$p,{at});$live==true;
    let $following,$status,$unit,$every=bill_next_occurrence($p);select $c,$p,$next,$following,$status,$unit,$every;distinct;sort $next;limit 10;
    fetch {{"plan_id":$p.bill_key,"anchor":$p.bill_anchor,"sequence":$p.bill_sequence,"following":$following,"status":$status,"unit":$unit,"every":$every,"next":$next}};"#,self.prefix())).await?;
         let mut count = 0;
@@ -160,10 +161,12 @@ impl Engine {
             let next = period
                 .occurrence(anchor, u32::try_from(following)?)?
                 .unwrap_or(0);
+            let at = crate::clock::native_utc();
             let plan = schema::id(string(&row, "plan_id")?)?;
             let invoice = uuid::Uuid::new_v4();
             self.write(format!(r#"{} (merchant:$t,customer:$c) isa bill_account;(customer:$c,plan:$p) isa bill_plan_owner;
-    $p has bill_key "{plan}",has bill_status "active",has bill_sequence {sequence},has bill_anchor {anchor},has bill_next $issued,has bill_due_days $days,has bill_amount $amount,has name $name;
+    $p has bill_key "{plan}",has bill_status "active",has bill_sequence {sequence},has bill_anchor {anchor},has bill_next $issued,has bill_due_days $days,has name $name;
+    let $live=cx_plan_live($t,$p,{at});$live==true;let $amount=cx_plan_due($p);
     $issued <= {now};let $due=$issued+($days*86400);let $following,$next_status,$unit,$every=bill_next_occurrence($p);$following=={following};$next_status=="{status}";$unit=={unit};$every=={every};
     select $t,$p,$name,$amount,$issued,$due,$following;distinct;
     update $p has bill_sequence == $following,has bill_next {next},has bill_status "{status}";
@@ -184,23 +187,24 @@ impl Engine {
         let now = crate::clock::unix_seconds();
         // Read customer settings at claim time. Revision validation below rejects a
         // preference or consent change racing the claim.
-        let rows=self.read(format!(r#"{} fetch {{{CUSTOMER_DATA},"invoice_id":$i.bill_key,"description":$i.name,"amount":$i.bill_amount,"issued":$i.bill_anchor,"due":$i.bill_next,"mode":bill_plan_payment_choice($c,$p)}};"#,self.invoice_match(id)?)).await?;
+        let rows=self.read(format!(r#"{} fetch {{{CUSTOMER_DATA},"invoice_id":$i.bill_key,"description":$i.name,"amount":$i.bill_amount,"issued":$i.bill_anchor,"due":$i.bill_next,"mode":bill_plan_payment_choice($c,$p),"commerce":cx_is_checkout($p),"checkout_plugin":cx_plan_plugin($p,$c,bill_plan_payment_choice($c,$p))}};"#,self.invoice_match(id)?)).await?;
         ensure!(rows.len() == 1, "Invoice missing");
         let row = &rows[0];
+        ensure!(
+            row["commerce"] != true || self.runtime.sandbox,
+            dog_core::DogError::forbidden("Real checkout payments are disabled").into_anyhow()
+        );
         // The native model is the sole authority; Rust only decodes its decision.
         let mode: Mode = serde_json::from_value(row["mode"].clone())?;
-        let plugin_id = if mode == Mode::Automatic {
-            self.method_plugin(row)?
-        } else {
-            string(row, "manual_provider")?.to_owned()
-        };
+        let plugin_id = string(row, "checkout_plugin")?.to_owned();
         let plugin = self.runtime.financial(&plugin_id)?;
         plugin.ready()?;
         ensure!(
             mode != Mode::Automatic || plugin.capabilities().automatic_collection,
             "Selected plugin cannot collect automatically"
         );
-        self.write(format!(r#"{} let $allowed=bill_can_issue($c,$p,$i,{},"{}");$allowed==true;select $t,$i;distinct;update $i has bill_status "issuing",has bill_provider {},has bill_choice "{}",has bill_updated {now},has bill_revision {};fetch {{"id":$i.bill_key}};"#,self.invoice_match(id)?,schema::quoted(string(row,"revision")?),schema::word(mode),schema::quoted(&plugin_id),schema::word(mode),schema::quoted(string(row,"revision")?))).await?;
+        let at = crate::clock::native_utc();
+        self.write(format!(r#"{} let $allowed=bill_can_issue($c,$p,$i,{},"{}");$allowed==true;let $live=cx_plan_live($t,$p,{at});$live==true;select $t,$i;distinct;update $i has bill_status "issuing",has bill_provider {},has bill_choice "{}",has bill_updated {now},has bill_revision {};fetch {{"id":$i.bill_key}};"#,self.invoice_match(id)?,schema::quoted(string(row,"revision")?),schema::word(mode),schema::quoted(&plugin_id),schema::word(mode),schema::quoted(string(row,"revision")?))).await?;
         // Once claimed, an ambiguous failure is attention-required, never a fresh charge retry.
         let result=async{
    let customer=self.ensure_customer(row,&plugin_id).await?;
@@ -284,12 +288,17 @@ impl Engine {
     /// One off-session attempt per invoice. A failed or uncertain attempt is
     /// reconciled and the customer receives a payment link; it is never recharged.
     pub async fn collect_due(&self, id: &str, now: i64) -> Result<()> {
-        let rows=self.read(format!(r#"{} let $allowed=bill_can_collect($c,$p,$i,{now});$allowed==true;fetch {{{CUSTOMER_DATA},"external":$i.bill_external_id,"plugin":$i.bill_provider}};"#,self.invoice_match(id)?)).await?;
+        let at = crate::clock::native_utc();
+        let rows=self.read(format!(r#"{} let $allowed=cx_collect_allowed($t,$c,$p,$i,{at},{now});$allowed==true;fetch {{{CUSTOMER_DATA},"external":$i.bill_external_id,"plugin":$i.bill_provider,"commerce":cx_is_checkout($p)}};"#,self.invoice_match(id)?)).await?;
         if rows.is_empty() {
             return Ok(());
         }
         ensure!(rows.len() == 1, "Ambiguous invoice");
         let row = &rows[0];
+        ensure!(
+            row["commerce"] != true || self.runtime.sandbox,
+            dog_core::DogError::forbidden("Real checkout payments are disabled").into_anyhow()
+        );
         let selected = self.runtime.financial(string(row, "plugin")?)?;
         ensure!(
             selected.capabilities().automatic_collection,
@@ -298,7 +307,7 @@ impl Engine {
         selected.ready()?;
         let consent = string(row, "revision")?;
         let attempted = format!("attempted:{consent}");
-        self.write(format!(r#"{} $i has bill_revision {};$c has bill_revision {};let $approved=bill_can_collect($c,$p,$i,{now});$approved==true;select $t,$i;distinct;update $i has bill_revision {},has bill_updated {now};fetch {{"id":$i.bill_key}};"#,self.invoice_match(id)?,schema::quoted(consent),schema::quoted(consent),schema::quoted(&attempted))).await?;
+        self.write(format!(r#"{} $i has bill_revision {};$c has bill_revision {};let $approved=cx_collect_allowed($t,$c,$p,$i,{at},{now});$approved==true;select $t,$i;distinct;update $i has bill_revision {},has bill_updated {now};fetch {{"id":$i.bill_key}};"#,self.invoice_match(id)?,schema::quoted(consent),schema::quoted(consent),schema::quoted(&attempted))).await?;
         let _result = selected
             .collect(string(row, "external")?, id, string(row, "payment_method")?)
             .await;
@@ -314,6 +323,9 @@ impl Engine {
         Ok(())
     }
     pub async fn tick(&self) -> Result<Value> {
+        self.refresh_commerce_plugins().await?;
+        let activated = self.activate_commerce_orders().await?;
+        let refunds = self.process_refunds().await?;
         let scheduled = self.enqueue_due(crate::clock::unix_seconds()).await?;
         let rows=self.read(format!(r#"{} (merchant:$t,customer:$c) isa bill_account;(customer:$c,plan:$p) isa bill_plan_owner;(plan:$p,invoice:$i) isa bill_invoice_owner;not {{(invoice:$i,notice:$archive) isa bill_notice_owner;$archive has bill_status "imported-history";}};$i has bill_status "queued",has bill_updated $updated,has bill_key $id;select $i,$updated,$id;distinct;sort $updated,$id;limit 10;fetch {{"id":$i.bill_key}};"#,self.prefix())).await?;
         let mut issued = 0;
@@ -348,7 +360,7 @@ impl Engine {
         let (notices, notification_errors) = self.send_notices().await?;
         errors += notification_errors;
         Ok(
-            json!({"scheduled":scheduled,"issued":issued,"reconciled":reconciled,"notices":notices,"errors":errors}),
+            json!({"activated":activated,"refunds":refunds,"scheduled":scheduled,"issued":issued,"reconciled":reconciled,"notices":notices,"errors":errors}),
         )
     }
 }

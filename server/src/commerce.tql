@@ -1,0 +1,429 @@
+define
+# Prices and accepted orders are immutable. Only publication can be changed.
+# Provider observations remain internal; a browser cannot mark an order paid.
+attribute cx_id, value string;
+attribute cx_created, value datetime;
+attribute cx_kind, value string @values("product", "service", "donation");
+attribute cx_currency, value string @values("USD");
+attribute cx_unit, value integer @range(0..99999999);
+attribute cx_min, value integer @range(50..99999999);
+attribute cx_max, value integer @range(50..99999999);
+attribute cx_lines,value integer @range(1..60);
+attribute cx_quantity, value integer @range(1..1000);
+attribute cx_enabled, value boolean;
+attribute cx_interval, value string @values("once", "week", "month", "year");
+attribute cx_mode, value string @values("once", "instalments", "recurring");
+attribute cx_count, value integer @range(0..360);
+attribute cx_deposit, value integer @range(0..99999999);
+attribute cx_tax_bp, value integer @range(0..10000);
+attribute cx_discount_bp, value integer @range(0..10000);
+attribute cx_shipping, value integer @range(0..99999999);
+attribute cx_instalments, value boolean;
+attribute cx_limit, value integer @range(2..360);
+attribute cx_deposit_bp, value integer @range(0..10000);
+attribute cx_plan_period, value string @values("week", "month", "year");
+
+entity commerce_offer, owns cx_id @key, owns name @card(1), owns cx_created @card(1),
+  owns cx_kind @card(1), owns cx_currency @card(1), owns cx_unit @card(1),
+  owns cx_min @card(1), owns cx_max @card(1), owns cx_interval @card(1), owns cx_enabled @card(1);
+relation commerce_catalogue, relates merchant @card(1), relates offer @card(1);
+tenant plays commerce_catalogue:merchant;
+commerce_offer plays commerce_catalogue:offer @card(1);
+# A published pricing policy is a merchant-approved quote, not a tax calculator.
+entity commerce_pricing, owns cx_id @key, owns cx_created @card(1), owns name @card(1),
+  owns cx_tax_bp @card(1), owns cx_discount_bp @card(1), owns cx_shipping @card(1), owns cx_enabled @card(1),
+  owns cx_instalments @card(1), owns cx_limit @card(1), owns cx_deposit_bp @card(1), owns cx_plan_period @card(1..3);
+relation commerce_pricing_owner, relates merchant @card(1), relates pricing @card(1);
+tenant plays commerce_pricing_owner:merchant;
+commerce_pricing plays commerce_pricing_owner:pricing @card(1);
+entity commerce_order, owns cx_id @key, owns cx_created @card(1), owns cx_lines @card(1),
+  owns cx_currency @card(1), owns cx_mode @card(1), owns cx_interval @card(1),
+  owns cx_count @card(1), owns cx_deposit @card(1);
+relation commerce_order_owner, relates customer @card(1), relates pricing @card(1), relates order @card(1);
+bill_customer plays commerce_order_owner:customer;
+commerce_pricing plays commerce_order_owner:pricing;
+commerce_order plays commerce_order_owner:order @card(1);
+relation commerce_line, relates order @card(1), relates offer @card(1),
+  owns cx_id @key, owns cx_created @card(1), owns cx_unit @card(1), owns cx_quantity @card(1);
+commerce_order plays commerce_line:order;
+commerce_offer plays commerce_line:offer;
+
+fun cx_owner($tenant:string,$actor:string,$now:datetime,$t:tenant)->boolean:
+  match $t has tenant_id == $tenant;$i isa identity,has identity_id == $actor;
+    let $allowed_1=role_at_least($i,$t,"owner",$now);$allowed_1==true;
+  return check;
+fun cx_catalogue_reader($tenant:string,$actor:string,$now:datetime,$t:tenant)->boolean:
+  match {let $allowed_1=cx_owner($tenant,$actor,$now,$t);$allowed_1==true;}
+    or {(merchant:$t,customer:$c) isa bill_account;
+      $b isa tenant,has tenant_id == $tenant;$i isa identity,has identity_id == $actor;
+      let $allowed_2=bill_buyer($i,$b,$c,$now);$allowed_2==true;};
+  return check;
+fun scope_commerce_offer($tenant:string,$actor:string,$now:datetime,$o:commerce_offer)->boolean:
+  match (merchant:$t,offer:$o) isa commerce_catalogue;
+    {let $allowed_1=cx_owner($tenant,$actor,$now,$t);$allowed_1==true;}
+    or {$o has cx_enabled true;let $allowed_2=cx_catalogue_reader($tenant,$actor,$now,$t);$allowed_2==true;}
+    or {(order:$order,offer:$o) isa commerce_line;let $allowed_3=scope_commerce_order($tenant,$actor,$now,$order);$allowed_3==true;};
+  return check;
+fun create_commerce_offer($tenant:string,$actor:string,$now:datetime,$o:commerce_offer)->boolean:
+  match (merchant:$t,offer:$o) isa commerce_catalogue;let $allowed_1=cx_owner($tenant,$actor,$now,$t);$allowed_1==true;
+    $o has cx_created == $now,has cx_unit $unit,has cx_min $min,has cx_max $max,has cx_kind $kind,has name $name;
+    len($name)>0;len($name)<=200;$min<=$max;
+    {$kind=="donation";$unit==0;} or {$kind!="donation";$unit==$min;$unit==$max;};
+  return check;
+fun update_commerce_offer_enabled($tenant:string,$actor:string,$now:datetime,$o:commerce_offer,$next:boolean)->boolean:
+  match {$next==true;} or {$next==false;}; (merchant:$t,offer:$o) isa commerce_catalogue;let $allowed_1=cx_owner($tenant,$actor,$now,$t);$allowed_1==true;
+  return check;
+fun scope_commerce_catalogue($tenant:string,$actor:string,$now:datetime,$link:commerce_catalogue)->boolean:
+  match $link links(offer:$o);let $allowed_1=scope_commerce_offer($tenant,$actor,$now,$o);$allowed_1==true;
+  return check;
+fun create_commerce_catalogue($tenant:string,$actor:string,$now:datetime,$link:commerce_catalogue)->boolean:
+  match $link links(offer:$o);let $allowed_1=create_commerce_offer($tenant,$actor,$now,$o);$allowed_1==true;
+  return check;
+fun scope_commerce_pricing($tenant:string,$actor:string,$now:datetime,$p:commerce_pricing)->boolean:
+  match (merchant:$t,pricing:$p) isa commerce_pricing_owner;
+    {let $allowed_1=cx_owner($tenant,$actor,$now,$t);$allowed_1==true;}
+    or {$p has cx_enabled true;let $allowed_2=cx_catalogue_reader($tenant,$actor,$now,$t);$allowed_2==true;}
+    or {(order:$order,pricing:$p) isa commerce_order_owner;let $allowed_3=scope_commerce_order($tenant,$actor,$now,$order);$allowed_3==true;};
+  return check;
+fun create_commerce_pricing($tenant:string,$actor:string,$now:datetime,$p:commerce_pricing)->boolean:
+  match (merchant:$t,pricing:$p) isa commerce_pricing_owner;
+    let $allowed_1=cx_owner($tenant,$actor,$now,$t);$allowed_1==true;$p has cx_created == $now;
+  return check;
+fun update_commerce_pricing_enabled($tenant:string,$actor:string,$now:datetime,$p:commerce_pricing,$next:boolean)->boolean:
+  match {$next==true;} or {$next==false;}; (merchant:$t,pricing:$p) isa commerce_pricing_owner;
+    let $allowed_1=cx_owner($tenant,$actor,$now,$t);$allowed_1==true;
+  return check;
+fun scope_commerce_pricing_owner($tenant:string,$actor:string,$now:datetime,$link:commerce_pricing_owner)->boolean:
+  match $link links(pricing:$p);let $allowed_1=scope_commerce_pricing($tenant,$actor,$now,$p);$allowed_1==true;
+  return check;
+fun create_commerce_pricing_owner($tenant:string,$actor:string,$now:datetime,$link:commerce_pricing_owner)->boolean:
+  match $link links(pricing:$p);let $allowed_1=create_commerce_pricing($tenant,$actor,$now,$p);$allowed_1==true;
+  return check;
+fun scope_commerce_order($tenant:string,$actor:string,$now:datetime,$o:commerce_order)->boolean:
+  match (customer:$c,order:$o) isa commerce_order_owner;
+    let $allowed_1=scope_bill_customer($tenant,$actor,$now,$c);$allowed_1==true;
+  return check;
+fun cx_line_count($o:commerce_order)->integer:
+  match $line isa commerce_line,links(order:$o);
+  return count($line);
+fun cx_subtotal($o:commerce_order)->integer:
+  match $line isa commerce_line,links(order:$o),has cx_unit $unit,has cx_quantity $quantity;
+    let $amount=$unit * $quantity;
+  return sum($amount);
+# Round once, in integer minor units. Tax applies to discounted goods and shipping.
+fun cx_totals($o:commerce_order)->integer,integer,integer,integer:
+  match (order:$o,pricing:$p) isa commerce_order_owner;
+    $p has cx_discount_bp $discount_bp,has cx_tax_bp $tax_bp,has cx_shipping $shipping;
+    let $subtotal=cx_subtotal($o);let $discount=floor(($subtotal * $discount_bp) / 10000);
+    let $tax=floor((($subtotal - $discount + $shipping) * $tax_bp + 5000) / 10000);
+    let $total=$subtotal - $discount + $shipping + $tax;
+  return first $subtotal,$discount,$tax,$total;
+fun cx_line_valid($o:commerce_order,$line:commerce_line)->boolean:
+  match $line links(order:$o,offer:$offer),has cx_unit $unit,has cx_quantity $q;
+    $offer has cx_currency $currency,has cx_enabled true,has cx_kind $kind,
+      has cx_unit $fixed,has cx_min $min,has cx_max $max,has cx_interval $period;
+    $o has cx_currency == $currency,has cx_mode $mode,has cx_interval $interval;
+    (order:$o,customer:$c) isa commerce_order_owner;
+    (merchant:$merchant,customer:$c) isa bill_account;
+    (merchant:$merchant,offer:$offer) isa commerce_catalogue;
+    $unit>=$min;$unit<=$max;
+    {$kind=="donation";$q==1;} or {$kind!="donation";$unit==$fixed;};
+    {$mode=="instalments";$period=="once";} or {$mode!="instalments";$period==$interval;};
+  return check;
+fun cx_order_terms_valid($tenant:string,$actor:string,$now:datetime,$o:commerce_order)->boolean:
+  match $o has cx_mode $mode,has cx_interval $period,has cx_count $count,has cx_deposit $deposit;
+    (customer:$c,pricing:$p,order:$o) isa commerce_order_owner;
+    $p has cx_enabled true;(merchant:$merchant,pricing:$p) isa commerce_pricing_owner;
+    (merchant:$merchant,customer:$c) isa bill_account;
+    $t isa tenant,has tenant_id == $tenant;$i isa identity,has identity_id == $actor;
+    let $buyer=bill_buyer($i,$t,$c,$now);$buyer==true;
+    $o has cx_lines $expected_lines;let $lines=cx_line_count($o);$lines==$expected_lines;
+    not {$bad isa commerce_line,links(order:$o);let $valid=cx_line_valid($o,$bad);$valid==false;};
+    let $subtotal,$discount,$tax,$total=cx_totals($o);$subtotal>=50;$subtotal<=99999999;$total>=50;$total<=99999999;
+    {$mode=="once";$period=="once";$count==1;$deposit==0;}
+    or {$mode=="recurring";$period!="once";$count==0;$deposit==0;}
+    or {$mode=="instalments";$period!="once";$count>=2;$deposit<$total;
+      $p has cx_instalments true,has cx_limit $limit,has cx_deposit_bp $deposit_bp,has cx_plan_period == $period;
+      $count<=$limit;let $minimum=ceil(($total * $deposit_bp)/10000);$deposit>=$minimum;
+      {$deposit==0;let $lowest=floor($total / $count);$lowest>=50;}
+      or {$deposit>=50;let $lowest=floor(($total - $deposit) / ($count - 1));$lowest>=50;};};
+  return check;
+fun create_commerce_order($tenant:string,$actor:string,$now:datetime,$o:commerce_order)->boolean:
+  match $o has cx_created == $now;let $valid=cx_order_terms_valid($tenant,$actor,$now,$o);$valid==true;
+  return check;
+fun scope_commerce_order_owner($tenant:string,$actor:string,$now:datetime,$link:commerce_order_owner)->boolean:
+  match $link links(order:$o);let $allowed_1=scope_commerce_order($tenant,$actor,$now,$o);$allowed_1==true;
+  return check;
+fun create_commerce_order_owner($tenant:string,$actor:string,$now:datetime,$link:commerce_order_owner)->boolean:
+  match $link links(order:$o);let $allowed_1=create_commerce_order($tenant,$actor,$now,$o);$allowed_1==true;
+  return check;
+fun scope_commerce_line($tenant:string,$actor:string,$now:datetime,$line:commerce_line)->boolean:
+  match $line links(order:$o);let $allowed_1=scope_commerce_order($tenant,$actor,$now,$o);$allowed_1==true;
+  return check;
+fun create_commerce_line($tenant:string,$actor:string,$now:datetime,$line:commerce_line)->boolean:
+  match $line links(order:$o),has cx_created == $now;$o has cx_created == $now,has cx_lines $expected;
+    let $count=cx_line_count($o);$count==$expected;
+    let $allowed=scope_commerce_order($tenant,$actor,$now,$o);$allowed==true;
+    let $price=cx_line_valid($o,$line);$price==true;
+  return check;
+# The last instalment receives the remainder; a deposit replaces the first one.
+fun cx_due_amount($o:commerce_order,$ordinal:integer)->integer:
+  match let $subtotal,$discount,$tax,$total=cx_totals($o);
+    $o has cx_mode $mode,has cx_count $count,has cx_deposit $deposit;$ordinal>=0;
+    {$mode=="once";$ordinal==0;let $amount=$total;}
+    or {$mode=="recurring";let $amount=$total;}
+    or {$mode=="instalments";$ordinal<$count;
+      {$deposit>0;$ordinal==0;let $amount=$deposit;}
+      or {{$deposit==0;let $remaining=$total;let $parts=$count;}
+        or {$deposit>0;$ordinal>0;let $remaining=$total - $deposit;let $parts=$count - 1;};
+        let $base=floor($remaining / $parts);
+        {$ordinal==$count - 1;let $amount=$remaining - $base * ($parts - 1);}
+        or {$ordinal<$count - 1;let $amount=$base;};};};
+  return first $amount;
+
+entity commerce_offer @meta("dog.security.scope","scope_commerce_offer") @meta("dog.security.read","scope_commerce_offer") @meta("dog.security.create","create_commerce_offer"),
+  owns cx_enabled @meta("dog.security.update","update_commerce_offer_enabled");
+relation commerce_catalogue @meta("dog.security.scope","scope_commerce_catalogue") @meta("dog.security.read","scope_commerce_catalogue") @meta("dog.security.create","create_commerce_catalogue");
+entity commerce_pricing @meta("dog.security.scope","scope_commerce_pricing") @meta("dog.security.read","scope_commerce_pricing") @meta("dog.security.create","create_commerce_pricing"),
+  owns cx_enabled @meta("dog.security.update","update_commerce_pricing_enabled");
+relation commerce_pricing_owner @meta("dog.security.scope","scope_commerce_pricing_owner") @meta("dog.security.read","scope_commerce_pricing_owner") @meta("dog.security.create","create_commerce_pricing_owner");
+entity commerce_order @meta("dog.security.scope","scope_commerce_order") @meta("dog.security.read","scope_commerce_order") @meta("dog.security.create","create_commerce_order");
+relation commerce_order_owner @meta("dog.security.scope","scope_commerce_order_owner") @meta("dog.security.read","scope_commerce_order_owner") @meta("dog.security.create","create_commerce_order_owner");
+relation commerce_line @meta("dog.security.scope","scope_commerce_line") @meta("dog.security.read","scope_commerce_line") @meta("dog.security.create","create_commerce_line");
+
+# Context is injected by /data; callers cannot substitute another tenant or actor.
+fun request_commerce_totals($tenant:string,$actor:string,$now:datetime,$o:commerce_order)->integer,integer,integer,integer @meta("dog.security.context","true"):
+  match let $allowed=scope_commerce_order($tenant,$actor,$now,$o);$allowed==true;
+    let $subtotal,$discount,$tax,$total=cx_totals($o);
+  return first $subtotal,$discount,$tax,$total;
+fun request_commerce_due($tenant:string,$actor:string,$now:datetime,$o:commerce_order,$ordinal:integer)->integer @meta("dog.security.context","true"):
+  match let $allowed=scope_commerce_order($tenant,$actor,$now,$o);$allowed==true;
+    let $amount=cx_due_amount($o,$ordinal);
+  return first $amount;
+
+# Internal attestations contain capabilities, never provider credentials.
+attribute cx_plugin, value string;
+attribute cx_refunds, value boolean;
+attribute cx_verified, value datetime;
+entity commerce_plugin, owns cx_id @key,owns cx_plugin @card(0..1),owns cx_enabled @card(0..1),owns cx_refunds @card(0..1),owns cx_verified @card(0..1);
+relation commerce_plugin_owner,relates merchant @card(1),relates plugin @card(1);
+tenant plays commerce_plugin_owner:merchant;
+commerce_plugin plays commerce_plugin_owner:plugin @card(1);
+commerce_pricing owns cx_plugin @card(0..1);
+relation commerce_signatory,relates order @card(1),relates actor @card(1),owns cx_created @card(1);
+commerce_order plays commerce_signatory:order @card(0..1);
+identity plays commerce_signatory:actor;
+relation commerce_execution,relates order @card(1),relates plan @card(1);
+commerce_order plays commerce_execution:order @card(0..1);
+bill_plan plays commerce_execution:plan @card(0..1);
+relation commerce_cancellation,relates order @card(1),owns cx_created @card(1);
+commerce_order plays commerce_cancellation:order @card(0..1);
+fun cx_plugin_ready($merchant:tenant,$id:string,$now:datetime)->boolean:
+  match (merchant:$merchant,plugin:$fact) isa commerce_plugin_owner;
+    $fact has cx_plugin == $id,has cx_enabled true,has cx_verified $at;
+    $at <= $now;$at >= $now - PT10M;
+  return check;
+fun cx_order_live($merchant:tenant,$o:commerce_order,$now:datetime)->boolean:
+  match $merchant has status "active";
+    (order:$o,customer:$c,pricing:$pricing) isa commerce_order_owner;
+    (merchant:$merchant,buyer:$buyer,customer:$c) isa bill_account;
+    (order:$o,actor:$actor) isa commerce_signatory;
+    let $buyer_ok=bill_buyer($actor,$buyer,$c,$now);$buyer_ok==true;
+    not {(order:$o) isa commerce_cancellation;};
+    $pricing has cx_plugin $plugin_attr;let $plugin=$plugin_attr;let $ready=cx_plugin_ready($merchant,$plugin,$now);$ready==true;
+  return check;
+fun cx_can_activate($merchant:tenant,$o:commerce_order,$now:datetime)->boolean:
+  match let $live=cx_order_live($merchant,$o,$now);$live==true;
+    not {(order:$o) isa commerce_execution;};
+  return check;
+fun create_commerce_signatory($tenant:string,$actor:string,$now:datetime,$link:commerce_signatory)->boolean:
+  match $link links(order:$o,actor:$person),has cx_created == $now;$person has identity_id == $actor;
+    $o has cx_created $at;$at >= $now - PT15M;
+    not {(order:$o) isa commerce_execution;};not {(order:$o) isa commerce_cancellation;};
+    (order:$o,customer:$c,pricing:$pricing) isa commerce_order_owner;
+    $t isa tenant,has tenant_id == $tenant;let $buyer=bill_buyer($person,$t,$c,$now);$buyer==true;
+    $pricing has cx_enabled true;not {(order:$o,offer:$withdrawn) isa commerce_line;$withdrawn has cx_enabled false;};
+    (merchant:$merchant,customer:$c) isa bill_account;
+    $pricing has cx_plugin $selected;let $plugin=$selected;let $ready=cx_plugin_ready($merchant,$plugin,$now);$ready==true;
+  return check;
+fun scope_commerce_signatory($tenant:string,$actor:string,$now:datetime,$link:commerce_signatory)->boolean:
+  match $link links(order:$o);let $allowed=scope_commerce_order($tenant,$actor,$now,$o);$allowed==true;
+  return check;
+fun scope_commerce_execution($tenant:string,$actor:string,$now:datetime,$link:commerce_execution)->boolean:
+  match $link links(order:$o);let $allowed=scope_commerce_order($tenant,$actor,$now,$o);$allowed==true;
+  return check;
+fun create_commerce_cancellation($tenant:string,$actor:string,$now:datetime,$link:commerce_cancellation)->boolean:
+  match $link links(order:$o),has cx_created == $now;
+    let $allowed=scope_commerce_order($tenant,$actor,$now,$o);$allowed==true;
+  return check;
+fun scope_commerce_cancellation($tenant:string,$actor:string,$now:datetime,$link:commerce_cancellation)->boolean:
+  match $link links(order:$o);let $allowed=scope_commerce_order($tenant,$actor,$now,$o);$allowed==true;
+  return check;
+fun cx_next_plan_status($p:bill_plan,$next:integer)->string:
+  match $next>=0;$p has bill_interval $period;
+    {$period=="once";let $status="finished";}
+    or {$period!="once";
+      {not {(plan:$p) isa commerce_execution;};let $status="active";}
+      or {(plan:$p,order:$o) isa commerce_execution;$o has cx_mode $mode,has cx_count $count;
+        {$mode=="recurring";let $status="active";}
+        or {$mode!="recurring";{$next >= $count;let $status="finished";} or {$next < $count;let $status="active";};};};};
+  return first $status;
+fun cx_plugin_consent($c:bill_customer,$p:bill_plan)->boolean:
+  match (customer:$c,plan:$p) isa bill_plan_owner;
+    {not {(plan:$p) isa commerce_execution;};}
+    or {(plan:$p,order:$o) isa commerce_execution;(order:$o,pricing:$pricing) isa commerce_order_owner;
+      $pricing has cx_plugin $plugin;$c has bill_method_plugin == $plugin;};
+  return check;
+fun cx_plan_due($p:bill_plan)->integer:
+  match $p has bill_amount $default;
+    {not {(plan:$p) isa commerce_execution;};let $due=$default;}
+    or {(plan:$p,order:$o) isa commerce_execution;$p has bill_sequence $sequence_attr;
+      let $sequence=$sequence_attr;let $calculated=cx_due_amount($o,$sequence);let $due=$calculated;};
+  return first $due;
+fun cx_plan_live($t:tenant,$p:bill_plan,$now:datetime)->boolean:
+  match {not {(plan:$p) isa commerce_execution;};$t has status "active";}
+    or {(plan:$p,order:$o) isa commerce_execution;let $allowed=cx_order_live($t,$o,$now);$allowed==true;};
+  return check;
+fun cx_plan_plugin($p:bill_plan,$c:bill_customer,$mode:string)->string:
+  match {(plan:$p,order:$o) isa commerce_execution;(order:$o,pricing:$pricing) isa commerce_order_owner;$pricing has cx_plugin $selected;let $plugin=$selected;}
+    or {not {(plan:$p) isa commerce_execution;};
+      {$mode=="manual";$c has bill_provider $manual;let $plugin=$manual;}
+      or {$mode=="automatic";$c has bill_method_plugin $automatic;let $plugin=$automatic;};};
+  return first $plugin;
+fun cx_collect_allowed($t:tenant,$c:bill_customer,$p:bill_plan,$i:bill_invoice,$at:datetime,$now:integer)->boolean:
+  match let $base=bill_can_collect($c,$p,$i,$now);$base==true;
+    let $live=cx_plan_live($t,$p,$at);$live==true;
+    let $plugin=cx_plan_plugin($p,$c,"automatic");$i has bill_provider == $plugin;$c has bill_method_plugin == $plugin;
+  return check;
+relation commerce_signatory @meta("dog.security.scope","scope_commerce_signatory") @meta("dog.security.read","scope_commerce_signatory") @meta("dog.security.create","create_commerce_signatory");
+relation commerce_execution @meta("dog.security.scope","scope_commerce_execution") @meta("dog.security.read","scope_commerce_execution");
+relation commerce_cancellation @meta("dog.security.scope","scope_commerce_cancellation") @meta("dog.security.read","scope_commerce_cancellation") @meta("dog.security.create","create_commerce_cancellation");
+
+attribute cx_amount,value integer @range(1..99999999);
+attribute cx_refund_status,value string @values("queued","processing","pending","attention","succeeded","failed");
+attribute cx_busy,value string;
+attribute cx_external @meta("dog.security.hidden","true"),value string;
+entity commerce_refund,owns cx_id @key,owns cx_created @card(1),owns cx_amount @card(1),
+  owns cx_refund_status @card(1),owns cx_busy @card(0..1) @unique,owns cx_external @card(0..1);
+relation commerce_refund_owner,relates invoice @card(1),relates request @card(1),relates actor @card(1);
+bill_invoice plays commerce_refund_owner:invoice;
+commerce_refund plays commerce_refund_owner:request @card(1);
+identity plays commerce_refund_owner:actor;
+fun cx_reserved_refunds($i:bill_invoice)->integer:
+  match (invoice:$i,request:$r) isa commerce_refund_owner;
+    $r has cx_amount $amount,has cx_refund_status $status;$status!="failed";
+  return sum($amount);
+fun scope_commerce_refund($tenant:string,$actor:string,$now:datetime,$r:commerce_refund)->boolean:
+  match (request:$r,invoice:$i) isa commerce_refund_owner;
+    let $allowed=scope_bill_invoice($tenant,$actor,$now,$i);$allowed==true;
+  return check;
+fun create_commerce_refund($tenant:string,$actor:string,$now:datetime,$r:commerce_refund)->boolean:
+  match (request:$r,invoice:$i,actor:$who) isa commerce_refund_owner;$who has identity_id == $actor;
+    (plan:$p,invoice:$i) isa bill_invoice_owner;(customer:$c,plan:$p) isa bill_plan_owner;
+    (merchant:$merchant,customer:$c) isa bill_account;
+    $t isa tenant,has tenant_id == $tenant;let $seller=bill_seller($who,$t,$c,$now);$seller==true;
+    $i has bill_key $invoice,has bill_status "paid",has bill_provider $plugin_attr,has bill_amount $amount;let $plugin=$plugin_attr;
+    (merchant:$merchant,plugin:$fact) isa commerce_plugin_owner;
+    $fact has cx_plugin == $plugin,has cx_refunds true;let $ready=cx_plugin_ready($merchant,$plugin,$now);$ready==true;
+    let $busy=$invoice+":refund";
+    $r has cx_created == $now,has cx_refund_status "queued",has cx_busy == $busy;not {$r has cx_external $unbound;};
+    let $reserved=cx_reserved_refunds($i);$reserved <= $amount;
+  return check;
+fun scope_commerce_refund_owner($tenant:string,$actor:string,$now:datetime,$link:commerce_refund_owner)->boolean:
+  match $link links(request:$r);let $allowed=scope_commerce_refund($tenant,$actor,$now,$r);$allowed==true;
+  return check;
+fun create_commerce_refund_owner($tenant:string,$actor:string,$now:datetime,$link:commerce_refund_owner)->boolean:
+  match $link links(request:$r);let $allowed=create_commerce_refund($tenant,$actor,$now,$r);$allowed==true;
+  return check;
+fun cx_refund_claim($t:tenant,$r:commerce_refund,$now:datetime)->boolean:
+  match (request:$r,invoice:$i,actor:$who) isa commerce_refund_owner;
+    (plan:$p,invoice:$i) isa bill_invoice_owner;(customer:$c,plan:$p) isa bill_plan_owner;
+    (merchant:$t,customer:$c) isa bill_account;
+    let $allowed=bill_seller($who,$t,$c,$now);$allowed==true;
+    $i has bill_status "paid";$r has cx_refund_status "queued";not {(request:$r) isa commerce_refund_cancellation;};
+  return check;
+fun cx_refund_observation($r:commerce_refund,$request:string,$invoice:string,$plugin:string,$amount:integer,$currency:string,$external:string,$next:string)->boolean:
+  match $r has cx_id == $request,has cx_amount == $amount,has cx_refund_status $old;
+    (request:$r,invoice:$i) isa commerce_refund_owner;$i has bill_external_id == $invoice,has bill_provider == $plugin;
+    $currency=="USD";$external!="";{not {$r has cx_external $unbound;};} or {$r has cx_external == $external;};
+    {$old=="processing";} or {$old=="attention";} or {$old=="pending";};
+    {$next=="pending";} or {$next=="succeeded";} or {$next=="failed";};
+  return check;
+entity commerce_refund @meta("dog.security.scope","scope_commerce_refund") @meta("dog.security.read","scope_commerce_refund") @meta("dog.security.create","create_commerce_refund");
+relation commerce_refund_owner @meta("dog.security.scope","scope_commerce_refund_owner") @meta("dog.security.read","scope_commerce_refund_owner") @meta("dog.security.create","create_commerce_refund_owner");
+
+attribute cx_external_binding @meta("dog.security.hidden","true"),value string;
+commerce_refund owns cx_external_binding @card(0..1) @unique;
+relation commerce_refund_cancellation,relates request @card(1),owns cx_created @card(1);
+commerce_refund plays commerce_refund_cancellation:request @card(0..1);
+fun scope_refund_cancellation($tenant:string,$actor:string,$now:datetime,$link:commerce_refund_cancellation)->boolean:
+  match $link links(request:$r);let $allowed=scope_commerce_refund($tenant,$actor,$now,$r);$allowed==true;
+  return check;
+fun create_refund_cancellation($tenant:string,$actor:string,$now:datetime,$link:commerce_refund_cancellation)->boolean:
+  match $link links(request:$r),has cx_created == $now;$r has cx_refund_status "queued";
+    (request:$r,invoice:$i) isa commerce_refund_owner;
+    (plan:$p,invoice:$i) isa bill_invoice_owner;(customer:$c,plan:$p) isa bill_plan_owner;
+    $t isa tenant,has tenant_id == $tenant;$who isa identity,has identity_id == $actor;
+    let $seller=bill_seller($who,$t,$c,$now);$seller==true;
+  return check;
+fun cx_refund_cancelled($r:commerce_refund)->boolean:
+  match $r has cx_refund_status "queued";(request:$r) isa commerce_refund_cancellation;
+  return check;
+relation commerce_refund_cancellation @meta("dog.security.scope","scope_refund_cancellation") @meta("dog.security.read","scope_refund_cancellation") @meta("dog.security.create","create_refund_cancellation");
+
+# Public catalogue enrollment creates only a buyer account, never merchant membership.
+attribute cx_public,value boolean;
+commerce_pricing owns cx_public @card(0..1);
+relation commerce_shopper,owns cx_id @key,relates merchant @card(1),relates person @card(1),relates customer @card(1);
+tenant plays commerce_shopper:merchant;
+person plays commerce_shopper:person;
+bill_customer plays commerce_shopper:customer @card(0..1);
+fun cx_shop_open($t:tenant,$now:datetime)->boolean:
+  match $t has status "active";(merchant:$t,pricing:$pricing) isa commerce_pricing_owner;
+    $pricing has cx_public true,has cx_enabled true,has cx_plugin $plugin_attr;let $plugin=$plugin_attr;
+    let $ready=cx_plugin_ready($t,$plugin,$now);$ready==true;
+  return check;
+fun cx_self_enrolment($merchant:tenant,$person:person,$now:datetime)->boolean:
+  match $person has status "active";let $open=cx_shop_open($merchant,$now);$open==true;
+  return check;
+fun scope_commerce_shopper($tenant:string,$actor:string,$now:datetime,$s:commerce_shopper)->boolean:
+  match $s links(customer:$c);let $allowed=scope_bill_customer($tenant,$actor,$now,$c);$allowed==true;
+  return check;
+relation commerce_shopper @meta("dog.security.scope","scope_commerce_shopper") @meta("dog.security.read","scope_commerce_shopper");
+
+fun request_commerce_merchant($tenant:string,$actor:string,$now:datetime,$o:commerce_offer)->string,string @meta("dog.security.context","true"):
+  match let $allowed=scope_commerce_offer($tenant,$actor,$now,$o);$allowed==true;
+    (merchant:$m,offer:$o) isa commerce_catalogue;$m has tenant_id $id_attr,has name $name_attr;
+    let $id=$id_attr;let $label=$name_attr;
+  return first $id,$label;
+fun request_pricing_merchant($tenant:string,$actor:string,$now:datetime,$p:commerce_pricing)->string @meta("dog.security.context","true"):
+  match let $allowed=scope_commerce_pricing($tenant,$actor,$now,$p);$allowed==true;
+    (merchant:$m,pricing:$p) isa commerce_pricing_owner;$m has tenant_id $id_attr;let $id=$id_attr;
+  return first $id;
+fun request_customer_merchant($tenant:string,$actor:string,$now:datetime,$c:bill_customer)->string @meta("dog.security.context","true"):
+  match let $allowed=scope_bill_customer($tenant,$actor,$now,$c);$allowed==true;
+    (merchant:$m,customer:$c) isa bill_account;$m has tenant_id $id_attr;let $id=$id_attr;
+  return first $id;
+
+attribute cx_request_hash,value string;
+commerce_order owns cx_request_hash @card(0..1);
+
+fun request_commerce_schedule($tenant:string,$actor:string,$now:datetime,$o:commerce_order)->integer,integer,integer @meta("dog.security.context","true"):
+  match let $allowed=scope_commerce_order($tenant,$actor,$now,$o);$allowed==true;
+    $o has cx_mode $mode,has cx_count $count;
+    {$mode=="instalments";let $last_index=$count - 1;let $regular_index=1;}
+    or {$mode!="instalments";let $last_index=0;let $regular_index=0;};
+    let $first=cx_due_amount($o,0);let $regular=cx_due_amount($o,$regular_index);let $last=cx_due_amount($o,$last_index);
+  return first $first,$regular,$last;
+
+fun cx_is_checkout($p:bill_plan)->boolean:
+  match (plan:$p) isa commerce_execution;
+  return check;
+
+fun request_commerce_accepted($tenant:string,$actor:string,$now:datetime,$o:commerce_order)->boolean @meta("dog.security.context","true"):
+  match let $allowed=scope_commerce_order($tenant,$actor,$now,$o);$allowed==true;(order:$o) isa commerce_signatory;
+  return check;
+
+fun cx_refund_not_submitted($r:commerce_refund)->boolean:
+  match $r has cx_refund_status "processing";not {$r has cx_external $_;};
+  return check;

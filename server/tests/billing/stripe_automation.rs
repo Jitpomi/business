@@ -32,6 +32,18 @@ async fn stripe_managed_consent_status() -> Result<()> {
     run("status").await
 }
 
+#[tokio::test]
+#[ignore = "Preserved new Stripe TEST checkout checkpoint; submits one partial refund through tenant plugins and dog-queue"]
+async fn stripe_managed_checkout_refund() -> Result<()> {
+    run("refund").await
+}
+
+#[tokio::test]
+#[ignore = "Preserved Stripe TEST checkpoint; verifies trusted saved-method checkout return context, no payment"]
+async fn stripe_managed_checkout_setup_return() -> Result<()> {
+    run("setup-return").await
+}
+
 fn q(s: &str) -> String {
     serde_json::to_string(s).unwrap()
 }
@@ -102,7 +114,7 @@ fn grant(
 ) -> String {
     let (revision, plan) = terms;
     let at = chrono::Utc::now().timestamp();
-    format!("match $c isa bill_customer,has bill_key {};$by isa person,has identity_id {};let $now=request_now();$approved isa bill_plan,has bill_key {};insert $e isa bill_consent_evidence,has bill_key {},has bill_revision {},has bill_updated {at},has consent_claim {},has method_plugin {},has method_ref {},has consent_at == {time};(customer:$c,actor:$by,evidence:$e) isa bill_consent_owner;(evidence:$e,plan:$approved) isa bill_consent_plan;fetch {{'id':$e.bill_key,'at':$e.consent_at}};",q(customer),q(actor),q(plan),q(id),q(revision),q(&format!("{customer}:{revision}")),q(plugin),q(method))
+    format!("match $c isa bill_customer,has bill_key {};$by isa person,has identity_id {};let $now=request_now();$approved isa bill_plan,has bill_key {};insert $e isa bill_consent_evidence,has bill_key {},has bill_revision {},has consent_plan_count 1,has bill_updated {at},has consent_claim {},has method_plugin {},has method_ref {},has consent_at == {time};(customer:$c,actor:$by,evidence:$e) isa bill_consent_owner;(evidence:$e,plan:$approved) isa bill_consent_plan;fetch {{'id':$e.bill_key,'at':$e.consent_at}};",q(customer),q(actor),q(plan),q(id),q(revision),q(&format!("{customer}:{revision}:{id}")),q(plugin),q(method))
 }
 pub(super) fn grant_template(
     customer: &str,
@@ -120,7 +132,7 @@ pub(super) fn grant_template(
         ("plan_id", plan),
         ("plugin_id", plugin),
         ("method_id", method),
-        ("consent_claim", &format!("{customer}:{revision}")),
+        ("consent_claim", &format!("{customer}:{revision}:{id}")),
     ] {
         query = query.replace(&format!("@@{key}@@"), &q(value));
     }
@@ -471,7 +483,7 @@ async fn run(phase: &str) -> Result<()> {
                 let (a,b)=tokio::join!(http(&router,buyer,&buyer_token,"/data",data.clone(),Some("write")),http(&router,buyer,&buyer_token,"/data",data,Some("write")));
                 let responses=[a?,b?];
                 ensure!(responses.iter().filter(|(status,body)|*status==200&&body["ok"]["answers"].as_array().is_some_and(|a|a.len()==1)).count()==1,"Concurrent grant did not commit exactly once: {responses:?}");
-                let fork=json!({"query":grant(customer,buyer_owner,&format!("fork-{consent_key}"),("initial",plan),"my-finance",pm,"$now")});
+                let fork=json!({"query":grant(customer,buyer_owner,consent_key,("initial",plan),"my-finance",pm,"$now")});
                 let (status,body)=http(&router,buyer,&buyer_token,"/data",fork,Some("write")).await?;
                 save(&root.join(format!("duplicate-{label}-observation.json")),&json!({"status":status,"body":body}))?;ensure!((400..500).contains(&status)||(status==200&&body["ok"]["answers"].as_array().is_some_and(Vec::is_empty)),"Duplicate grant did not return a clear rejection: {body}");
 
@@ -496,6 +508,10 @@ async fn run(phase: &str) -> Result<()> {
         }
     }
     save(&path, &saved)?;
+    if phase == "refund" && saved["checkout_refund"].is_null() {
+        saved["checkout_refund"] = json!(uuid::Uuid::new_v4().to_string());
+        save(&path, &saved)?;
+    }
     let tenants: Vec<String> = saved["cases"]
         .as_array()
         .unwrap()
@@ -504,6 +520,42 @@ async fn run(phase: &str) -> Result<()> {
         .collect();
     let worker = server::background::spawn_all((*template).clone());
     let outcome=async {
+        if phase=="setup-return" {
+            let case=&saved["cases"][0];let buyer=case["buyer"].as_str().unwrap();
+            let result=ok(&router,buyer,&buyer_tokens[0],"/financial",json!({"action":"setup_method","customer_id":case["customer"],"plugin_id":"my-finance","save_only":true,"checkout":true}),None).await?;
+            let link=reqwest::Url::parse(result["url"].as_str().context("Setup URL")?)?;
+            ensure!(link.scheme()=="https" && link.host_str()==Some("checkout.stripe.com"));
+            let id=link.path_segments().and_then(|mut p|p.next_back()).context("Checkout session id")?;ensure!(id.starts_with("cs_test_"));
+            let session=fixture.stripe(reqwest::Method::GET,&format!("/checkout/sessions/{id}"),"",&[]).await?;
+            ensure!(session["mode"]=="setup" && session["customer"]==case["provider_customer"] && session["metadata"]["business_customer"]==case["customer"] && session["metadata"]["purpose"]=="save_only");
+            for field in ["success_url","cancel_url"] {
+                let target=reqwest::Url::parse(session[field].as_str().context("Return URL")?)?;let context=target.query_pairs().collect::<HashMap<_,_>>();
+                ensure!(target.origin().ascii_serialization()=="https://jitpomi.com" && target.path()=="/checkout/" && context.get("merchant").map(|v|v.as_ref())==case["tenant"].as_str() && context.get("plugin").is_some_and(|v|v=="my-finance"),"Saved-method return lost trusted merchant/plugin context");
+                if field=="success_url" {ensure!(context.get("setup").is_some_and(|v|v=="{CHECKOUT_SESSION_ID}") && context.get("customer").map(|v|v.as_ref())==case["customer"].as_str());}
+            }
+            save(&root.join("checkout-setup-return.json"),&json!({"mode":session["mode"],"success_url":session["success_url"],"cancel_url":session["cancel_url"],"live":session["livemode"]}))?;return Ok(());
+        }
+        if phase=="refund" {
+            let case=&saved["cases"][0];let tenant=case["tenant"].as_str().unwrap();let owner=case["owner"].as_str().unwrap();let plan=case["plan"].as_str().unwrap();
+            let engine=server::billing::engine::Engine::new(state.clone(),tenant,registry.resolve(tenant).await?)?;
+            engine.refresh_commerce_plugins().await?;
+            let invoice=read(&state,&format!("match $p isa bill_plan,has bill_key {};(plan:$p,invoice:$i) isa bill_invoice_owner;$i has bill_status 'paid';fetch {{'id':$i.bill_key,'external':$i.bill_external_id}};",q(plan))).await?;
+            ensure!(invoice.len()==1,"Pay the isolated test invoice first");let local=invoice[0]["id"].as_str().unwrap();let external=invoice[0]["external"].as_str().unwrap();let id=saved["checkout_refund"].as_str().unwrap();
+            if read(&state,&format!("match $r isa commerce_refund,has cx_id {};fetch {{'id':$r.cx_id}};",q(id))).await?.is_empty(){
+                native(&router,tenant,&tokens[0],format!("match $i isa bill_invoice,has bill_key {};$actor isa person,has identity_id {};let $now=request_now();insert $r isa commerce_refund,has cx_id {},has cx_created == $now,has cx_amount 40,has cx_refund_status 'queued',has cx_busy {};(invoice:$i,request:$r,actor:$actor) isa commerce_refund_owner;fetch {{'id':$r.cx_id}};",q(local),q(owner),q(id),q(&format!("{local}:refund")))).await?;
+            }
+            ok(&router,tenant,&tokens[0],"/automation",json!({"action":"publish","workflow":{"id":"checkout-refund","revision":"","name":"TEST checkout refund","enabled":true,"steps":[{"kind":"action","id":"execute","connection":"billing","action":"tick","input":Value::Null}]}}),None).await?;
+            invoke(&router,tenant,&tokens[0],"checkout-refund","checkout-refund-initial",None).await?;
+            invoke(&router,tenant,&tokens[0],"checkout-refund","checkout-refund-replay",None).await?;
+            let runtime=registry.resolve(tenant).await?;let observed=runtime.financial("my-finance")?.find_refund(external,id).await?.context("Provider refund not found")?;
+            ensure!(observed.state==server::finance::RefundState::Succeeded && observed.amount_minor==40 && observed.request_id==id && observed.invoice_id==external,"Provider refund binding mismatch");
+            let rows=read(&state,&format!("match $r isa commerce_refund,has cx_id {};fetch {{'status':$r.cx_refund_status,'amount':$r.cx_amount,'external':$r.cx_external}};",q(id))).await?;
+            ensure!(rows.len()==1 && rows[0]["status"]=="succeeded" && rows[0]["amount"]==40 && rows[0]["external"]==observed.external_id);
+            let notices=read(&state,&format!("match $n isa bill_notice,has bill_key {};fetch {{'id':$n.bill_key,'status':$n.bill_status}};",q(&format!("{id}-refund-receipt")))).await?;
+            ensure!(notices.len()==1 && notices[0]["status"].as_str().is_some_and(|s|s.starts_with("accepted:")),"Refund receipt not accepted exactly once");
+            save(&root.join("refund-observation.json"),&json!({"native":rows,"provider":observed,"notices":notices}))?;
+            return Ok(());
+        }
         if phase=="status" {
             let case=&saved["cases"][0];
             let query=include_str!("../../public/queries/data/billing-customers.tql");

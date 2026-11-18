@@ -283,9 +283,27 @@ pub async fn online_checkpoint(
     );
     driver
         .databases()
-        .import_from_file(&reference, std::fs::read_to_string(schema)?, data)
+        .import_from_file(&reference, std::fs::read_to_string(&schema)?, data)
         .await?;
-    crate::database::verify_runtime(driver, &reference).await?;
+    // A backup restores its own schema version, including before an upgrade.
+    // Requiring the new binary's runtime schema would reject a valid old checkpoint.
+    crate::database::verify(driver, &reference).await?;
+    let restored_schema = driver.databases().get(&reference).await?.schema().await?;
+    let definitions = |source: &str| -> anyhow::Result<std::collections::BTreeSet<String>> {
+        use typeql::query::{schema::SchemaQuery, QueryStructure};
+        let mut result = std::collections::BTreeSet::new();
+        for query in typeql::parse_queries(source)? {
+            let QueryStructure::Schema(SchemaQuery::Define(define)) = query.structure else {
+                anyhow::bail!("Unexpected checkpoint schema query");
+            };
+            result.extend(define.definables.into_iter().map(|d| d.to_string()));
+        }
+        Ok(result)
+    };
+    anyhow::ensure!(
+        definitions(&std::fs::read_to_string(&schema)?)? == definitions(&restored_schema)?,
+        "Restored checkpoint schema differs from its exact exported source"
+    );
     for (suffix, value) in [
         (
             "records.json",

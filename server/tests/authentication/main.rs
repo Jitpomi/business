@@ -1,3 +1,4 @@
+mod checkout_tests;
 mod live_auth0;
 #[path = "../support/driver.rs"]
 mod test_driver;

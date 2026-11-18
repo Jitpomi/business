@@ -2,6 +2,15 @@ import importlib.util,json,sqlite3,unittest
 from pathlib import Path
 spec=importlib.util.spec_from_file_location('scheduled',Path(__file__).with_name('scheduled.py'));m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
 class ScheduledCheckpoint(unittest.TestCase):
+ def test_backup_follows_explicit_development_versions_without_accepting_production(self):
+  config={'TYPEDB_ADDR':'https://example.invalid:80','TYPEDB_DB':'business_native_dev_v5','TYPEDB_USERNAME':'business_dev_backup','TYPEDB_PASSWORD':'synthetic-fixture-only','TYPEDB_TLS':'true'}
+  for name in ['business_native_dev_v2','business_native_dev_v5','business_native_dev_v6','business_native_dev_v9999']:
+   self.assertTrue(m.valid_database_configuration({**config,'TYPEDB_DB':name}))
+  for name in ['business_prod','business_dev','business_backend_test_fixture','business_native_dev_v01','business_native_dev_v1','business_native_dev_v10000']:
+   self.assertFalse(m.valid_database_configuration({**config,'TYPEDB_DB':name}))
+  self.assertFalse(m.valid_database_configuration({**config,'TYPEDB_TLS':'false'}))
+  self.assertFalse(m.valid_database_configuration({**config,'TYPEDB_USERNAME':'admin'}))
+  self.assertFalse(m.valid_database_configuration({**config,'UNREVIEWED':'value'}))
  def test_all_ciphertext_columns_survive_independent_sql_restore(self):
   row={'id':'12345678-1234-4234-8234-123456789abc','ciphertext':'A'*40,'created_at':'2026-11-18 07:00:00'};sql=m.vault_sql({'version':1,'rows':[row]});db=sqlite3.connect(':memory:');db.executescript(sql.decode());self.assertEqual(db.execute('SELECT * FROM secrets').fetchall(),[(row['id'],row['ciphertext'],row['created_at'])])
   with self.assertRaises(Exception):m.vault_sql({'version':1,'rows':[row,row]})

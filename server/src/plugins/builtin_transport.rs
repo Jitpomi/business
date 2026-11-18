@@ -9,6 +9,16 @@ pub enum Provider {
 use anyhow::{ensure, Result};
 use reqwest::{Client, Method};
 use serde_json::{json, Value};
+#[derive(Debug)]
+pub(crate) struct Rejected {
+    pub status: u16,
+}
+impl std::fmt::Display for Rejected {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Provider rejected request with HTTP {}", self.status)
+    }
+}
+impl std::error::Error for Rejected {}
 #[derive(Clone)]
 pub struct Providers {
     http: Client,
@@ -142,6 +152,14 @@ impl Providers {
             request = request.header("Idempotency-Key", key).form(form);
         }
         let response = request.send().await?;
+        if response.status().is_client_error()
+            && !matches!(response.status().as_u16(), 408 | 409 | 429)
+        {
+            return Err(Rejected {
+                status: response.status().as_u16(),
+            }
+            .into());
+        }
         ensure!(
             response.status().is_success(),
             "Stripe request failed with HTTP {}; reconcile before retrying",

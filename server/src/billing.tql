@@ -99,27 +99,27 @@ fun scope_bill_invoice_owner($tenant: string, $actor: string, $now: datetime, $o
 # An immutable buyer grant is the sole authority for automatic collection.
 # Legacy customer choice/consent fields remain read-only historical data.
 attribute consent_claim, value string;
-entity bill_consent_evidence, owns consent_claim @card(0..1) @unique,
+attribute consent_plan_count,value integer @range(1..60);
+entity bill_consent_evidence, owns consent_plan_count @card(0..1), owns consent_claim @card(0..1) @unique,
   owns method_ref @card(0..1), owns method_plugin @card(0..1);
 fun bill_has_consent($c: bill_customer) -> boolean:
-  match $c has bill_key $key,has bill_revision $rev,
+  match $c has bill_revision $rev,
       has bill_method_plugin $plugin,has bill_payment_method $method,has bill_policy $policy;
     $policy!="manual";
     (customer:$c,method:$saved) isa bill_method_owner;
     $saved has method_ref == $method,has method_plugin == $plugin,has method_active true,has method_pending false,has method_automatic true;
     (customer:$c,evidence:$e) isa bill_consent_owner;
-    let $claim=$key+":"+$rev;
-    $e has consent_claim == $claim,has bill_revision == $rev,
+    $e has consent_claim $claim,has bill_revision == $rev,
       has method_plugin == $plugin,has method_ref == $method,has consent_at $at;
   return check;
 relation bill_consent_plan, relates evidence @card(1),relates plan @card(1);
 bill_consent_evidence plays bill_consent_plan:evidence;
 bill_plan plays bill_consent_plan:plan;
 fun bill_plan_has_consent($c: bill_customer,$p: bill_plan) -> boolean:
-  match let $valid=bill_has_consent($c); $valid==true;
-    $c has bill_key $key,has bill_revision $rev;let $claim=$key+":"+$rev;
+  match let $compatible=cx_plugin_consent($c,$p);$compatible==true; let $valid=bill_has_consent($c); $valid==true;
+    $c has bill_revision $rev,has bill_method_plugin $plugin,has bill_payment_method $method;
     (customer:$c,evidence:$e) isa bill_consent_owner;
-    $e has consent_claim == $claim,has bill_revision == $rev;
+    $e has consent_claim $claim,has bill_revision == $rev,has method_plugin == $plugin,has method_ref == $method;
     (evidence:$e,plan:$p) isa bill_consent_plan;
     (customer:$c,plan:$p) isa bill_plan_owner;
   return check;
@@ -245,7 +245,8 @@ fun create_bill_consent($tenant: string,$actor: string,$now: datetime,$e: bill_c
     $c has bill_key $key,has bill_revision $rev,has bill_policy $policy,
       has bill_method_plugin $plugin,has bill_payment_method $method;
     $policy!="manual"; $rev!=""; $plugin!=""; $method!="";
-    let $claim=$key+":"+$rev;
+    $e has bill_key $request,has consent_plan_count $expected;let $actual=bill_consent_scope_count($e);$actual==$expected;
+    let $claim=$key+":"+$rev+":"+$request;
     $e has consent_claim == $claim,has bill_revision == $rev,has consent_at == $now,
       has method_plugin == $plugin,has method_ref == $method;
     not {$other isa bill_consent_evidence,has consent_claim == $claim;not {$other is $e;};};
@@ -359,3 +360,13 @@ fun create_bill_consent_plan($tenant: string,$actor: string,$now: datetime,$link
     let $ok=create_bill_consent($tenant,$actor,$now,$e);$ok==true;
   return check;
 relation bill_consent_plan @meta("dog.security.scope","scope_bill_consent_plan") @meta("dog.security.read","scope_bill_consent_plan") @meta("dog.security.create","create_bill_consent_plan");
+
+# Scope cardinality seals each grant, including against later same-clock link insertion.
+fun bill_consent_scope_count($e:bill_consent_evidence)->integer:
+  match (evidence:$e,plan:$p) isa bill_consent_plan;
+  select $p;distinct;
+  return count;
+fun request_bill_plan_choice($tenant:string,$actor:string,$now:datetime,$p:bill_plan)->string @meta("dog.security.context","true"):
+  match let $allowed=scope_bill_plan($tenant,$actor,$now,$p);$allowed==true;
+    (customer:$c,plan:$p) isa bill_plan_owner;let $choice=bill_plan_payment_choice($c,$p);
+  return first $choice;

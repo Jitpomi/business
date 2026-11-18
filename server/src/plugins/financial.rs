@@ -127,6 +127,12 @@ impl FinancialPlugin for BuiltinFinancial {
             .map(Some)
             .map_err(|_| WebhookError::Unavailable)
     }
+    fn brand(&self) -> Option<&'static str> {
+        Some(match self.provider {
+            Provider::Stripe => "stripe",
+            Provider::Mercury => "mercury",
+        })
+    }
     fn capabilities(&self) -> Capabilities {
         let stripe = self.provider == Provider::Stripe;
         Capabilities {
@@ -134,6 +140,8 @@ impl FinancialPlugin for BuiltinFinancial {
             automatic_collection: stripe,
             saved_methods: stripe,
             payment_history: stripe,
+            hosted_checkout: true,
+            refunds: stripe,
         }
     }
     fn ready(&self) -> Result<()> {
@@ -243,10 +251,16 @@ impl FinancialPlugin for BuiltinFinancial {
         );
         let base = reqwest::Url::parse(return_url)?;
         ensure!(
-            base.scheme() == "https" && base.username().is_empty() && base.password().is_none(),
+            base.scheme() == "https"
+                && base.username().is_empty()
+                && base.password().is_none()
+                && base.fragment().is_none(),
             "Invalid return destination"
         );
-        let success = format!("{return_url}?setup={{CHECKOUT_SESSION_ID}}&customer={local}");
+        let mut success = base.clone();
+        success.query_pairs_mut().append_pair("customer", local);
+        // Stripe substitutes the literal placeholder after decoding the form value.
+        let success = format!("{}&setup={{CHECKOUT_SESSION_ID}}", success.as_str());
         let mut form = pairs(&[
             ("mode", "setup"),
             ("customer", customer),
@@ -345,6 +359,12 @@ impl FinancialPlugin for BuiltinFinancial {
             )
             .await?;
         Ok(())
+    }
+    async fn refund(&self, invoice: &str, key: &str, amount: i64) -> Result<RefundObservation> {
+        self.create_refund(invoice, key, amount).await
+    }
+    async fn find_refund(&self, invoice: &str, key: &str) -> Result<Option<RefundObservation>> {
+        self.lookup_refund(invoice, key).await
     }
     async fn history(&self, external: &str) -> Result<Value> {
         if !self.capabilities().payment_history {

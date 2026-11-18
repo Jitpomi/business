@@ -6,7 +6,13 @@ pub fn action(data: &Value) -> Result<&str> {
     ensure!(
         matches!(
             action,
-            "history" | "payment_methods" | "setup_method" | "confirm_method" | "detach_method"
+            "checkout_configuration"
+                | "checkout_options"
+                | "history"
+                | "payment_methods"
+                | "setup_method"
+                | "confirm_method"
+                | "detach_method"
         ),
         dog_core::DogError::bad_request("Unsupported financial plugin operation").into_anyhow()
     );
