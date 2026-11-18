@@ -62,6 +62,11 @@ def monitor_sql(snapshot):
             db.execute(f'INSERT INTO {table}({",".join(columns)}) VALUES({",".join("?" for _ in columns)})',[row[c] for c in columns])
     return ('\n'.join(db.iterdump())+'\n').encode()
 
+def valid_database_configuration(parsed):
+    allowed={'TYPEDB_ADDR','TYPEDB_DB','TYPEDB_USERNAME','TYPEDB_PASSWORD','TYPEDB_TLS'}
+    versioned=bool(re.fullmatch(r'business_native_dev_v(?:[2-9]|[1-9][0-9]{1,3})',parsed.get('TYPEDB_DB','')))
+    return set(parsed)==allowed and versioned and parsed['TYPEDB_TLS']=='true' and parsed['TYPEDB_USERNAME']!='admin'
+
 def checkpoint(destination):
     destination=Path(destination).resolve();destination.mkdir(mode=0o700)
     if run(['git','status','--porcelain'],cwd=ROOT).strip():raise ValueError('Source checkout must be clean; preserve and commit useful work first')
@@ -69,8 +74,7 @@ def checkpoint(destination):
     for line in db_env.splitlines():
         if line.strip():
             k,v=line.split('=',1);parsed[k]=shlex.split(v)[0]
-    allowed={'TYPEDB_ADDR','TYPEDB_DB','TYPEDB_USERNAME','TYPEDB_PASSWORD','TYPEDB_TLS'}
-    if set(parsed)!=allowed or parsed['TYPEDB_DB']!='business_native_dev_v5' or parsed['TYPEDB_TLS']!='true' or parsed['TYPEDB_USERNAME']=='admin':raise ValueError('Explicit non-admin TLS development backup credentials required')
+    if not valid_database_configuration(parsed):raise ValueError('Explicit non-admin TLS development backup credentials required')
     private(destination/'database.env',db_env.encode())
     env={k:v for k,v in os.environ.items() if not k.startswith(('TYPEDB_','BUSINESS_ENV_FILE'))};env['BUSINESS_ENV_FILE']=str(destination/'database.env')
     files=destination/'payload';files.mkdir(mode=0o700);cp=files/'checkpoint';cp.mkdir(mode=0o700)
