@@ -87,13 +87,13 @@ impl BuiltinFinancial {
 }
 #[async_trait]
 impl FinancialPlugin for BuiltinFinancial {
-    fn currencies(&self) -> &'static [&'static str] {
+    fn currencies(&self) -> &[&str] {
         match self.provider {
             Provider::Stripe => &["USD", "EUR", "GBP", "CAD", "AUD", "JPY"],
             Provider::Mercury => &["USD"],
         }
     }
-    fn method_currencies(&self, method: &SavedMethod) -> &'static [&'static str] {
+    fn method_currencies(&self, method: &SavedMethod) -> &[&str] {
         if self.provider == Provider::Stripe && method.kind == "card" {
             self.currencies()
         } else {

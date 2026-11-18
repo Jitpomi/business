@@ -19,10 +19,10 @@ struct CheckoutBank {
 }
 #[async_trait]
 impl FinancialPlugin for CheckoutBank {
-    fn currencies(&self) -> &'static [&'static str] {
+    fn currencies(&self) -> &[&str] {
         &["USD", "JPY"]
     }
-    fn method_currencies(&self, _: &SavedMethod) -> &'static [&'static str] {
+    fn method_currencies(&self, _: &SavedMethod) -> &[&str] {
         self.currencies()
     }
     fn capabilities(&self) -> Capabilities {

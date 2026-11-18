@@ -108,11 +108,11 @@ pub struct RefundObservation {
 #[async_trait]
 pub trait FinancialPlugin: Send + Sync {
     /// Presentment currencies supported by this connection. Legacy plugins remain USD.
-    fn currencies(&self) -> &'static [&'static str] {
+    fn currencies(&self) -> &[&str] {
         &["USD"]
     }
     /// Method-specific restrictions are separate from the connection's currency set.
-    fn method_currencies(&self, _method: &SavedMethod) -> &'static [&'static str] {
+    fn method_currencies(&self, _method: &SavedMethod) -> &[&str] {
         &["USD"]
     }
     fn capabilities(&self) -> Capabilities;

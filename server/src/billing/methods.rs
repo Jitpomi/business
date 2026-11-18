@@ -20,7 +20,8 @@ impl Engine {
             .financial(plugin)?
             .capabilities()
             .automatic_collection;
-        let currencies = self.runtime.financial(plugin)?.method_currencies(method);
+        let connection = self.runtime.financial(plugin)?;
+        let currencies = connection.method_currencies(method);
         ensure!(
             !currencies.is_empty(),
             "Method must declare supported currencies"

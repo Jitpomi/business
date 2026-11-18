@@ -53,7 +53,8 @@ impl Engine {
                 self.runtime.sandbox && ready && plugin["capabilities"]["hosted_checkout"] == true;
             let refunds =
                 self.runtime.sandbox && ready && plugin["capabilities"]["refunds"] == true;
-            let currencies = self.runtime.financial(id)?.currencies();
+            let connection = self.runtime.financial(id)?;
+            let currencies = connection.currencies();
             anyhow::ensure!(
                 !currencies.is_empty(),
                 "Plugin must declare supported currencies"
