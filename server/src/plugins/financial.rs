@@ -251,10 +251,16 @@ impl FinancialPlugin for BuiltinFinancial {
         );
         let base = reqwest::Url::parse(return_url)?;
         ensure!(
-            base.scheme() == "https" && base.username().is_empty() && base.password().is_none(),
+            base.scheme() == "https"
+                && base.username().is_empty()
+                && base.password().is_none()
+                && base.fragment().is_none(),
             "Invalid return destination"
         );
-        let success = format!("{return_url}?setup={{CHECKOUT_SESSION_ID}}&customer={local}");
+        let mut success = base.clone();
+        success.query_pairs_mut().append_pair("customer", local);
+        // Stripe substitutes the literal placeholder after decoding the form value.
+        let success = format!("{}&setup={{CHECKOUT_SESSION_ID}}", success.as_str());
         let mut form = pairs(&[
             ("mode", "setup"),
             ("customer", customer),

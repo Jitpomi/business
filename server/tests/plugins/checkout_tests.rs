@@ -64,6 +64,18 @@ impl FinancialPlugin for CheckoutBank {
         url: &str,
         key: &str,
     ) -> Result<String> {
+        let target = reqwest::Url::parse(url)?;
+        let context = target
+            .query_pairs()
+            .collect::<std::collections::HashMap<_, _>>();
+        ensure!(
+            target.path() == "/checkout/"
+                && context
+                    .get("merchant")
+                    .is_some_and(|v| uuid::Uuid::parse_str(v).is_ok())
+                && context.get("plugin").is_some_and(|v| v == "bank"),
+            "Saved-method return lost checkout context"
+        );
         self.base.setup_method(c, l, bank, url, key).await
     }
     async fn confirm_method(&self, c: &str, l: &str, session: &str) -> Result<String> {

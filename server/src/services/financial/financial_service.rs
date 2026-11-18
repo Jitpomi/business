@@ -174,16 +174,23 @@ impl DogService<Value, BusinessParams> for FinancialService {
                     DogError::bad_request("Save a payment method first").into_anyhow()
                 );
                 let external = e.ensure_customer(&customer, &plugin_id).await?;
+                let mut return_url = reqwest::Url::parse(if data["checkout"] == true {
+                    "https://jitpomi.com/checkout/"
+                } else {
+                    "https://jitpomi.com/account/"
+                })?;
+                if data["checkout"] == true {
+                    return_url
+                        .query_pairs_mut()
+                        .append_pair("merchant", &e.merchant)
+                        .append_pair("plugin", &plugin_id);
+                }
                 let url = plugin
                     .setup_method(
                         &external,
                         &id,
                         data["bank_account"] == true,
-                        if data["checkout"] == true {
-                            "https://jitpomi.com/checkout/"
-                        } else {
-                            "https://jitpomi.com/account/"
-                        },
+                        return_url.as_str(),
                         &format!("save-method-{}", uuid::Uuid::new_v4()),
                     )
                     .await?;

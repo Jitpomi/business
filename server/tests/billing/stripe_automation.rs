@@ -38,6 +38,12 @@ async fn stripe_managed_checkout_refund() -> Result<()> {
     run("refund").await
 }
 
+#[tokio::test]
+#[ignore = "Preserved Stripe TEST checkpoint; verifies trusted saved-method checkout return context, no payment"]
+async fn stripe_managed_checkout_setup_return() -> Result<()> {
+    run("setup-return").await
+}
+
 fn q(s: &str) -> String {
     serde_json::to_string(s).unwrap()
 }
@@ -514,6 +520,21 @@ async fn run(phase: &str) -> Result<()> {
         .collect();
     let worker = server::background::spawn_all((*template).clone());
     let outcome=async {
+        if phase=="setup-return" {
+            let case=&saved["cases"][0];let buyer=case["buyer"].as_str().unwrap();
+            let result=ok(&router,buyer,&buyer_tokens[0],"/financial",json!({"action":"setup_method","customer_id":case["customer"],"plugin_id":"my-finance","save_only":true,"checkout":true}),None).await?;
+            let link=reqwest::Url::parse(result["url"].as_str().context("Setup URL")?)?;
+            ensure!(link.scheme()=="https" && link.host_str()==Some("checkout.stripe.com"));
+            let id=link.path_segments().and_then(|mut p|p.next_back()).context("Checkout session id")?;ensure!(id.starts_with("cs_test_"));
+            let session=fixture.stripe(reqwest::Method::GET,&format!("/checkout/sessions/{id}"),"",&[]).await?;
+            ensure!(session["mode"]=="setup" && session["customer"]==case["provider_customer"] && session["metadata"]["business_customer"]==case["customer"] && session["metadata"]["purpose"]=="save_only");
+            for field in ["success_url","cancel_url"] {
+                let target=reqwest::Url::parse(session[field].as_str().context("Return URL")?)?;let context=target.query_pairs().collect::<HashMap<_,_>>();
+                ensure!(target.origin().ascii_serialization()=="https://jitpomi.com" && target.path()=="/checkout/" && context.get("merchant").map(|v|v.as_ref())==case["tenant"].as_str() && context.get("plugin").is_some_and(|v|v=="my-finance"),"Saved-method return lost trusted merchant/plugin context");
+                if field=="success_url" {ensure!(context.get("setup").is_some_and(|v|v=="{CHECKOUT_SESSION_ID}") && context.get("customer").map(|v|v.as_ref())==case["customer"].as_str());}
+            }
+            save(&root.join("checkout-setup-return.json"),&json!({"mode":session["mode"],"success_url":session["success_url"],"cancel_url":session["cancel_url"],"live":session["livemode"]}))?;return Ok(());
+        }
         if phase=="refund" {
             let case=&saved["cases"][0];let tenant=case["tenant"].as_str().unwrap();let owner=case["owner"].as_str().unwrap();let plan=case["plan"].as_str().unwrap();
             let engine=server::billing::engine::Engine::new(state.clone(),tenant,registry.resolve(tenant).await?)?;
