@@ -8,7 +8,6 @@ pub fn action(data: &Value) -> Result<&str> {
             action,
             "checkout_configuration"
                 | "checkout_options"
-                | "order_payment"
                 | "history"
                 | "payment_methods"
                 | "setup_method"

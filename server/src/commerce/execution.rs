@@ -57,18 +57,4 @@ impl Engine {
         }
         Ok(())
     }
-    pub async fn commerce_payment_details(&self, order: &str) -> Result<serde_json::Value> {
-        self.require_access().await?;
-        let rows=self.read(format!("{} $o isa commerce_order,has cx_id {}; (customer:$c,order:$o) isa commerce_order_owner;let $sub,$discount,$tax,$total=cx_totals($o);fetch {{'id':$o.cx_id,'total':$total,'invoices':[match (order:$o,plan:$p) isa commerce_execution;(plan:$p,invoice:$i) isa bill_invoice_owner;fetch {{'id':$i.bill_key,'amount':$i.bill_amount,'status':$i.bill_status,'url':$i.bill_url,'sequence':$i.bill_sequence}};]}};",self.customer_match(&self.commerce_customer(order).await?)?,q(order))).await?;
-        rows.into_iter()
-            .next()
-            .ok_or_else(|| dog_core::DogError::not_found("Order unavailable").into_anyhow())
-    }
-    async fn commerce_customer(&self, order: &str) -> Result<String> {
-        let rows=self.read(format!("{} $o isa commerce_order,has cx_id {}; (merchant:$t,customer:$c) isa bill_account;(customer:$c,order:$o) isa commerce_order_owner;fetch {{'id':$c.bill_key}};",self.prefix(),q(order))).await?;
-        let row = rows
-            .first()
-            .ok_or_else(|| dog_core::DogError::not_found("Order unavailable").into_anyhow())?;
-        Ok(string(row, "id")?.into())
-    }
 }

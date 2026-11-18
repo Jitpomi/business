@@ -59,13 +59,6 @@ impl DogService<Value, BusinessParams> for FinancialService {
         if action == "checkout_options" {
             return Ok(json!({"plugins":e.attest_checkout_plugins().await?}));
         }
-        if action == "order_payment" {
-            return e
-                .commerce_payment_details(&crate::billing::billing_schema::id(field(
-                    &data, "order_id",
-                )?)?)
-                .await;
-        }
         if action == "history" {
             let id = crate::billing::billing_schema::id(field(&data, "invoice_id")?)?;
             let rows=e.read(format!("{} fetch {{'customer':$c.bill_key,'status':$i.bill_status,'amount':$i.bill_amount,'provider':$i.bill_provider,'updated':$i.bill_updated}};",e.invoice_match(&id)?)).await?;
