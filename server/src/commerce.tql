@@ -88,6 +88,7 @@ fun scope_commerce_pricing($tenant:string,$actor:string,$now:datetime,$p:commerc
 fun create_commerce_pricing($tenant:string,$actor:string,$now:datetime,$p:commerce_pricing)->boolean:
   match (merchant:$t,pricing:$p) isa commerce_pricing_owner;
     let $allowed_1=cx_owner($tenant,$actor,$now,$t);$allowed_1==true;$p has cx_created == $now;
+    {not {$p has cx_plugin $_;};} or {$p has cx_plugin $id_attr;let $id=$id_attr;let $currency=cx_pricing_currency($p);let $supported=cx_plugin_currency($t,$id,$currency,$now);$supported==true;};
   return check;
 fun update_commerce_pricing_enabled($tenant:string,$actor:string,$now:datetime,$p:commerce_pricing,$next:boolean)->boolean:
   match {$next==true;} or {$next==false;}; (merchant:$t,pricing:$p) isa commerce_pricing_owner;
