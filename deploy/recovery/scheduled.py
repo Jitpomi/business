@@ -11,7 +11,17 @@ MAX=32*1024*1024
 def run(args, **kwargs):
     p=subprocess.run([str(a) for a in args],capture_output=True,**kwargs)
     if p.returncode:
-        raise RuntimeError('Backup command failed: '+Path(str(args[0])).name+'; private data was not logged')
+        message=p.stderr.decode(errors='replace')[-8192:] if isinstance(p.stderr,bytes) else str(p.stderr)[-8192:]
+        sensitive=[v for k,v in os.environ.items() if ('TOKEN' in k or 'SECRET' in k or k=='BUSINESS_BACKUP_CONFIG_AGE') and len(v)>4]
+        for line in os.environ.get('BUSINESS_BACKUP_DATABASE_ENV','').splitlines():
+            if '=' in line:
+                try:sensitive+=shlex.split(line.split('=',1)[1])
+                except ValueError:pass
+        for value in sorted(sensitive,key=len,reverse=True):
+            if len(value)>4:message=message.replace(value,'[redacted]')
+        message=re.sub(r'Bearer [A-Za-z0-9_.-]+','Bearer [redacted]',message)
+        print('Backup command '+Path(str(args[0])).name+' failed (exit '+str(p.returncode)+'): '+message,file=sys.stderr)
+        raise RuntimeError('Backup command failed: '+Path(str(args[0])).name)
     return p.stdout
 
 def request(url, token, data=None):
