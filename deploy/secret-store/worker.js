@@ -4,11 +4,21 @@ const reply = (status, text = '') => new Response(text, { status, headers });
 export default {
   async fetch(request, env) {
     // No listing, deletion, browser CORS, or plaintext/decryption capability.
+    const url = new URL(request.url);
+    const snapshot = url.pathname === '/snapshot';
+    const secret = snapshot ? env.BACKUP_READ_TOKEN : env.ACCESS_TOKEN;
     const supplied = request.headers.get('authorization') || '';
     const actualBytes = Buffer.from(supplied);
-    const expectedBytes = Buffer.from(`Bearer ${env.ACCESS_TOKEN}`);
-    if (!env.ACCESS_TOKEN || actualBytes.length !== expectedBytes.length || !timingSafeEqual(actualBytes, expectedBytes)) return reply(401);
-    const url = new URL(request.url);
+    const expectedBytes = Buffer.from(`Bearer ${secret}`);
+    if (!secret || actualBytes.length !== expectedBytes.length || !timingSafeEqual(actualBytes, expectedBytes)) return reply(401);
+    if (snapshot) {
+      if (request.method !== 'GET') return reply(405);
+      if (url.search) return reply(400);
+      const rows = (await env.SECRETS.withSession('first-primary').prepare('SELECT id,ciphertext,created_at FROM secrets ORDER BY id LIMIT 100001').all()).results;
+      const body = JSON.stringify({version:1,rows});
+      if (rows.length>100000 || body.length>32*1024*1024) return reply(413,'Backup exceeds supported bound; no truncated checkpoint produced');
+      return new Response(body,{headers:{...headers,'content-type':'application/json'}});
+    }
     const id = /^\/secrets\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/.exec(url.pathname)?.[1];
     if (!id || url.search) return reply(404);
     try {

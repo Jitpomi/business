@@ -84,6 +84,8 @@ pub(super) enum Command {
     },
     Cancel {
         id: String,
+        #[serde(default)]
+        evidence: Option<String>,
     },
     Resume {
         id: String,

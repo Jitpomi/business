@@ -135,7 +135,9 @@ impl DogService<Value, BusinessParams> for AutomationService {
             } => e.enqueue(&workflow, &key, input).await,
             Command::Schedule { schedule } => e.schedule(schedule).await,
             Command::Approve { id } => e.approve(&id, &actor).await,
-            Command::Cancel { id } => e.cancel(&id).await,
+            Command::Cancel { id, evidence } => {
+                e.cancel_with_evidence(&id, evidence.as_deref()).await
+            }
             Command::Resume { id } => e.resume(&id).await,
             Command::Resolve {
                 id,

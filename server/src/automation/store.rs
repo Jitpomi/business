@@ -265,6 +265,11 @@ impl Store {
                             )
                             .and_then(|v| v["evidence"].as_str())
                             .unwrap_or("")
+                    } else if action == "cancel" {
+                        run.outputs
+                            .get("$cancellation")
+                            .and_then(|v| v["evidence"].as_str())
+                            .unwrap_or("")
                     } else {
                         ""
                     }),

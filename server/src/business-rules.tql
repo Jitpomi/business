@@ -63,7 +63,7 @@ fun automation_control($r: automation_record,$action: string,$now: integer,$curs
     or {$action=="resolve";len($evidence) >= 8;len($evidence) <= 2000;$next=="queued";$count==0;$status=="attention";$old_cursor < $steps;$cursor==$old_cursor + 1;}
     or {$action=="resume";$next=="queued";$count==$attempts;$status=="blocked";$cursor==$old_cursor;}
     or {$action=="cancel";$next=="cancelled";$count==$attempts;$cursor==$old_cursor;{$attempts==0;} or {$deadline <= $now;};
-      {$status=="queued";} or {$status=="running";} or {$status=="retry";} or {$status=="waiting";} or {$status=="approval";} or {$status=="blocked";} or {$status=="attention";};};
+      {$status=="queued";} or {$status=="running";} or {$status=="retry";} or {$status=="waiting";} or {$status=="approval";} or {$status=="blocked";} or {$status=="attention";len($evidence) >= 8;len($evidence) <= 2000;};};
   return check;
 
 fun automation_claim_allowed($r: automation_record,$t: tenant,$at: datetime,$now: integer,$effect: string,$count: integer) -> boolean:

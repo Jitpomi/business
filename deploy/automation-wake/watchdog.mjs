@@ -3,7 +3,7 @@ import {pathToFileURL} from 'node:url';
 import {origin} from './worker.js';
 export async function watchdog(env,request=fetch,time=Math.floor(Date.now()/1000)){
  const base=origin(env.MONITOR_URL);let reason;
- try{const r=await request(new URL('/status',base),{redirect:'manual',headers:{authorization:`Bearer ${env.MONITOR_STATUS_TOKEN}`},signal:AbortSignal.timeout(20000)});if(r.status!==200)throw Error();const s=await r.json();if(!Number.isSafeInteger(s.checked_at)||time-s.checked_at>900||s.checked_at>time+60)reason='heartbeat_stale';else if(s.pending_alerts>0&&(!s.oldest_pending||time-s.oldest_pending>900))reason='alert_delivery_stalled';}
+ try{const r=await request(new URL('/status',base),{redirect:'manual',headers:{authorization:`Bearer ${env.MONITOR_STATUS_TOKEN}`},signal:AbortSignal.timeout(20000)});if(r.status!==200)throw Error();const s=await r.json();if(!Number.isSafeInteger(s.checked_at)||time-s.checked_at>900||s.checked_at>time+60)reason='heartbeat_stale';else if(s.pending_alerts>0&&(!s.oldest_pending||time-s.oldest_pending>900))reason='alert_delivery_stalled';else if(s.backup?.stale===true)reason='backup_stale';}
  catch{reason='monitor_unreachable';}
  if(env.WATCHDOG_DRILL==='true')reason='synthetic_drill';
  if(!reason)return {healthy:true};

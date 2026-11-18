@@ -27,6 +27,14 @@ async fn operational_readiness_and_full_graph_recovery() -> Result<()> {
   let dir=tempfile::tempdir()?;server::database::snapshot::checkpoint(&driver,&source,dir.path()).await?;let original=server::database::snapshot::graph(&driver,&source,&[]).await?;
   ensure!(server::recovery::restore(&driver,dir.path(),&source,&source).await.is_err());ensure!(server::recovery::restore(&driver,dir.path(),&source,"business_dev").await.is_err());
   server::recovery::restore(&driver,dir.path(),&source,&target).await?;ensure!(server::database::snapshot::graph(&driver,&source,&[]).await?==original);ensure!(server::database::snapshot::graph(&driver,&target,&[]).await?==original);ensure!(server::recovery::restore(&driver,dir.path(),&source,&target).await.is_err());
+  // The online checkpoint is manifested from its own transactionally exported graph.
+  let online=tempfile::tempdir()?;server::database::snapshot::online_checkpoint(&driver,&source,online.path()).await?;
+  std::env::set_var("BUSINESS_WRITERS_STOPPED","true");
+  server::operations::refresh_control_policy(&driver,&source,&dir.path().join(format!("{source}.graph.json"))).await?;
+  std::env::remove_var("BUSINESS_WRITERS_STOPPED");
+  let tx=driver.transaction(&source,typedb_driver::TransactionType::Write).await?;tx.query(format!("insert $r isa resource,has resource_id '{}',has name 'Written after checkpoint',has status 'active';",uuid::Uuid::new_v4())).await?;tx.commit().await?;
+  let newer=server::database::snapshot::graph(&driver,&source,&[]).await?;ensure!(newer!=original);
+  let proof=server::recovery::rehearse(&driver,online.path(),&source).await?;ensure!(proof["graph_verified"]==true&&proof["generated_shadow_removed"]==true);ensure!(server::database::snapshot::graph(&driver,&source,&[]).await?==newer,"Rehearsal rolled back source writes");
   // The fence runs before transport dispatch. A forged custom write cannot reach a service.
   let app=axum::Router::new().fallback(||async{axum::http::StatusCode::OK}).layer(axum::middleware::from_fn(server::operations::recovery_guard));
   let r=axum::http::Request::builder().method("GET").uri("/data").header("x-service-method","write").body(axum::body::Body::empty())?;ensure!(app.oneshot(r).await?.status()==503);

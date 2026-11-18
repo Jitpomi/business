@@ -300,14 +300,34 @@ impl Engine {
             .value)
     }
     pub async fn cancel(&self, id: &str) -> Result<Value> {
+        self.cancel_with_evidence(id, None).await
+    }
+    /// Cancellation preserves the uncertain attempt; it does not assert external success or replay it.
+    pub async fn cancel_with_evidence(&self, id: &str, evidence: Option<&str>) -> Result<Value> {
         let old = self
             .store
             .get("run", id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("Run unavailable"))?;
         let mut r: Run = serde_json::from_value(old.value.clone())?;
-        r.status = "cancelled".into();
         let actor = self.store.request_actor()?;
+        if let Some(evidence) = evidence {
+            ensure!(
+                (8..=2000).contains(&evidence.len()),
+                dog_core::DogError::bad_request("Cancellation evidence must contain 8..2000 bytes")
+                    .into_anyhow()
+            );
+            // '$' cannot be a workflow step identifier. The original claim/error remain intact.
+            r.outputs.insert(
+                "$cancellation".into(),
+                json!({"evidence":evidence,"actor":actor,"at":now(),"previous_status":r.status}),
+            );
+        }
+        ensure!(
+            serde_json::to_vec(&r.outputs)?.len() <= 1_048_576,
+            "Cancellation evidence exceeds output limit"
+        );
+        r.status = "cancelled".into();
         Ok(self
             .store
             .control(

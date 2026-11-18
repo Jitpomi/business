@@ -1,0 +1,72 @@
+name: Business encrypted backups
+on:
+  schedule:
+    - cron: '17 9 * * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: business-encrypted-backup
+  cancel-in-progress: false
+jobs:
+  checkpoint:
+    if: vars.BUSINESS_BACKUPS_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: server/target
+          key: backup-build-${{ runner.os }}-${{ hashFiles('server/Cargo.lock', 'server/src/**') }}
+          restore-keys: backup-build-${{ runner.os }}-
+      - name: Install verified encryption tool and build prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler pkg-config libssl-dev
+          curl --fail --silent --show-error --location https://github.com/FiloSottile/age/releases/download/v1.3.2/age-v1.3.2-linux-amd64.tar.gz -o "$RUNNER_TEMP/age.tar.gz"
+          echo 'cbe24006683f8eb669266162894b9a522a1af52f2665fbc63a4bb032ed26ac10  '"$RUNNER_TEMP/age.tar.gz" | sha256sum --check
+          tar -xzf "$RUNNER_TEMP/age.tar.gz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/age" >> "$GITHUB_PATH"
+      - name: Build recovery tools without credentials
+        run: cargo build --locked --manifest-path server/Cargo.toml --bin database_backup --bin recovery
+        env:
+          CARGO_INCREMENTAL: '0'
+      - name: Export, rehearse and encrypt
+        run: |
+          umask 077
+          python3 deploy/recovery/scheduled.py "$RUNNER_TEMP/business-checkpoint"
+        env:
+          BUSINESS_BACKUP_DATABASE_ENV: ${{ secrets.BUSINESS_BACKUP_DATABASE_ENV }}
+          BUSINESS_BACKUP_VAULT_TOKEN: ${{ secrets.BUSINESS_BACKUP_VAULT_TOKEN }}
+          BUSINESS_BACKUP_MONITOR_TOKEN: ${{ secrets.BUSINESS_BACKUP_MONITOR_TOKEN }}
+          BUSINESS_BACKUP_CONFIG_AGE: ${{ secrets.BUSINESS_BACKUP_CONFIG_AGE }}
+          BUSINESS_BACKUP_RECIPIENT: ${{ vars.BUSINESS_BACKUP_RECIPIENT }}
+      - name: Store only recipient-encrypted backup
+        id: archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: business-encrypted-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/business-checkpoint/business-backup.age
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+      - name: Acknowledge offsite checkpoint
+        run: python3 deploy/recovery/acknowledge.py "$RUNNER_TEMP/business-checkpoint/receipt.json"
+        env:
+          BACKUP_ARTIFACT_URL: ${{ steps.archive.outputs.artifact-url }}
+          BUSINESS_BACKUP_MONITOR_TOKEN: ${{ secrets.BUSINESS_BACKUP_MONITOR_TOKEN }}
+      - uses: actions/setup-node@v4
+        if: failure()
+        with:
+          node-version: '22'
+      - name: Alert operations on failure
+        if: failure()
+        run: node deploy/recovery/alert.mjs
+        env:
+          ALERT_TOKEN: ${{ secrets.BUSINESS_OPERATIONS_ALERT_TOKEN }}
+          ALERT_FROM: ${{ vars.BUSINESS_OPERATIONS_ALERT_FROM }}
+          ALERT_TO: ${{ vars.BUSINESS_OPERATIONS_ALERT_TO }}
+      - name: Remove runner plaintext
+        if: always()
+        run: rm -rf -- "$RUNNER_TEMP/business-checkpoint"
