@@ -94,7 +94,7 @@ $c isa bill_customer,has bill_key "customer",has name "Buyer",has bill_email "bu
         write(&adapter,&seller,offer("recurring-donation","donation",0,100,100000,"month")).await?;
         ensure!(write(&adapter,&buyer,offer("forged","product",100,100,100,"once")).await.is_err(),"Buyer created a merchant offer");
         write(&adapter,&seller,r#"match $t isa tenant,has tenant_id "seller";let $now=request_now();
-insert $p isa commerce_pricing,has cx_id "standard",has name "No adjustments",has cx_created == $now,has cx_tax_bp 0,has cx_discount_bp 0,has cx_shipping 0,has cx_enabled true,has cx_instalments true,has cx_limit 12,has cx_deposit_bp 0,has cx_plan_period "week",has cx_plan_period "month";
+insert $p isa commerce_pricing,has cx_id "standard",has cx_currency "USD",has name "No adjustments",has cx_created == $now,has cx_tax_bp 0,has cx_discount_bp 0,has cx_shipping 0,has cx_enabled true,has cx_instalments true,has cx_limit 12,has cx_deposit_bp 0,has cx_plan_period "week",has cx_plan_period "month";
 (merchant:$t,pricing:$p) isa commerce_pricing_owner;fetch {"id":$p.cx_id};"#.into()).await?;
         for (id,f,unit,q,mode,period,count,deposit) in [
             ("purchase","item",1001,3,"once","once",1,0),
@@ -129,7 +129,7 @@ insert $p isa commerce_pricing,has cx_id "standard",has name "No adjustments",ha
         ] {ensure!(write(&adapter,&buyer,query.into()).await.is_err(),"Accepted an immutable order mutation");}
         ensure!(write(&adapter,&buyer,order("purchase","item",1001,3,("once","once",1,0))).await.is_err(),"Duplicate request created another order");
         write(&adapter,&seller,r#"match $t isa tenant,has tenant_id "seller";let $now=request_now();
-insert $p isa commerce_pricing,has cx_id "adjusted",has name "Published adjustment quote",has cx_created == $now,
+insert $p isa commerce_pricing,has cx_id "adjusted",has cx_currency "USD",has name "Published adjustment quote",has cx_created == $now,
 has cx_tax_bp 500,has cx_discount_bp 1000,has cx_shipping 100,has cx_enabled true,
 has cx_instalments false,has cx_limit 12,has cx_deposit_bp 0,has cx_plan_period "month";
 (merchant:$t,pricing:$p) isa commerce_pricing_owner;fetch {"id":$p.cx_id};"#.into()).await?;
@@ -175,6 +175,8 @@ has cx_instalments false,has cx_limit 12,has cx_deposit_bp 0,has cx_plan_period 
         tx.query(format!("match $t isa tenant,has tenant_id 'seller';insert $fact isa commerce_plugin,has cx_id 'usd-only',has cx_plugin 'usd-only',has cx_enabled true,has cx_verified {},has cx_supported_currency 'USD';(merchant:$t,plugin:$fact) isa commerce_plugin_owner;",server::clock::native_utc())).await?;tx.commit().await?;
         let unsupported=r#"match $t isa tenant,has tenant_id "seller";let $now=request_now();insert $p isa commerce_pricing,has cx_id "unsupported-policy",has cx_currency "JPY",has cx_plugin "usd-only",has name "Unsupported policy",has cx_created == $now,has cx_tax_bp 0,has cx_discount_bp 0,has cx_shipping 0,has cx_enabled true,has cx_instalments false,has cx_limit 12,has cx_deposit_bp 0,has cx_plan_period "month";(merchant:$t,pricing:$p) isa commerce_pricing_owner;fetch {"id":$p.cx_id};"#;
         ensure!(write(&adapter,&seller,unsupported.into()).await.is_err(),"Published currency unsupported by selected plugin");
+        let missing_currency=unsupported.replace("has cx_currency \"JPY\",", "").replace("has cx_plugin \"usd-only\",", "").replace("unsupported-policy","missing-currency");
+        ensure!(write(&adapter,&seller,missing_currency).await.is_err(),"New pricing omitted its currency");
         let tx=driver.transaction(&db,TransactionType::Write).await?;
         tx.query(r#"match $c isa bill_customer,has bill_key "customer";$o isa commerce_order,has cx_id "quote-JPY";update $c has bill_method_plugin "bank",has bill_payment_method "method";insert $m isa bill_saved_method,has bill_key "method-fact",has method_plugin "bank",has method_ref "method",has method_automatic true,has method_active true,has method_pending false,has method_verified_at 2026-11-18T00:00:00,has method_currency "USD";$p isa bill_plan,has bill_key "yen-plan",has name "Yen plan",has bill_amount 1001,has bill_due_days 0,has bill_anchor 0,has bill_next 0,has bill_sequence 0,has bill_interval "month",has bill_status "active";(customer:$c,plan:$p) isa bill_plan_owner;(order:$o,plan:$p) isa commerce_execution;(customer:$c,method:$m) isa bill_method_owner;"#).await?;tx.commit().await?;
         let tx=driver.transaction(&db,TransactionType::Read).await?;

@@ -177,7 +177,7 @@ recovery and provider production onboarding pass their separate acceptance gates
 ## Currency and saved-method capabilities
 
 Currency is immutable on offers and orders, and explicit on new pricing versions.
-Historical pricing without a currency and non-commerce billing plans retain their
+New scoped pricing writes must include a currency. Historical pricing without a currency and non-commerce billing plans retain their
 original USD meaning. Invoice and refund currency is derived from the immutable
 order, never from a mutable customer preference or browser label. Native checks
 reject cross-currency lines, pricing, payment observations and refund observations.
