@@ -13,6 +13,7 @@ impl Providers {
         }
         let id = field(invoice, "id")?;
         let customer = field(invoice, "customer")?;
+        let currency = field(invoice, "currency")?;
         let payments = self
             .list_history("/invoice_payments", "invoice", id)
             .await?;
@@ -20,7 +21,7 @@ impl Providers {
         for payment in payments {
             ensure!(
                 payment["invoice"] == id
-                    && payment["currency"] == "usd"
+                    && payment["currency"] == currency
                     && payment["livemode"] == self.live,
                 "Payment binding mismatch"
             );
@@ -33,7 +34,7 @@ impl Providers {
                         .stripe(Method::GET, &format!("/payment_intents/{pi}"), "", &[])
                         .await?;
                     ensure!(
-                        intent["customer"] == customer && intent["currency"] == "usd",
+                        intent["customer"] == customer && intent["currency"] == currency,
                         "Payment customer mismatch"
                     );
                     intent["latest_charge"].as_str().map(str::to_owned)
@@ -51,7 +52,7 @@ impl Providers {
                     .stripe(Method::GET, &format!("/charges/{charge_id}"), "", &[])
                     .await?;
                 ensure!(
-                    charge["customer"] == customer && charge["currency"] == "usd",
+                    charge["customer"] == customer && charge["currency"] == currency,
                     "Charge customer mismatch"
                 );
                 item["charge_amount_cents"] = charge["amount"].clone();
@@ -60,18 +61,18 @@ impl Providers {
                 item["detail_note"]=json!("Refunds and disputes below apply to this payment. A payment may cover more than one invoice; these amounts do not change the invoice balance shown above.");
                 let refunds = self.list_history("/refunds", "charge", &charge_id).await?;
                 let disputes = self.list_history("/disputes", "charge", &charge_id).await?;
-                item["refunds"] = json!(project_adjustments(&refunds, &charge_id)?);
-                item["disputes"] = json!(project_adjustments(&disputes, &charge_id)?);
+                item["refunds"] = json!(project_adjustments(&refunds, &charge_id, currency)?);
+                item["disputes"] = json!(project_adjustments(&disputes, &charge_id, currency)?);
             }
             history.push(item);
         }
         Ok(
-            json!({"supported":true,"invoice_status":invoice["status"],"amount_paid_cents":invoice["amount_paid"],"amount_remaining_cents":invoice["amount_remaining"],"total_cents":invoice["total"],"payments":history,"observed_at":crate::clock::unix_seconds()}),
+            json!({"supported":true,"currency":currency.to_ascii_uppercase(),"invoice_status":invoice["status"],"amount_paid_cents":invoice["amount_paid"],"amount_remaining_cents":invoice["amount_remaining"],"total_cents":invoice["total"],"payments":history,"observed_at":crate::clock::unix_seconds()}),
         )
     }
 }
-fn project_adjustments(values: &[Value], charge: &str) -> Result<Vec<Value>> {
-    values.iter().map(|v| {ensure!(v["charge"]==charge&&v["currency"]=="usd","Adjustment binding mismatch");ensure!(v["amount"].as_i64().is_some_and(|n|n>=0),"Invalid adjustment amount");Ok(json!({"id":v["id"],"amount_cents":v["amount"],"status":v["status"],"created_at":v["created"],"reason":v["reason"]}))}).collect()
+fn project_adjustments(values: &[Value], charge: &str, currency: &str) -> Result<Vec<Value>> {
+    values.iter().map(|v| {ensure!(v["charge"]==charge&&v["currency"]==currency,"Adjustment binding mismatch");ensure!(v["amount"].as_i64().is_some_and(|n|n>=0),"Invalid adjustment amount");Ok(json!({"id":v["id"],"amount_cents":v["amount"],"status":v["status"],"created_at":v["created"],"reason":v["reason"]}))}).collect()
 }
 #[cfg(test)]
 mod tests {
@@ -79,9 +80,10 @@ mod tests {
     #[test]
     fn adjustments_are_bound_and_preserve_pending_status() {
         let row = json!({"id":"re_test","charge":"ch_test","currency":"usd","amount":125,"status":"pending","created":1,"reason":"requested_by_customer","metadata":{"private":"hidden"}});
-        let values = project_adjustments(std::slice::from_ref(&row), "ch_test").unwrap();
+        let values = project_adjustments(std::slice::from_ref(&row), "ch_test", "usd").unwrap();
         assert_eq!(values[0]["status"], "pending");
         assert!(values[0].get("metadata").is_none());
-        assert!(project_adjustments(&[row], "ch_other").is_err());
+        assert!(project_adjustments(std::slice::from_ref(&row), "ch_other", "usd").is_err());
+        assert!(project_adjustments(&[row], "ch_test", "jpy").is_err());
     }
 }

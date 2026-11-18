@@ -4,7 +4,7 @@ define
 attribute cx_id, value string;
 attribute cx_created, value datetime;
 attribute cx_kind, value string @values("product", "service", "donation");
-attribute cx_currency, value string @values("USD");
+attribute cx_currency, value string @values("USD", "EUR", "GBP", "CAD", "AUD", "JPY");
 attribute cx_unit, value integer @range(0..99999999);
 attribute cx_min, value integer @range(50..99999999);
 attribute cx_max, value integer @range(50..99999999);
@@ -32,7 +32,7 @@ commerce_offer plays commerce_catalogue:offer @card(1);
 # A published pricing policy is a merchant-approved quote, not a tax calculator.
 entity commerce_pricing, owns cx_id @key, owns cx_created @card(1), owns name @card(1),
   owns cx_tax_bp @card(1), owns cx_discount_bp @card(1), owns cx_shipping @card(1), owns cx_enabled @card(1),
-  owns cx_instalments @card(1), owns cx_limit @card(1), owns cx_deposit_bp @card(1), owns cx_plan_period @card(1..3);
+  owns cx_currency @card(0..1), owns cx_instalments @card(1), owns cx_limit @card(1), owns cx_deposit_bp @card(1), owns cx_plan_period @card(1..3);
 relation commerce_pricing_owner, relates merchant @card(1), relates pricing @card(1);
 tenant plays commerce_pricing_owner:merchant;
 commerce_pricing plays commerce_pricing_owner:pricing @card(1);
@@ -133,7 +133,7 @@ fun cx_line_valid($o:commerce_order,$line:commerce_line)->boolean:
 fun cx_order_terms_valid($tenant:string,$actor:string,$now:datetime,$o:commerce_order)->boolean:
   match $o has cx_mode $mode,has cx_interval $period,has cx_count $count,has cx_deposit $deposit;
     (customer:$c,pricing:$p,order:$o) isa commerce_order_owner;
-    $p has cx_enabled true;(merchant:$merchant,pricing:$p) isa commerce_pricing_owner;
+    $p has cx_enabled true;let $currency=cx_pricing_currency($p);$o has cx_currency == $currency;(merchant:$merchant,pricing:$p) isa commerce_pricing_owner;
     (merchant:$merchant,customer:$c) isa bill_account;
     $t isa tenant,has tenant_id == $tenant;$i isa identity,has identity_id == $actor;
     let $buyer=bill_buyer($i,$t,$c,$now);$buyer==true;
@@ -205,7 +205,8 @@ fun request_commerce_due($tenant:string,$actor:string,$now:datetime,$o:commerce_
 attribute cx_plugin, value string;
 attribute cx_refunds, value boolean;
 attribute cx_verified, value datetime;
-entity commerce_plugin, owns cx_id @key,owns cx_plugin @card(0..1),owns cx_enabled @card(0..1),owns cx_refunds @card(0..1),owns cx_verified @card(0..1);
+attribute cx_supported_currency,value string @values("USD", "EUR", "GBP", "CAD", "AUD", "JPY");
+entity commerce_plugin, owns cx_id @key,owns cx_plugin @card(0..1),owns cx_enabled @card(0..1),owns cx_refunds @card(0..1),owns cx_verified @card(0..1),owns cx_supported_currency @card(0..6);
 relation commerce_plugin_owner,relates merchant @card(1),relates plugin @card(1);
 tenant plays commerce_plugin_owner:merchant;
 commerce_plugin plays commerce_plugin_owner:plugin @card(1);
@@ -231,6 +232,7 @@ fun cx_order_live($merchant:tenant,$o:commerce_order,$now:datetime)->boolean:
     let $buyer_ok=bill_buyer($actor,$buyer,$c,$now);$buyer_ok==true;
     not {(order:$o) isa commerce_cancellation;};
     $pricing has cx_plugin $plugin_attr;let $plugin=$plugin_attr;let $ready=cx_plugin_ready($merchant,$plugin,$now);$ready==true;
+    $o has cx_currency $currency_attr;let $currency=$currency_attr;let $supported=cx_plugin_currency($merchant,$plugin,$currency,$now);$supported==true;
   return check;
 fun cx_can_activate($merchant:tenant,$o:commerce_order,$now:datetime)->boolean:
   match let $live=cx_order_live($merchant,$o,$now);$live==true;
@@ -245,6 +247,7 @@ fun create_commerce_signatory($tenant:string,$actor:string,$now:datetime,$link:c
     $pricing has cx_enabled true;not {(order:$o,offer:$withdrawn) isa commerce_line;$withdrawn has cx_enabled false;};
     (merchant:$merchant,customer:$c) isa bill_account;
     $pricing has cx_plugin $selected;let $plugin=$selected;let $ready=cx_plugin_ready($merchant,$plugin,$now);$ready==true;
+    $o has cx_currency $currency_attr;let $currency=$currency_attr;let $supported=cx_plugin_currency($merchant,$plugin,$currency,$now);$supported==true;
   return check;
 fun scope_commerce_signatory($tenant:string,$actor:string,$now:datetime,$link:commerce_signatory)->boolean:
   match $link links(order:$o);let $allowed=scope_commerce_order($tenant,$actor,$now,$o);$allowed==true;
@@ -345,7 +348,7 @@ fun cx_refund_claim($t:tenant,$r:commerce_refund,$now:datetime)->boolean:
 fun cx_refund_observation($r:commerce_refund,$request:string,$invoice:string,$plugin:string,$amount:integer,$currency:string,$external:string,$next:string)->boolean:
   match $r has cx_id == $request,has cx_amount == $amount,has cx_refund_status $old;
     (request:$r,invoice:$i) isa commerce_refund_owner;$i has bill_external_id == $invoice,has bill_provider == $plugin;
-    $currency=="USD";$external!="";{not {$r has cx_external $unbound;};} or {$r has cx_external == $external;};
+    let $expected=bill_invoice_currency($i);$currency==$expected;$external!="";{not {$r has cx_external $unbound;};} or {$r has cx_external == $external;};
     {$old=="processing";} or {$old=="attention";} or {$old=="pending";};
     {$next=="pending";} or {$next=="succeeded";} or {$next=="failed";};
   return check;
@@ -426,4 +429,42 @@ fun request_commerce_accepted($tenant:string,$actor:string,$now:datetime,$o:comm
 
 fun cx_refund_not_submitted($r:commerce_refund)->boolean:
   match $r has cx_refund_status "processing";not {$r has cx_external $_;};
+  return check;
+
+# Currency is part of immutable order terms. Missing pricing currency identifies only
+# historical USD pricing; new pricing versions explicitly carry their currency.
+fun cx_pricing_currency($p:commerce_pricing)->string:
+  match {$p has cx_currency $value;let $currency=$value;}
+    or {not {$p has cx_currency $_;};let $currency="USD";};
+  return first $currency;
+fun cx_plugin_currency($merchant:tenant,$id:string,$currency:string,$now:datetime)->boolean:
+  match let $ready=cx_plugin_ready($merchant,$id,$now);$ready==true;
+    (merchant:$merchant,plugin:$fact) isa commerce_plugin_owner;
+    $fact has cx_plugin == $id,has cx_supported_currency == $currency;
+  return check;
+fun bill_plan_currency($p:bill_plan)->string:
+  match {(plan:$p,order:$o) isa commerce_execution;$o has cx_currency $value;let $currency=$value;}
+    or {not {(plan:$p) isa commerce_execution;};let $currency="USD";};
+  return first $currency;
+fun bill_invoice_currency($i:bill_invoice)->string:
+  match (invoice:$i,plan:$p) isa bill_invoice_owner;let $currency=bill_plan_currency($p);
+  return first $currency;
+fun request_pricing_currency($tenant:string,$actor:string,$now:datetime,$p:commerce_pricing)->string @meta("dog.security.context","true"):
+  match let $allowed=scope_commerce_pricing($tenant,$actor,$now,$p);$allowed==true;let $currency=cx_pricing_currency($p);
+  return first $currency;
+fun request_invoice_currency($tenant:string,$actor:string,$now:datetime,$i:bill_invoice)->string @meta("dog.security.context","true"):
+  match let $allowed=scope_bill_invoice($tenant,$actor,$now,$i);$allowed==true;let $currency=bill_invoice_currency($i);
+  return first $currency;
+
+fun request_plan_currency($tenant:string,$actor:string,$now:datetime,$p:bill_plan)->string @meta("dog.security.context","true"):
+  match let $allowed=scope_bill_plan($tenant,$actor,$now,$p);$allowed==true;let $currency=bill_plan_currency($p);
+  return first $currency;
+
+# A saved method may support fewer currencies than its financial connection.
+attribute method_currency,value string @values("USD", "EUR", "GBP", "CAD", "AUD", "JPY");
+bill_saved_method owns method_currency @card(0..6);
+fun bill_method_supports_plan($c:bill_customer,$p:bill_plan)->boolean:
+  match let $currency=bill_plan_currency($p);$c has bill_method_plugin $plugin,has bill_payment_method $ref;
+    (customer:$c,method:$m) isa bill_method_owner;$m has method_plugin == $plugin,has method_ref == $ref;
+    {$m has method_currency == $currency;} or {not {$m has method_currency $_;};$currency=="USD";};
   return check;

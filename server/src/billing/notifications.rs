@@ -17,7 +17,7 @@ impl Engine {
         self.reconcile(id).await?;
         let now = crate::clock::unix_seconds();
         let interval = self.runtime.reminder_days;
-        let rows=self.read(format!(r#"{} let $kind,$bucket=bill_notice_decision($i,{now},{interval});fetch {{"email":$c.bill_email,"description":$i.name,"amount":$i.bill_amount,"due":$i.bill_next,"status":$i.bill_status,"url":$i.bill_url,"kind":$kind,"bucket":$bucket}};"#,self.invoice_match(id)?)).await?;
+        let rows=self.read(format!(r#"{} let $kind,$bucket=bill_notice_decision($i,{now},{interval});fetch {{"email":$c.bill_email,"description":$i.name,"amount":$i.bill_amount,"currency":bill_invoice_currency($i),"due":$i.bill_next,"status":$i.bill_status,"url":$i.bill_url,"kind":$kind,"bucket":$bucket}};"#,self.invoice_match(id)?)).await?;
         let Some(row) = rows.first() else {
             return Ok(0);
         };
@@ -37,13 +37,14 @@ impl Engine {
         }
         let recipient = string(row, "email")?;
         self.runtime.validate_delivery(recipient)?;
-        let amount = number(row, "amount")?;
+        let amount =
+            crate::finance::display_money(string(row, "currency")?, number(row, "amount")?)?;
         let description = string(row, "description")?;
         let url = string(row, "url")?;
         let (subject, body) = if kind == "receipt" {
-            ("Payment received",format!("Thank you. Your invoice {id} for {description} is marked paid.\nAmount: USD {}.{:02}\nView your invoice: {url}\n",amount/100,amount%100))
+            ("Payment received",format!("Thank you. Your invoice {id} for {description} is marked paid.\nAmount: {amount}\nView your invoice: {url}\n"))
         } else {
-            (if now>=due {"Payment reminder"} else {"Your invoice"},format!("Your invoice {id} for {description} is {}.\nAmount: USD {}.{:02}\nDue: {} UTC\nView and pay securely: {url}\nIf you need more time, please contact us. If payment is already processing, no further action is needed.\n",if now>=due{"due"}else{"ready"},amount/100,amount%100,chrono::DateTime::from_timestamp(due,0).ok_or_else(||anyhow::anyhow!("Invalid date"))?.format("%Y-%m-%d")))
+            (if now>=due {"Payment reminder"} else {"Your invoice"},format!("Your invoice {id} for {description} is {}.\nAmount: {amount}\nDue: {} UTC\nView and pay securely: {url}\nIf you need more time, please contact us. If payment is already processing, no further action is needed.\n",if now>=due{"due"}else{"ready"},chrono::DateTime::from_timestamp(due,0).ok_or_else(||anyhow::anyhow!("Invalid date"))?.format("%Y-%m-%d")))
         };
         let subject = if !self.runtime.sandbox {
             subject.to_owned()

@@ -96,7 +96,7 @@ impl Engine {
         if self.runtime.notification.is_none() {
             return Ok(());
         }
-        let rows=self.read(format!("{} (merchant:$t,customer:$c) isa bill_account;(customer:$c,plan:$p) isa bill_plan_owner;(plan:$p,invoice:$i) isa bill_invoice_owner;(invoice:$i,request:$r) isa commerce_refund_owner;$r has cx_refund_status 'succeeded',has cx_id $id;let $key=$id+'-refund-receipt';not {{$n isa bill_notice,has bill_key == $key;}};select $r,$i,$c,$key;limit 10;fetch {{'id':$r.cx_id,'invoice':$i.bill_key,'amount':$r.cx_amount,'email':$c.bill_email}};",self.prefix())).await?;
+        let rows=self.read(format!("{} (merchant:$t,customer:$c) isa bill_account;(customer:$c,plan:$p) isa bill_plan_owner;(plan:$p,invoice:$i) isa bill_invoice_owner;(invoice:$i,request:$r) isa commerce_refund_owner;$r has cx_refund_status 'succeeded',has cx_id $id;let $key=$id+'-refund-receipt';not {{$n isa bill_notice,has bill_key == $key;}};select $r,$i,$c,$key;limit 10;fetch {{'id':$r.cx_id,'invoice':$i.bill_key,'amount':$r.cx_amount,'currency':bill_invoice_currency($i),'email':$c.bill_email}};",self.prefix())).await?;
         for row in rows {
             let key = format!("{}-refund-receipt", string(&row, "id")?);
             let recipient = string(&row, "email")?;
@@ -104,8 +104,9 @@ impl Engine {
             let at = crate::clock::unix_seconds();
             let invoice = string(&row, "invoice")?;
             self.write(format!("{} not {{$n isa bill_notice,has bill_key {};}};select $t,$i;distinct;insert $n isa bill_notice,has bill_key {},has bill_status 'sending',has bill_updated {at};(invoice:$i,notice:$n) isa bill_notice_owner;fetch {{'id':$n.bill_key}};",self.invoice_match(invoice)?,q(&key),q(&key))).await?;
-            let amount = number(&row, "amount")?;
-            let result=self.runtime.send(Message{to:recipient.into(),key:key.clone(),subject:"[TEST — no real payment] Refund confirmed".into(),text:format!("Your refund of USD {}.{:02} for invoice {invoice} is confirmed by the payment provider. Request: {}.",amount/100,amount%100,string(&row,"id")?)}).await;
+            let amount =
+                crate::finance::display_money(string(&row, "currency")?, number(&row, "amount")?)?;
+            let result=self.runtime.send(Message{to:recipient.into(),key:key.clone(),subject:"[TEST — no real payment] Refund confirmed".into(),text:format!("Your refund of {amount} for invoice {invoice} is confirmed by the payment provider. Request: {}.",string(&row,"id")?)}).await;
             let status = result
                 .map(|id| format!("accepted:{id}"))
                 .unwrap_or_else(|_| "attention".into());

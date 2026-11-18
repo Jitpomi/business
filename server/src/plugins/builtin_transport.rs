@@ -282,7 +282,7 @@ impl Providers {
     }
     fn mercury_invoice_body(&self, input: &InvoiceRequest) -> Result<Value> {
         ensure!(
-            input.mode == Mode::Manual,
+            input.mode == Mode::Manual && input.currency == "USD",
             "Mercury API does not implement saved-card autopay"
         );
         let destination = self
@@ -314,7 +314,7 @@ impl Providers {
                     ("collection_method", "send_invoice"),
                     ("auto_advance", "false"),
                     ("pending_invoice_items_behavior", "exclude"),
-                    ("currency", "usd"),
+                    ("currency", &input.currency.to_ascii_lowercase()),
                     (
                         "due_date",
                         &input.due.max(crate::clock::unix_seconds() + 60).to_string(),
@@ -341,7 +341,7 @@ impl Providers {
                 ("customer", &input.customer),
                 ("invoice", id),
                 ("amount", &input.amount.to_string()),
-                ("currency", "usd"),
+                ("currency", &input.currency.to_ascii_lowercase()),
                 ("description", &input.description),
             ]),
         )
@@ -415,6 +415,7 @@ impl Providers {
     }
 }
 pub struct InvoiceRequest {
+    pub currency: String,
     pub id: String,
     pub customer: String,
     pub provider: Provider,

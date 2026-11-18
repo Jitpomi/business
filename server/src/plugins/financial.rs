@@ -43,11 +43,12 @@ impl BuiltinFinancial {
     }
     fn request(&self, r: &InvoiceRequest) -> Result<transport::InvoiceRequest> {
         ensure!(
-            r.currency == "USD",
-            "Plugin currently supports USD invoices only"
+            self.currencies().contains(&r.currency.as_str()),
+            "Selected plugin does not support this invoice currency"
         );
         Ok(transport::InvoiceRequest {
             id: r.id.clone(),
+            currency: r.currency.clone(),
             customer: r.customer.clone(),
             provider: self.provider,
             mode: if r.automatic {
@@ -86,6 +87,19 @@ impl BuiltinFinancial {
 }
 #[async_trait]
 impl FinancialPlugin for BuiltinFinancial {
+    fn currencies(&self) -> &'static [&'static str] {
+        match self.provider {
+            Provider::Stripe => &["USD", "EUR", "GBP", "CAD", "AUD", "JPY"],
+            Provider::Mercury => &["USD"],
+        }
+    }
+    fn method_currencies(&self, method: &SavedMethod) -> &'static [&'static str] {
+        if self.provider == Provider::Stripe && method.kind == "card" {
+            self.currencies()
+        } else {
+            &["USD"]
+        }
+    }
     async fn webhook(
         &self,
         headers: &std::collections::HashMap<String, String>,

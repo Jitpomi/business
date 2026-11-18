@@ -48,6 +48,7 @@ fn mercury_invoices_do_not_require_a_stripe_account() {
     )
     .unwrap();
     let input = InvoiceRequest {
+        currency: "USD".into(),
         id: "invoice".into(),
         customer: "customer".into(),
         provider: Provider::Mercury,
