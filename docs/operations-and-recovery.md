@@ -105,3 +105,66 @@ login; preserve/reconfigure the origin secret consistently. Do not claim an
 IdP outage or lost external provider account has been recovered by a TypeDB
 restore. Retain the completed rehearsal's measured recovery time and exact
 checkpoint timestamp rather than promising an unmeasured RPO/RTO.
+
+## Daily encrypted offsite checkpoints
+
+`Business encrypted backups` runs daily at 09:17 UTC, independently of an
+operator computer, and supports manual dispatch. It retains each successful
+recipient-encrypted GitHub artifact for 30 days. GitHub schedules can be delayed;
+a failed run sends an immediate operations email, and the independent monitor
+alerts if the last acknowledged checkpoint is over 36 hours old. Existing
+backups are never replaced by a failed run. Repository access and artifact
+retention remain external dependencies; keep the separately verified Drive
+recovery checkpoint and password-manager identity as another recovery path.
+
+The job receives only the development database connection, dedicated read-only
+ciphertext/monitor snapshot credentials, the public age recipient and an already
+encrypted configuration capsule. It does not receive the age recovery identity,
+plaintext vault master key, payment credentials or decrypted runtime configuration.
+Build steps receive no backup credentials. Only `business-backup.age` is uploaded;
+runner plaintext is removed afterwards. Secrets are never embedded in commands
+or logs. Re-seal the configuration capsule after runtime credential/configuration
+changes; changing the recipient requires a coordinated new capsule and a tested
+recovery identity, never silently rotating away the only usable key.
+
+The native TypeDB online export is transactionally consistent while source
+writes continue. Its schema/data are imported into an isolated generated database
+before inventory, records and relationship-role manifests are computed. The
+ciphertext store is immutable and is captured *after* the TypeDB export, ensuring
+all committed connection references are included. A second independent graph
+restore verifies the checkpoint. Temporary databases are removed only when this
+job created them and verification succeeded; failed targets remain for review.
+The job checks ciphertext reference completeness but cannot decrypt credentials
+without the separately held recovery identity. Operator drills test that stage.
+
+The offsite artifact is acknowledged to the monitor only after upload succeeds,
+with its SHA-256, checkpoint time and verified-graph result. Old receipts cannot
+advance freshness. Artifact retention is 30 days, not indefinite archiving or a
+continuous backup guarantee. The daily recovery point can be up to one day old;
+alerts at 36 hours expose missed runs instead of claiming a newer recovery point.
+
+For recovery, download the encrypted artifact, use the password-manager age
+identity to decrypt it to a private ZIP, and verify/unpack it with `bundle.py`.
+Decrypt its nested `configuration.age` with the same identity, then verify/unpack
+that configuration ZIP into a separate private directory. This restores runtime
+and monitor configuration without ever giving the backup runner the private key.
+Restore TypeDB and SQL stores as above, using a new database/store and
+BUSINESS_RECOVERY_MODE=true. Do not enable workers or payment writes until the
+restored native policies, credentials and provider journals have been verified.
+
+## Closing uncertain automation attempts
+
+An `attention` run is not proof that an external action failed or succeeded.
+Cancellation of such a run requires 8–2000 bytes of evidence under the native
+`automation_control` policy and an active tenant owner in the same write
+transaction. The API accepts `action: cancel`, `id`, and `evidence`.
+The original attempt, idempotency key, workflow revision, cursor and error are
+retained; an audit entry records actor, time and evidence. Cancellation never
+calls a provider, changes an invoice/payment status or asserts successful
+completion. A later worker delivery remains a no-op for the cancelled run.
+
+The control-policy update is explicit: pause writers, take a fresh checkpoint,
+and use `operations refresh-control-policy DEVELOPMENT_DATABASE GRAPH_CHECKPOINT.json`.
+It refuses a stale graph or production database, updates only the canonical
+control function in one schema transaction, and checks that the graph remains
+identical. There are no startup schema writes or authorization fallbacks.

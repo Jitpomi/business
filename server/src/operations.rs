@@ -154,6 +154,46 @@ async fn readiness(State(m): State<Monitor>, headers: HeaderMap) -> Response {
     };
     (status, [("cache-control", "no-store")], Json(body)).into_response()
 }
+/// Explicit, graph-preserving development update of this release's single control function.
+pub async fn refresh_control_policy(
+    driver: &typedb_driver::TypeDBDriver,
+    name: &str,
+    checkpoint: &std::path::Path,
+) -> Result<()> {
+    crate::database::target(name)?;
+    ensure!(
+        crate::database::development_version(name).is_some()
+            || name.starts_with("business_backend_test_"),
+        "Development database required"
+    );
+    ensure!(
+        std::env::var("BUSINESS_WRITERS_STOPPED").as_deref() == Ok("true"),
+        "Quiesce writers before native policy update"
+    );
+    let expected: std::collections::BTreeMap<String, usize> =
+        serde_json::from_slice(&std::fs::read(checkpoint)?)?;
+    ensure!(
+        crate::database::snapshot::graph(driver, name, &[]).await? == expected,
+        "Checkpoint is stale; no policy changed"
+    );
+    let body = crate::database::BUSINESS_RULES
+        .split("fun automation_control(")
+        .nth(1)
+        .and_then(|s| s.split("fun automation_claim_allowed(").next())
+        .ok_or_else(|| anyhow::anyhow!("Canonical control policy missing"))?;
+    let tx = driver
+        .transaction(name, typedb_driver::TransactionType::Schema)
+        .await?;
+    tx.query(format!("redefine fun automation_control({body}"))
+        .await?;
+    tx.commit().await?;
+    ensure!(
+        crate::database::snapshot::graph(driver, name, &[]).await? == expected,
+        "Graph changed during policy update; retain checkpoint and investigate"
+    );
+    crate::database::verify_runtime(driver, name).await?;
+    Ok(())
+}
 #[cfg(test)]
 #[path = "../tests/unit/operations.rs"]
 mod tests;

@@ -30,6 +30,7 @@ async fn main() -> Result<()> {
             )
             .await?;
             match command {
+    "rehearse"=>{let report=server::recovery::rehearse(&driver,Path::new(a(2)?),a(3)?).await?;println!("{report}");Ok(())},
     "restore"=>{server::recovery::restore(&driver,Path::new(a(2)?),a(3)?,a(4)?).await?;println!("New recovery shadow matches the complete checkpoint graph and native schema");Ok(())},
     "verify-vault"=>{let state=server::typedb::TypeDBState{driver:driver.into(),database:a(2)?.into()};let report=server::recovery::verify_vault(&state,Path::new(a(3)?),&std::env::var("AUTOMATION_MASTER_KEY_B64")?,std::env::var("OPERATIONS_VAULT_CANARY_REF").ok().as_deref()).await?;println!("{report}");Ok(())},
     _=>anyhow::bail!("Use encrypt INPUT OUTPUT KEY, decrypt INPUT OUTPUT KEY, restore CHECKPOINT SOURCE NEW_SHADOW, or verify-vault SHADOW SQL")

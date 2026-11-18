@@ -10,7 +10,14 @@ async fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let command = args.get(1).map(String::as_str).unwrap_or("");
     ensure!(
-        ["inspect", "export", "restore-verify", "verify-preserved"].contains(&command),
+        [
+            "inspect",
+            "export",
+            "export-online",
+            "restore-verify",
+            "verify-preserved"
+        ]
+        .contains(&command),
         "Use inspect/export/restore-verify and an explicit development database"
     );
     let name = args
@@ -73,7 +80,10 @@ async fn main() -> Result<()> {
         println!("All {} existing entities/relations, their attributes and model record counts preserved; upgraded schema verified",before.len());
         return Ok(());
     }
-    if command == "export" {
+    if command == "export-online" {
+        server::database::snapshot::online_checkpoint(&driver, name, directory).await?;
+        println!("Transactional online checkpoint exported and independently manifested");
+    } else if command == "export" {
         server::database::snapshot::checkpoint(&driver, name, directory).await?;
         println!("Backup exported for {name}; restore verification still required");
     } else {

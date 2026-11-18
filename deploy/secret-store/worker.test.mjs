@@ -27,3 +27,18 @@ test('immutable ciphertext survives independent requests without listing or dele
  assert.equal((await call('PUT','plaintext!')).status,400);
  assert.equal((await call('PUT','A'.repeat(262145))).status,413);
 });
+test('backup snapshot has its own read-only credential and preserves every ciphertext column',async()=>{
+ const {DatabaseSync}=await import('node:sqlite');const db=new DatabaseSync(':memory:');db.exec('CREATE TABLE secrets(id TEXT PRIMARY KEY,ciphertext TEXT,created_at TEXT)');db.prepare('INSERT INTO secrets VALUES(?,?,?)').run(id,'A'.repeat(40),'2026-11-18 07:00:00');
+ const scoped={
+  ACCESS_TOKEN:token,BACKUP_READ_TOKEN:'b'.repeat(43),
+  SECRETS:{withSession(mode){
+   assert.equal(mode,'first-primary');
+   return {prepare(sql){return {async all(){return {results:db.prepare(sql).all()};}};}};
+  }}
+ };
+ const req=(path,auth,method='GET')=>new Request('https://store.example'+path,{method,headers:{authorization:'Bearer '+auth}});
+ assert.equal((await worker.fetch(req('/snapshot',token),scoped)).status,401);
+ assert.equal((await worker.fetch(req('/secrets/'+id,scoped.BACKUP_READ_TOKEN),scoped)).status,401);
+ assert.equal((await worker.fetch(req('/snapshot',scoped.BACKUP_READ_TOKEN,'POST'),scoped)).status,405);
+ const response=await worker.fetch(req('/snapshot',scoped.BACKUP_READ_TOKEN),scoped);assert.equal(response.status,200);assert.deepEqual((await response.json()).rows,[{id,ciphertext:'A'.repeat(40),created_at:'2026-11-18 07:00:00'}]);assert.equal(db.prepare('SELECT count(*) AS n FROM secrets').get().n,1);
+});

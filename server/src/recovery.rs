@@ -118,6 +118,17 @@ pub async fn restore(
     crate::database::verify_runtime(driver, target).await?;
     Ok(())
 }
+/// Automated rehearsal deletes only the target generated inside this call, and only after verification.
+pub async fn rehearse(
+    driver: &typedb_driver::TypeDBDriver,
+    directory: &Path,
+    source: &str,
+) -> Result<Value> {
+    let target = format!("business_backend_test_{}", uuid::Uuid::new_v4());
+    restore(driver, directory, source, &target).await?;
+    driver.databases().get(&target).await?.delete().await?;
+    Ok(json!({"graph_verified":true,"native_schema_verified":true,"generated_shadow_removed":true}))
+}
 /// Verify a D1 SQL export as a complete independent ciphertext store. No remote secret service is contacted.
 pub async fn verify_vault(
     state: &crate::typedb::TypeDBState,

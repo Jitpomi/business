@@ -248,3 +248,60 @@ pub async fn checkpoint(
     std::fs::write(manifest, serde_json::to_vec_pretty(&before)?)?;
     Ok(())
 }
+
+/// Online exports are transactional at the server. Build manifests from an isolated import of
+/// that exact export, never from separately timed source reads while writers are active.
+pub async fn online_checkpoint(
+    driver: &TypeDBDriver,
+    name: &str,
+    directory: &std::path::Path,
+) -> anyhow::Result<()> {
+    for suffix in [
+        "tql",
+        "typedb",
+        "records.json",
+        "graph.json",
+        "inventory.json",
+    ] {
+        anyhow::ensure!(
+            !directory.join(format!("{name}.{suffix}")).exists(),
+            "Checkpoint destination contains an existing attempt"
+        );
+    }
+    let schema = directory.join(format!("{name}.tql"));
+    let data = directory.join(format!("{name}.typedb"));
+    driver
+        .databases()
+        .get(name)
+        .await?
+        .export_to_file(&schema, &data)
+        .await?;
+    let reference = format!("business_backend_test_{}", uuid::Uuid::new_v4());
+    anyhow::ensure!(
+        !driver.databases().contains(&reference).await?,
+        "Reference target exists"
+    );
+    driver
+        .databases()
+        .import_from_file(&reference, std::fs::read_to_string(schema)?, data)
+        .await?;
+    crate::database::verify_runtime(driver, &reference).await?;
+    for (suffix, value) in [
+        (
+            "records.json",
+            serde_json::to_value(records(driver, &reference).await?)?,
+        ),
+        (
+            "graph.json",
+            serde_json::to_value(graph(driver, &reference, &[]).await?)?,
+        ),
+        ("inventory.json", inventory(driver, &reference).await?),
+    ] {
+        std::fs::write(
+            directory.join(format!("{name}.{suffix}")),
+            serde_json::to_vec_pretty(&value)?,
+        )?;
+    }
+    driver.databases().get(&reference).await?.delete().await?;
+    Ok(())
+}
