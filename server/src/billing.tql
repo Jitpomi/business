@@ -116,7 +116,7 @@ relation bill_consent_plan, relates evidence @card(1),relates plan @card(1);
 bill_consent_evidence plays bill_consent_plan:evidence;
 bill_plan plays bill_consent_plan:plan;
 fun bill_plan_has_consent($c: bill_customer,$p: bill_plan) -> boolean:
-  match let $compatible=cx_plugin_consent($c,$p);$compatible==true; let $valid=bill_has_consent($c); $valid==true;
+  match let $currency_ok=bill_method_supports_plan($c,$p);$currency_ok==true;let $compatible=cx_plugin_consent($c,$p);$compatible==true; let $valid=bill_has_consent($c); $valid==true;
     $c has bill_revision $rev,has bill_method_plugin $plugin,has bill_payment_method $method;
     (customer:$c,evidence:$e) isa bill_consent_owner;
     $e has consent_claim $claim,has bill_revision == $rev,has method_plugin == $plugin,has method_ref == $method;
@@ -251,6 +251,7 @@ fun create_bill_consent($tenant: string,$actor: string,$now: datetime,$e: bill_c
       has method_plugin == $plugin,has method_ref == $method;
     not {$other isa bill_consent_evidence,has consent_claim == $claim;not {$other is $e;};};
     let $verified=usable_bill_method($c,$now); $verified==true;
+    not {(evidence:$e,plan:$unsupported) isa bill_consent_plan;let $ok=bill_method_supports_plan($c,$unsupported);$ok==false;};
     (evidence:$e,plan:$plan) isa bill_consent_plan;
     (customer:$c,plan:$plan) isa bill_plan_owner; $plan has bill_status "active";
     not {(evidence:$e,plan:$foreign) isa bill_consent_plan;

@@ -19,6 +19,12 @@ struct CheckoutBank {
 }
 #[async_trait]
 impl FinancialPlugin for CheckoutBank {
+    fn currencies(&self) -> &[&str] {
+        &["USD", "JPY"]
+    }
+    fn method_currencies(&self, _: &SavedMethod) -> &[&str] {
+        self.currencies()
+    }
     fn capabilities(&self) -> Capabilities {
         Capabilities {
             idempotent_customers: true,
@@ -222,17 +228,23 @@ async fn checkout_gateway_queue_payment_and_refund_recovery() -> Result<()> {
   let (app,http)=server::app::build_with_connectors(state.clone(),"checkout-test-signing-secret-at-least-32-bytes".into(),Arc::new(TenantRegistry::default()),catalog)?;
   let template:Arc<server::automation::engine::Engine>=app.get("automation.engine").context("Queue template")?;
   let registry:Arc<TenantRegistry>=app.get("tenant.plugins").context("Tenant registry")?;
+  server::billing::engine::Engine::new(state.clone(),&merchant,registry.resolve(&merchant).await?)?.refresh_commerce_plugins().await.context("Initial plugin currency attestation")?;
   let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await?;let base=format!("http://{}",listener.local_addr()?);
   let server=tokio::spawn(async move{axum::serve(listener,server::app::router(http)).await.unwrap();});
   struct Listener(tokio::task::JoinHandle<()>);impl Drop for Listener{fn drop(&mut self){self.0.abort();}}let _listener=Listener(server);
   let directory=tempfile::tempdir()?;let config_file=directory.path().join("checkout.json");
-  std::fs::write(&config_file,serde_json::to_vec(&json!({"base":base,"merchant":merchant,"customer":customer,"seller":{"email":"seller@checkout.example.invalid"},"buyer":{"email":"buyer@checkout.example.invalid"},"outsider":{"email":"outsider@checkout.example.invalid"}}))?)?;
+  std::fs::write(&config_file,serde_json::to_vec(&json!({"currency":std::env::var("CHECKOUT_TEST_CURRENCY").unwrap_or("USD".into()),"base":base,"merchant":merchant,"customer":customer,"seller":{"email":"seller@checkout.example.invalid"},"buyer":{"email":"buyer@checkout.example.invalid"},"outsider":{"email":"outsider@checkout.example.invalid"}}))?)?;
   let worker=server::background::spawn_all((*template).clone());
   let test=async{
    eprintln!("Gateway catalogue, quote, confirmation and company isolation");let created=bridge(&config_file,"create").await?;let order=created["order"].as_str().context("Order id")?;
    eprintln!("Awaiting dog-queue invoice execution for {order}");
    let invoice=tokio::time::timeout(std::time::Duration::from_secs(240),async{loop{let result=bridge(&config_file,"status").await?;let invoices=result["last"]["plans"].as_array().into_iter().flatten().flat_map(|p|p["invoices"].as_array().into_iter().flatten()).collect::<Vec<_>>();if let Some(i)=invoices.first(){if i["status"]=="open"{break Ok::<_,anyhow::Error>(i["id"].as_str().unwrap().to_owned());}}tokio::time::sleep(std::time::Duration::from_secs(5)).await;}}).await??;
    let external=bank.base.invoices.lock().unwrap().iter().find(|(_,v)|v.invoice_id==invoice).map(|(k,_)|k.clone()).context("Provider invoice")?;
+   let native_engine=server::billing::engine::Engine::new(state.clone(),&merchant,registry.resolve(&merchant).await?)?;
+   let mut mismatched=bank.base.observe_invoice(&external).await?;let expected_currency=std::env::var("CHECKOUT_TEST_CURRENCY").unwrap_or("USD".into());ensure!(mismatched.currency==expected_currency);
+   mismatched.currency=if expected_currency=="JPY" {"USD".into()} else {"JPY".into()};mismatched.state=InvoiceState::Paid;
+   ensure!(native_engine.apply_observation(&invoice,"bank",&mismatched).await.is_err(),"Wrong-currency observation marked an invoice paid");
+
    bank.base.invoices.lock().unwrap().get_mut(&external).unwrap().state=InvoiceState::Processing;
    tokio::time::timeout(std::time::Duration::from_secs(180),async{loop{let r=bridge(&config_file,"status").await?;if r["last"]["plans"][0]["invoices"][0]["status"]=="processing"{break Ok::<_,anyhow::Error>(());}tokio::time::sleep(std::time::Duration::from_secs(5)).await;}}).await??;
    ensure!(!mail.messages.lock().unwrap().values().any(|m|m.subject.contains("Payment received")),"Processing generated a receipt");

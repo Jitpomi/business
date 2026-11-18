@@ -53,7 +53,18 @@ impl Engine {
                 self.runtime.sandbox && ready && plugin["capabilities"]["hosted_checkout"] == true;
             let refunds =
                 self.runtime.sandbox && ready && plugin["capabilities"]["refunds"] == true;
-            self.write(format!("{} select $t;distinct;put $fact isa commerce_plugin,has cx_id {key};(merchant:$t,plugin:$fact) isa commerce_plugin_owner;update $fact has cx_plugin {},has cx_enabled {hosted},has cx_refunds {refunds},has cx_verified {at};fetch {{'id':$fact.cx_id}};",self.prefix(),q(id))).await?;
+            let connection = self.runtime.financial(id)?;
+            let currencies = connection.currencies();
+            anyhow::ensure!(
+                !currencies.is_empty(),
+                "Plugin must declare supported currencies"
+            );
+            let owns = currencies
+                .iter()
+                .map(|v| format!(",has cx_supported_currency {}", q(v)))
+                .collect::<String>();
+            // The entire attested set and freshness timestamp change in one fenced commit.
+            self.write(format!("{} select $t;distinct;put $fact isa commerce_plugin,has cx_id {key};(merchant:$t,plugin:$fact) isa commerce_plugin_owner;match try {{$fact has cx_supported_currency $old;}};delete try {{has $old of $fact;}};select $t,$fact;distinct;update $fact has cx_plugin {},has cx_enabled {hosted},has cx_refunds {refunds},has cx_verified {at};insert $fact {} ;fetch {{'id':$fact.cx_id}};",self.prefix(),q(id),owns.trim_start_matches(','))).await?;
         }
         Ok(())
     }

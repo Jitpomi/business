@@ -18,7 +18,7 @@ or chosen donations, finite instalments and deposits share that lifecycle.
 Merchant-approved flat discounts, tax rates and shipping amounts are included in
 the native quote snapshot. These are not a jurisdiction tax service, stock system
 or fulfilment integration. Mixed one-time and recurring carts must be checked out
-separately. Currency is USD and existing invoice minimums still apply.
+separately. Checkout supports USD, EUR, GBP, CAD, AUD and JPY. Each order and its pricing policy use one currency; there is no implicit conversion. Existing invoice minimums still apply in minor units, and the provider may enforce additional account/settlement minimums.
 
 Checkout execution remains sandbox-only at the server, scheduler and capability
 boundaries. A browser setting cannot enable real payments. The widget hands off to
@@ -37,7 +37,7 @@ Saving a method alone authorizes no charge. Existing manual invoices stay manual
 
 Refund requests are authorized by the seller in TypeDB and executed by the
 merchant's own financial plugin through the scheduled dog-queue billing workflow.
-Stripe supports partial refunds for a single settled PaymentIntent invoice.
+Stripe supports partial refunds for a single settled PaymentIntent invoice in the order’s currency.
 Mercury does not declare refund capability. Unsupported payment allocations fail
 before a provider write. Cumulative nonfailed refund reservations cannot exceed
 the invoice amount. A lost acknowledgement is reconciled read-only by the
@@ -173,3 +173,30 @@ provider's supported collection experience, not a custom card-number form.
 
 Production remains disabled until the whole deployed path, monitoring, backups,
 recovery and provider production onboarding pass their separate acceptance gates.
+
+## Currency and saved-method capabilities
+
+Currency is immutable on offers and orders, and explicit on new pricing versions.
+New scoped pricing writes must include a currency. Historical pricing without a currency and non-commerce billing plans retain their
+original USD meaning. Invoice and refund currency is derived from the immutable
+order, never from a mutable customer preference or browser label. Native checks
+reject cross-currency lines, pricing, payment observations and refund observations.
+
+Connections declare supported presentment currencies. Server-owned attestations
+replace the full set atomically with a freshness timestamp; they contain no
+credentials. Stripe declares the six admitted currencies above; Mercury declares
+USD. Acceptance and background execution require a fresh matching attestation.
+Additional provider account and payment-method restrictions can still apply.
+
+A saved payment method declares its own currency set. Stripe cards support the
+connection’s admitted currencies; US bank accounts support USD. Unknown third-party
+methods conservatively default to USD until their plugin explicitly declares
+otherwise. TypeDB checks every plan in a consent grant against that method’s set;
+collection rechecks it. No existing consent grant is expanded during migration.
+
+JPY has zero decimal places; other admitted currencies have two. All stored and
+transmitted amounts remain integer minor units. Entry rejects fractional yen and
+excess decimal precision. Notifications, order review, dashboard history and
+refund entry display the actual currency. Existing `amount_cents` API field names
+remain compatibility labels for integer minor units; consumers must use the
+accompanying `currency` rather than assume a divisor of 100.

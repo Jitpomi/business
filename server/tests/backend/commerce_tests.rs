@@ -94,7 +94,7 @@ $c isa bill_customer,has bill_key "customer",has name "Buyer",has bill_email "bu
         write(&adapter,&seller,offer("recurring-donation","donation",0,100,100000,"month")).await?;
         ensure!(write(&adapter,&buyer,offer("forged","product",100,100,100,"once")).await.is_err(),"Buyer created a merchant offer");
         write(&adapter,&seller,r#"match $t isa tenant,has tenant_id "seller";let $now=request_now();
-insert $p isa commerce_pricing,has cx_id "standard",has name "No adjustments",has cx_created == $now,has cx_tax_bp 0,has cx_discount_bp 0,has cx_shipping 0,has cx_enabled true,has cx_instalments true,has cx_limit 12,has cx_deposit_bp 0,has cx_plan_period "week",has cx_plan_period "month";
+insert $p isa commerce_pricing,has cx_id "standard",has cx_currency "USD",has name "No adjustments",has cx_created == $now,has cx_tax_bp 0,has cx_discount_bp 0,has cx_shipping 0,has cx_enabled true,has cx_instalments true,has cx_limit 12,has cx_deposit_bp 0,has cx_plan_period "week",has cx_plan_period "month";
 (merchant:$t,pricing:$p) isa commerce_pricing_owner;fetch {"id":$p.cx_id};"#.into()).await?;
         for (id,f,unit,q,mode,period,count,deposit) in [
             ("purchase","item",1001,3,"once","once",1,0),
@@ -129,7 +129,7 @@ insert $p isa commerce_pricing,has cx_id "standard",has name "No adjustments",ha
         ] {ensure!(write(&adapter,&buyer,query.into()).await.is_err(),"Accepted an immutable order mutation");}
         ensure!(write(&adapter,&buyer,order("purchase","item",1001,3,("once","once",1,0))).await.is_err(),"Duplicate request created another order");
         write(&adapter,&seller,r#"match $t isa tenant,has tenant_id "seller";let $now=request_now();
-insert $p isa commerce_pricing,has cx_id "adjusted",has name "Published adjustment quote",has cx_created == $now,
+insert $p isa commerce_pricing,has cx_id "adjusted",has cx_currency "USD",has name "Published adjustment quote",has cx_created == $now,
 has cx_tax_bp 500,has cx_discount_bp 1000,has cx_shipping 100,has cx_enabled true,
 has cx_instalments false,has cx_limit 12,has cx_deposit_bp 0,has cx_plan_period "month";
 (merchant:$t,pricing:$p) isa commerce_pricing_owner;fetch {"id":$p.cx_id};"#.into()).await?;
@@ -159,6 +159,29 @@ has cx_instalments false,has cx_limit 12,has cx_deposit_bp 0,has cx_plan_period 
         ensure!(quotes.len()==1&&server::billing::engine::number(&quotes[0],"subtotal")?==6006&&server::billing::engine::number(&quotes[0],"discount")?==600&&server::billing::engine::number(&quotes[0],"tax")?==275&&server::billing::engine::number(&quotes[0],"total")?==5781,"Discount, shipping or tax rounding differed");
         let rows=database::documents(&tx,"match $o isa commerce_order,has cx_id 'plan';let $due=cx_due_amount($o,3);fetch {'due':$due};").await?;ensure!(rows.is_empty(),"Finite plan generated an extra charge");
         tx.close().await?;
+        // Every currency is native immutable price context, not a UI label or FX conversion.
+        for currency in ["EUR","GBP","CAD","AUD","JPY"] {
+            let item=format!("item-{currency}");let policy=format!("policy-{currency}");
+            write(&adapter,&seller,offer(&item,"product",1001,1001,1001,"once").replace("has cx_currency \"USD\"",&format!("has cx_currency \"{currency}\""))).await?;
+            write(&adapter,&seller,format!(r#"match $t isa tenant,has tenant_id "seller";let $now=request_now();insert $p isa commerce_pricing,has cx_id "{policy}",has cx_currency "{currency}",has name "Currency policy",has cx_created == $now,has cx_tax_bp 500,has cx_discount_bp 1000,has cx_shipping 100,has cx_enabled true,has cx_instalments true,has cx_limit 12,has cx_deposit_bp 0,has cx_plan_period "month";(merchant:$t,pricing:$p) isa commerce_pricing_owner;fetch {{"id":$p.cx_id}};"#)).await?;
+            let proposal=order(&format!("quote-{currency}"),&item,1001,1,("instalments","month",3,0)).replace("has cx_id \"standard\"",&format!("has cx_id \"{policy}\"")).replace("has cx_currency \"USD\"",&format!("has cx_currency \"{currency}\""));
+            write(&adapter,&buyer,proposal).await?;
+            ensure!(write(&adapter,&buyer,order(&format!("wrong-currency-{currency}"),&item,1001,1,("once","once",1,0))).await.is_err(),"Cross-currency offer accepted");
+            let wrong_policy=order(&format!("wrong-policy-{currency}"),&item,1001,1,("once","once",1,0)).replace("has cx_currency \"USD\"",&format!("has cx_currency \"{currency}\""));
+            ensure!(write(&adapter,&buyer,wrong_policy).await.is_err(),"USD shipping/discount policy applied to foreign currency");
+            ensure!(write(&adapter,&buyer,format!("match $o isa commerce_order,has cx_id 'quote-{currency}';update $o has cx_currency 'USD';fetch {{'id':$o.cx_id}};")).await.is_err(),"Order currency mutated");
+        }
+        let tx=driver.transaction(&db,TransactionType::Write).await?;
+        tx.query(format!("match $t isa tenant,has tenant_id 'seller';insert $fact isa commerce_plugin,has cx_id 'usd-only',has cx_plugin 'usd-only',has cx_enabled true,has cx_verified {},has cx_supported_currency 'USD';(merchant:$t,plugin:$fact) isa commerce_plugin_owner;",server::clock::native_utc())).await?;tx.commit().await?;
+        let unsupported=r#"match $t isa tenant,has tenant_id "seller";let $now=request_now();insert $p isa commerce_pricing,has cx_id "unsupported-policy",has cx_currency "JPY",has cx_plugin "usd-only",has name "Unsupported policy",has cx_created == $now,has cx_tax_bp 0,has cx_discount_bp 0,has cx_shipping 0,has cx_enabled true,has cx_instalments false,has cx_limit 12,has cx_deposit_bp 0,has cx_plan_period "month";(merchant:$t,pricing:$p) isa commerce_pricing_owner;fetch {"id":$p.cx_id};"#;
+        ensure!(write(&adapter,&seller,unsupported.into()).await.is_err(),"Published currency unsupported by selected plugin");
+        let missing_currency=unsupported.replace("has cx_currency \"JPY\",", "").replace("has cx_plugin \"usd-only\",", "").replace("unsupported-policy","missing-currency");
+        ensure!(write(&adapter,&seller,missing_currency).await.is_err(),"New pricing omitted its currency");
+        let tx=driver.transaction(&db,TransactionType::Write).await?;
+        tx.query(r#"match $c isa bill_customer,has bill_key "customer";$o isa commerce_order,has cx_id "quote-JPY";update $c has bill_method_plugin "bank",has bill_payment_method "method";insert $m isa bill_saved_method,has bill_key "method-fact",has method_plugin "bank",has method_ref "method",has method_automatic true,has method_active true,has method_pending false,has method_verified_at 2026-11-18T00:00:00,has method_currency "USD";$p isa bill_plan,has bill_key "yen-plan",has name "Yen plan",has bill_amount 1001,has bill_due_days 0,has bill_anchor 0,has bill_next 0,has bill_sequence 0,has bill_interval "month",has bill_status "active";(customer:$c,plan:$p) isa bill_plan_owner;(order:$o,plan:$p) isa commerce_execution;(customer:$c,method:$m) isa bill_method_owner;"#).await?;tx.commit().await?;
+        let tx=driver.transaction(&db,TransactionType::Read).await?;
+        let method=database::documents(&tx,"match $c isa bill_customer,has bill_key 'customer';$p isa bill_plan,has bill_key 'yen-plan';let $supported=bill_method_supports_plan($c,$p);fetch {'supported':$supported};").await?;
+        ensure!(method.len()==1&&method[0]["supported"]==false,"USD-only saved method accepted a JPY plan");tx.close().await?;
         write(&adapter,&seller,"match $f isa commerce_offer,has cx_id 'item';update $f has cx_enabled false;fetch {'id':$f.cx_id};".into()).await?;
         ensure!(write(&adapter,&buyer,order("withdrawn","item",1001,1,("once","once",1,0))).await.is_err(),"Withdrawn offer remained purchasable");
         let history=adapter.read(&buyer,json!({"query":"match $o isa commerce_order,has cx_id 'purchase';$f isa commerce_offer;(order:$o,offer:$f) isa commerce_line;fetch {'offer':$f.cx_id};"})).await?;

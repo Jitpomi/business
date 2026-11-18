@@ -30,7 +30,7 @@ fun bill_can_issue($c: bill_customer,$p: bill_plan,$i: bill_invoice,$revision: s
 
 fun bill_observation_matches($i: bill_invoice,$local: string,$plugin: string,$external: string,$amount: integer,$currency: string) -> boolean:
   match $i has bill_key == $local,has bill_provider == $plugin,has bill_external_id == $external,has bill_amount == $amount;
-    $external!="";$currency=="USD";
+    $external!="";let $expected=bill_invoice_currency($i);$currency==$expected;
   return check;
 
 fun bill_observation_transition($i: bill_invoice,$next: string) -> boolean:

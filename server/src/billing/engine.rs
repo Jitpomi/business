@@ -187,7 +187,7 @@ impl Engine {
         let now = crate::clock::unix_seconds();
         // Read customer settings at claim time. Revision validation below rejects a
         // preference or consent change racing the claim.
-        let rows=self.read(format!(r#"{} fetch {{{CUSTOMER_DATA},"invoice_id":$i.bill_key,"description":$i.name,"amount":$i.bill_amount,"issued":$i.bill_anchor,"due":$i.bill_next,"mode":bill_plan_payment_choice($c,$p),"commerce":cx_is_checkout($p),"checkout_plugin":cx_plan_plugin($p,$c,bill_plan_payment_choice($c,$p))}};"#,self.invoice_match(id)?)).await?;
+        let rows=self.read(format!(r#"{} fetch {{{CUSTOMER_DATA},"invoice_id":$i.bill_key,"description":$i.name,"amount":$i.bill_amount,"currency":bill_invoice_currency($i),"issued":$i.bill_anchor,"due":$i.bill_next,"mode":bill_plan_payment_choice($c,$p),"commerce":cx_is_checkout($p),"checkout_plugin":cx_plan_plugin($p,$c,bill_plan_payment_choice($c,$p))}};"#,self.invoice_match(id)?)).await?;
         ensure!(rows.len() == 1, "Invoice missing");
         let row = &rows[0];
         ensure!(
@@ -200,6 +200,13 @@ impl Engine {
         let plugin = self.runtime.financial(&plugin_id)?;
         plugin.ready()?;
         ensure!(
+            plugin.currencies().contains(&string(row, "currency")?),
+            dog_core::DogError::bad_request(
+                "Selected plugin does not support this invoice currency"
+            )
+            .into_anyhow()
+        );
+        ensure!(
             mode != Mode::Automatic || plugin.capabilities().automatic_collection,
             "Selected plugin cannot collect automatically"
         );
@@ -208,7 +215,7 @@ impl Engine {
         // Once claimed, an ambiguous failure is attention-required, never a fresh charge retry.
         let result=async{
    let customer=self.ensure_customer(row,&plugin_id).await?;
-   let request=InvoiceRequest{id:id.into(),customer,automatic:mode==Mode::Automatic,amount_minor:number(row,"amount")?,currency:"USD".into(),description:string(row,"description")?.into(),issued:number(row,"issued")?,due:number(row,"due")?};
+   let request=InvoiceRequest{id:id.into(),customer,automatic:mode==Mode::Automatic,amount_minor:number(row,"amount")?,currency:string(row,"currency")?.into(),description:string(row,"description")?.into(),issued:number(row,"issued")?,due:number(row,"due")?};
    let external=plugin.create_invoice(&request).await?;opaque_id(&external)?;
    self.write(format!(r#"{} $i has bill_status "issuing",has bill_external_id "";select $t,$i;distinct;update $i has bill_external_id {};fetch {{"id":$i.bill_key}};"#,self.invoice_match(id)?,schema::quoted(&external))).await?;
    let observation=plugin.finalize_invoice(&request,&external).await?;

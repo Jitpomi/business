@@ -107,6 +107,14 @@ pub struct RefundObservation {
 }
 #[async_trait]
 pub trait FinancialPlugin: Send + Sync {
+    /// Presentment currencies supported by this connection. Legacy plugins remain USD.
+    fn currencies(&self) -> &[&str] {
+        &["USD"]
+    }
+    /// Method-specific restrictions are separate from the connection's currency set.
+    fn method_currencies(&self, _method: &SavedMethod) -> &[&str] {
+        &["USD"]
+    }
     fn capabilities(&self) -> Capabilities;
     fn brand(&self) -> Option<&'static str> {
         None
@@ -229,7 +237,7 @@ impl TenantRuntime {
         Ok(())
     }
     pub fn checkout_plugins(&self) -> Vec<serde_json::Value> {
-        let mut plugins: Vec<_> = self.financial.iter().map(|(id,p)| serde_json::json!({"id":id,"capabilities":p.capabilities(),"brand":p.brand(),"sandbox":self.sandbox})).collect();
+        let mut plugins: Vec<_> = self.financial.iter().map(|(id,p)| serde_json::json!({"id":id,"capabilities":p.capabilities(),"currencies":p.currencies(),"brand":p.brand(),"sandbox":self.sandbox})).collect();
         plugins.sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));
         plugins
     }
@@ -355,3 +363,15 @@ impl std::fmt::Display for WebhookError {
     }
 }
 impl std::error::Error for WebhookError {}
+
+/// Human-readable minor units, never floating-point payment arithmetic.
+pub fn display_money(currency: &str, amount: i64) -> Result<String> {
+    ensure!(amount >= 0, "Invalid amount");
+    match currency {
+        "JPY" => Ok(format!("JPY {amount}")),
+        "USD" | "EUR" | "GBP" | "CAD" | "AUD" => {
+            Ok(format!("{currency} {}.{:02}", amount / 100, amount % 100))
+        }
+        _ => bail!("Unsupported currency"),
+    }
+}

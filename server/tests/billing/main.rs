@@ -1,6 +1,7 @@
 //! Explicitly gated real sandbox workflow. No configured database is changed.
 mod account_links;
 mod consent_security;
+mod currencies;
 mod financial;
 mod mercury;
 mod mercury_automation;
