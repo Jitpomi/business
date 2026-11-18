@@ -4,7 +4,7 @@ match $c isa bill_customer,has bill_key @@customer_id@@,has bill_revision @@expe
 $p isa bill_plan,has bill_key @@plan_id@@;
 let $by=request_identity();let $now=request_now();
 insert $e isa bill_consent_evidence,has bill_key @@request_id@@,
-  has bill_revision @@expected_revision@@,
+  has bill_revision @@expected_revision@@,has consent_plan_count 1,
   has consent_claim @@consent_claim@@,has method_plugin @@plugin_id@@,
   has method_ref @@method_id@@,has consent_at == $now;
 (customer:$c,actor:$by,evidence:$e) isa bill_consent_owner;

@@ -63,6 +63,9 @@ impl DogService<Value, BusinessParams> for PluginAuthentication {
         let input = data.ok_or_else(|| {
             dog_core::DogError::bad_request("Missing account request").into_anyhow()
         })?;
+        if input["operation"] == "checkout_enrolment" {
+            return self.checkout_enrolment(&input).await;
+        }
         if input["operation"] == "accept_invitation" {
             return self.accept_invitation(&input).await;
         }

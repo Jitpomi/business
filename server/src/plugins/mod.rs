@@ -6,6 +6,7 @@ pub mod configuration;
 mod financial;
 mod history;
 mod notification;
+mod refunds;
 mod signature;
 pub use financial::BuiltinFinancial;
 pub use notification::Resend;

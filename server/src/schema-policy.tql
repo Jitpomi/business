@@ -235,8 +235,9 @@ attribute auth_subject @meta("dog.security.hidden", "true");
 # runs under exactly one authenticated tenant and the strict scope_tenant policy.
 fun request_account($tenant: string, $actor: string, $now: datetime) -> string,string,boolean @meta("dog.security.context", "true"):
   match $t isa tenant; let $scoped=scope_tenant($tenant,$actor,$now,$t); $scoped==true;
-    $i isa person, has identity_id == $actor, has email $email_attr;
-    $t has tenant_id $id_attr; let $email=$email_attr; let $id=$id_attr;
+    $i isa person, has identity_id == $actor;
+    let $contact=person_contact($i);
+    $t has tenant_id $id_attr; let $email=$contact; let $id=$id_attr;
     let $owner=role_at_least($i,$t,"owner",$now);
   return first $email,$id,$owner;
 fun request_companies($tenant: string, $actor: string, $now: datetime) -> {string,string} @meta("dog.security.context", "true"):
@@ -251,3 +252,9 @@ fun request_identity($tenant: string,$actor: string,$now: datetime) -> identity 
   match $t isa tenant; let $ok=scope_tenant($tenant,$actor,$now,$t); $ok==true;
     $i isa identity,has identity_id == $actor;
   return first $i;
+
+# Contact details are optional; authentication credentials and external subjects are separate.
+fun person_contact($i:person)->string:
+  match {$i has email $contact;let $value=$contact;}
+    or {not {$i has email $_;};let $value="";};
+  return first $value;

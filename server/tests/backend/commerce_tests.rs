@@ -41,7 +41,7 @@ fn order(id: &str, offer: &str, unit: i64, quantity: i64, terms: (&str, &str, i6
     format!(
         r#"match $c isa bill_customer,has bill_key "customer";$p isa commerce_pricing,has cx_id "standard";
 $f isa commerce_offer,has cx_id "{offer}";let $now=request_now();
-insert $o isa commerce_order,has cx_id "{id}",has cx_created == $now,has cx_currency "USD",
+insert $o isa commerce_order,has cx_id "{id}",has cx_created == $now,has cx_currency "USD",has cx_lines 1,
 has cx_mode "{mode}",has cx_interval "{interval}",has cx_count {count},has cx_deposit {deposit};
 (customer:$c,pricing:$p,order:$o) isa commerce_order_owner;
 $l isa commerce_line,links(order:$o,offer:$f),has cx_id "line-{id}",has cx_created == $now,has cx_unit {unit},has cx_quantity {quantity};
@@ -139,6 +139,7 @@ has cx_instalments false,has cx_limit 12,has cx_deposit_bp 0,has cx_plan_period 
             "fetch {\"id\":$o.cx_id};",
             "$second isa commerce_line,links(order:$o,offer:$f),has cx_id 'cart-second',has cx_created == $now,has cx_unit 1001,has cx_quantity 3;fetch {\"id\":$o.cx_id};"
         );
+        let cart=cart.replace("has cx_lines 1", "has cx_lines 2");
         write(&adapter,&buyer,cart.replace("has cx_id \"standard\"", "has cx_id \"adjusted\"")).await?;
         let totals=adapter.read(&buyer,json!({"query":include_str!("../../public/queries/data/commerce-orders.tql")})).await?;
         ensure!(totals["ok"]["answers"].as_array().context("Order projection")?.len()==7,"Native order projection did not return accepted orders");
@@ -173,4 +174,27 @@ has cx_instalments false,has cx_limit 12,has cx_deposit_bp 0,has cx_plan_period 
         eprintln!("Retained commerce fixture: {db}");
     }
     result
+}
+
+#[tokio::test]
+#[ignore = "Explicit private development checkpoint; restores only new shadows, no providers"]
+async fn checkout_checkpoint_preserves_full_graph_and_existing_approvals() -> Result<()> {
+    dotenvy::from_path(std::env::var("BUSINESS_ENV_FILE")?)?;
+    ensure!(std::env::var("TYPEDB_DB")? == "business_dev");
+    let directory = std::path::PathBuf::from(std::env::var("BUSINESS_CHECKOUT_CHECKPOINT")?);
+    let source = std::env::var("BUSINESS_CHECKOUT_SOURCE")?;
+    ensure!(directory.is_absolute() && database::development_version(&source).is_some());
+    let driver = crate::test_driver::connect(
+        &std::env::var("TYPEDB_ADDR")?,
+        &std::env::var("TYPEDB_USERNAME")?,
+        &std::env::var("TYPEDB_PASSWORD")?,
+        true,
+    )
+    .await?;
+    let target = format!("business_backend_test_{}", uuid::Uuid::new_v4().simple());
+    eprintln!("Checkout checkpoint rehearsal target: {target}");
+    let count = server::commerce::migration::import(&driver, &source, &target, &directory).await?;
+    ensure!(count > 0, "Empty checkpoint cannot prove preservation");
+    println!("Preserved {count} original objects, all attributes, relation roles and existing plan approvals; source and checkpoint untouched, no provider calls");
+    Ok(())
 }

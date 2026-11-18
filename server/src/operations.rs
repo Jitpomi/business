@@ -118,9 +118,14 @@ pub async fn metrics(state: &TypeDBState) -> Result<Value> {
     .await?;
     let invoice_attention = count(&tx, "$i isa bill_invoice,has bill_status 'attention';").await?;
     let stale=count(&tx,&format!("$i isa bill_invoice,has bill_status $status,has bill_updated $updated;$updated<{stale_invoice};{{$status=='open';}} or {{$status=='processing';}};(plan:$p,invoice:$i) isa bill_invoice_owner;$p has bill_status 'active';not {{(invoice:$i,notice:$archive) isa bill_notice_owner;$archive has bill_status 'imported-history';}};")).await?;
+    let refund_attention = count(
+        &tx,
+        "$r isa commerce_refund,has cx_refund_status 'attention';",
+    )
+    .await?;
     tx.close().await?;
     Ok(
-        json!({"failed_jobs":failed,"failed_runs":failed_runs,"overdue_jobs":overdue,"attention_runs":attention,"attention_invoices":invoice_attention,"stale_reconciliations":stale}),
+        json!({"failed_jobs":failed,"failed_runs":failed_runs,"overdue_jobs":overdue,"attention_runs":attention,"attention_invoices":invoice_attention,"stale_reconciliations":stale,"attention_refunds":refund_attention}),
     )
 }
 async fn readiness(State(m): State<Monitor>, headers: HeaderMap) -> Response {

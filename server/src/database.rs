@@ -66,19 +66,7 @@ pub async fn install(driver: &TypeDBDriver, name: &str) -> Result<()> {
     driver.databases().create(name).await?;
     // On failure leave this exact new target for inspection, never delete a database implicitly.
     let tx = driver.transaction(name, TransactionType::Schema).await?;
-    for source in [
-        SCHEMA,
-        FUNCTIONS,
-        BILLING,
-        SCHEMA_POLICY,
-        ACCOUNT_LINKS,
-        crate::automation::store::SCHEMA,
-        crate::automation::store::POLICY_SCHEMA,
-        BUSINESS_RULES,
-        COMMERCE,
-    ] {
-        tx.query(source).await?;
-    }
+    tx.query(import_schema()).await?;
     tx.commit().await?;
     verify(driver, name).await
 }
@@ -190,7 +178,7 @@ pub fn import_schema() -> String {
 pub async fn verify_runtime(driver: &TypeDBDriver, name: &str) -> Result<()> {
     verify(driver, name).await?;
     let schema = driver.databases().get(name).await?.schema().await?;
-    ensure!(["entity bill_saved_method","fun create_invitation","fun request_identity","fun scope_visible_tenant","fun bill_has_consent","relation bill_consent_plan"].iter().all(|part|schema.contains(part)),"Native account/payment model migration required; startup will not migrate or reset the database");
+    ensure!(["entity bill_saved_method","fun create_invitation","fun request_identity","fun scope_visible_tenant","fun bill_has_consent","relation bill_consent_plan","fun cx_order_terms_valid","fun cx_refund_claim","relation commerce_execution"].iter().all(|part|schema.contains(part)),"Native account/payment model migration required; startup will not migrate or reset the database");
     let tx = driver.transaction(name, TransactionType::Read).await?;
     let versions=documents(&tx,"match $t label bootstrap_record;let $version=get_meta('jitpomi.model.version',$t);fetch {'version':$version};").await?;
     ensure!(

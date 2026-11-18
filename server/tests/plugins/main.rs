@@ -118,11 +118,13 @@ impl FinancialPlugin for Bank {
 }
 #[derive(Default)]
 struct Mail {
+    calls: Mutex<HashMap<String, usize>>,
     messages: Mutex<HashMap<String, Message>>,
 }
 #[async_trait]
 impl NotificationPlugin for Mail {
     async fn send(&self, m: &Message) -> Result<String> {
+        *self.calls.lock().unwrap().entry(m.key.clone()).or_default() += 1;
         self.messages
             .lock()
             .unwrap()
@@ -575,3 +577,5 @@ mod consent_migration;
 
 #[path = "../support/environment.rs"]
 mod environment;
+
+mod checkout_tests;

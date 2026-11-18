@@ -7,16 +7,49 @@ and embeddable widgets. These are one commerce system, not separate payment apps
 
 ## Current implementation boundary
 
-The first change adds an immutable catalogue, merchant pricing policies, accepted
-orders and line items, native quote calculations and finite payment schedules to
-new, explicitly provisioned TypeDB databases. Existing databases are not migrated
-at startup. There is no checkout deployment or new provider payment operation in
-this change. Existing sandbox billing continues unchanged; real payments stay off.
+The shared checkout includes a merchant catalogue and immutable pricing versions,
+native quotes, confirmed orders, hosted checkout and an embeddable button/cart/
+donation/plan widget. Confirmed orders become ordinary billing plans once; the
+existing invoice, reconciliation, receipt and reminder lifecycle remains the
+payment authority. Existing invoices reuse their original provider payment link.
 
-The schema currently supports USD, matching the existing invoice engine. It is
-not a claim of multicurrency, automatic tax compliance, stock reservation,
-subscription collection, refund execution or working checkout widgets. Those
-require the integrations and acceptance steps below before being offered.
+One-time purchases, matching-cadence subscriptions and recurring donations, fixed
+or chosen donations, finite instalments and deposits share that lifecycle.
+Merchant-approved flat discounts, tax rates and shipping amounts are included in
+the native quote snapshot. These are not a jurisdiction tax service, stock system
+or fulfilment integration. Mixed one-time and recurring carts must be checked out
+separately. Currency is USD and existing invoice minimums still apply.
+
+Checkout execution remains sandbox-only at the server, scheduler and capability
+boundaries. A browser setting cannot enable real payments. The widget hands off to
+our hosted checkout for account authentication and native price review; it does
+not embed a card form or expose credentials. New customers may enrol only where
+the merchant explicitly permits public checkout; existing private billing is not
+made public. A signed, verified provider identity receives an independent buyer
+account, never merchant membership and never an email-based identity merge.
+
+Automatic collection requires an immutable approval for the reviewed order's
+plans, verified selected method and current customer revision. Separate orders
+can have independent approvals at that revision. Grant plan counts seal the scope
+against later extension. Historical grants remain unchanged and read-valid;
+changing the selected method or revoking the revision invalidates old approval.
+Saving a method alone authorizes no charge. Existing manual invoices stay manual.
+
+Refund requests are authorized by the seller in TypeDB and executed by the
+merchant's own financial plugin through the scheduled dog-queue billing workflow.
+Stripe supports partial refunds for a single settled PaymentIntent invoice.
+Mercury does not declare refund capability. Unsupported payment allocations fail
+before a provider write. Cumulative nonfailed refund reservations cannot exceed
+the invoice amount. A lost acknowledgement is reconciled read-only by the
+immutable request ID; it is never resubmitted. Success produces a separate durable
+refund receipt. Cancellation stops future obligations without erasing invoices
+or inventing a refund. External refunds made outside this app are visible through
+provider history but are not automatically imported as commerce requests.
+
+Explicit migration imports a verified development checkpoint into a new database
+and compares every original logical object, attribute and relationship. It rejects
+unreviewed custom definitions, keeps the source and recovery shadows, never
+creates consent and never runs providers. No startup schema migrations occur.
 
 ## Ownership and boundaries
 

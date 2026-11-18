@@ -18,5 +18,9 @@ pub fn quoted(value: &str) -> String {
     serde_json::to_string(value).unwrap()
 }
 pub fn id(value: &str) -> Result<String> {
-    Ok(uuid::Uuid::parse_str(value)?.to_string())
+    uuid::Uuid::parse_str(value)
+        .map(|id| id.to_string())
+        .map_err(|_| {
+            dog_core::DogError::bad_request("Choose a valid record reference").into_anyhow()
+        })
 }

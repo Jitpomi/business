@@ -103,10 +103,11 @@ fun automation_failure_decision($r: automation_record,$oversized: boolean) -> st
 fun bill_next_occurrence($p: bill_plan) -> integer,string,string,integer:
   match $p has bill_sequence $sequence,has bill_interval $interval;
     let $next_sequence=$sequence + 1;
-    {$interval=="once";let $status="finished";let $unit="once";let $every=0;}
-    or {$interval=="week";let $status="active";let $unit="days";let $every=7;}
-    or {$interval=="month";let $status="active";let $unit="months";let $every=1;}
-    or {$interval=="year";let $status="active";let $unit="months";let $every=12;};
+    {$interval=="once";let $unit="once";let $every=0;}
+    or {$interval=="week";let $unit="days";let $every=7;}
+    or {$interval=="month";let $unit="months";let $every=1;}
+    or {$interval=="year";let $unit="months";let $every=12;};
+    let $status=cx_next_plan_status($p,$next_sequence);
   return first $next_sequence,$status,$unit,$every;
 
 fun automation_step_progress($r: automation_record,$next: string,$cursor: integer) -> boolean:

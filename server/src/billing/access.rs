@@ -23,6 +23,9 @@ pub(crate) struct Permission {
 }
 impl Permission {
     pub(crate) fn clause(&self) -> String {
+        if self.kind == "owner" {
+            return format!("$financial_actor isa person,has identity_id {};let $financial_owner=role_at_least($financial_actor,$t,'owner',{});$financial_owner==true;",quoted(&self.actor),now());
+        }
         format!(
             r#"$financial_actor isa person,has identity_id {};$financial_tenant isa tenant,has tenant_id {};$c has bill_key {};let $financial_scope_allowed=bill_{}($financial_actor,$financial_tenant,$c,{});$financial_scope_allowed==true;"#,
             quoted(&self.actor),
@@ -34,6 +37,19 @@ impl Permission {
     }
 }
 impl BillingAccess {
+    pub(crate) async fn owner_engine(&self, ctx: &TenantContext, actor: &str) -> Result<Engine> {
+        let engine = self
+            .engine(&ctx.tenant_id.0)
+            .await?
+            .with_permission(Permission {
+                tenant: ctx.tenant_id.0.clone(),
+                actor: actor.into(),
+                customer: String::new(),
+                kind: "owner",
+            });
+        engine.require_access().await?;
+        Ok(engine)
+    }
     pub(crate) async fn engine(&self, tenant: &str) -> Result<Engine> {
         let runtime = self.registry.resolve(tenant).await?;
         Engine::new(self.state.clone(), tenant, runtime)

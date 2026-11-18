@@ -127,6 +127,12 @@ impl FinancialPlugin for BuiltinFinancial {
             .map(Some)
             .map_err(|_| WebhookError::Unavailable)
     }
+    fn brand(&self) -> Option<&'static str> {
+        Some(match self.provider {
+            Provider::Stripe => "stripe",
+            Provider::Mercury => "mercury",
+        })
+    }
     fn capabilities(&self) -> Capabilities {
         let stripe = self.provider == Provider::Stripe;
         Capabilities {
@@ -134,6 +140,8 @@ impl FinancialPlugin for BuiltinFinancial {
             automatic_collection: stripe,
             saved_methods: stripe,
             payment_history: stripe,
+            hosted_checkout: true,
+            refunds: stripe,
         }
     }
     fn ready(&self) -> Result<()> {
@@ -345,6 +353,12 @@ impl FinancialPlugin for BuiltinFinancial {
             )
             .await?;
         Ok(())
+    }
+    async fn refund(&self, invoice: &str, key: &str, amount: i64) -> Result<RefundObservation> {
+        self.create_refund(invoice, key, amount).await
+    }
+    async fn find_refund(&self, invoice: &str, key: &str) -> Result<Option<RefundObservation>> {
+        self.lookup_refund(invoice, key).await
     }
     async fn history(&self, external: &str) -> Result<Value> {
         if !self.capabilities().payment_history {

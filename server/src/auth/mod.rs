@@ -468,3 +468,5 @@ mod invitations;
 
 mod account_lifecycle;
 pub use account_lifecycle::AccountLifecycle;
+
+mod checkout;
