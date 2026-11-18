@@ -11,7 +11,8 @@
   "vars": {
     "BUSINESS_URL": "https://jitpomi-business-validation.onrender.com",
     "ALERT_TO": "dev@jitpomi.com",
-    "ALERT_FROM": "JITPOMI Operations <billing@jitpomi.com>"
+    "ALERT_FROM": "JITPOMI Operations <billing@jitpomi.com>",
+    "BACKUPS_ENABLED": "true"
   },
   "compatibility_flags": [
     "nodejs_compat"
