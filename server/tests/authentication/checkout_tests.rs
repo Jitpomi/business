@@ -50,6 +50,10 @@ async fn checkout_identity_enrolment_and_native_tenant_isolation() -> Result<()>
         claims["sub"]=json!("different-subject-same-contact");let other=provider.token(&claims,"at+jwt")?;
         let (status,second)=enrol(&app,&merchant,&other).await?;
         ensure!(status==200&&second["tenant_id"]!=first["tenant_id"],"Contact email merged independent identities");
+        claims["sub"]=json!("simultaneous-sign-ins");let concurrent=provider.token(&claims,"at+jwt")?;
+        let (left,right)=tokio::join!(enrol(&app,&merchant,&concurrent),enrol(&app,&merchant,&concurrent));
+        let (left_status,left)=left?;let(right_status,right)=right?;
+        ensure!(left_status==200 && right_status==200 && left==right,"Concurrent sign-ins did not resolve one buyer account: {left_status} {right_status}");
         let tx=driver.transaction(&db,typedb_driver::TransactionType::Write).await?;
         tx.query(format!("match $t isa tenant,has tenant_id '{buyer}';$p isa person,has identity_id '{person}';$m isa membership,links(tenant:$t,member:$p);delete $m;")).await?;tx.commit().await?;
         ensure!(enrol(&app,&merchant,&proof).await?.0!=200,"Enrollment restored revoked access");

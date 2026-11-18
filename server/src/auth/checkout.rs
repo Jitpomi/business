@@ -48,7 +48,7 @@ impl PluginAuthentication {
             Sha256::digest(format!("{merchant}:{person}").as_bytes())
         );
         let lookup = || {
-            format!("match $t isa tenant,has tenant_id {}; $s isa commerce_shopper,has cx_id {},links(merchant:$t,person:$person,customer:$c);$person isa person,has identity_id {}; (buyer:$b,customer:$c) isa bill_account;let $allowed=bill_buyer($person,$b,$c,{});$allowed==true;fetch {{'tenant_id':$b.tenant_id,'customer_id':$c.bill_key}};",q(&merchant),q(&claim),q(&person),crate::clock::native_utc())
+            format!("match $t isa tenant,has tenant_id {}; $link isa external_identity,has auth_binding_key {},links(identity:$person);$person isa person;$s isa commerce_shopper,links(merchant:$t,person:$person,customer:$c); (buyer:$b,customer:$c) isa bill_account;let $allowed=bill_buyer($person,$b,$c,{});$allowed==true;fetch {{'tenant_id':$b.tenant_id,'customer_id':$c.bill_key}};",q(&merchant),q(&binding),crate::clock::native_utc())
         };
         if let Some(existing) = storage::read(&self.state, &lookup()).await?.first() {
             return Ok(existing.clone());
