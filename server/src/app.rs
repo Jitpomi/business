@@ -235,5 +235,14 @@ pub async fn runtime_router(
             std::env::var("ACCOUNT_TENANT_ID").ok(),
         )?);
     }
+    if std::env::var("OPERATIONS_ENABLED").as_deref() == Ok("true") {
+        let state = app
+            .get("typedb")
+            .ok_or_else(|| anyhow::anyhow!("Missing TypeDB state"))?;
+        router = router.merge(crate::operations::router(state)?);
+    }
+    if crate::operations::recovery_mode()? {
+        router = router.layer(axum::middleware::from_fn(crate::operations::recovery_guard));
+    }
     Ok(router)
 }

@@ -213,3 +213,38 @@ pub async fn graph(
     }
     Ok(result)
 }
+
+/// Quiesced checkpoint shared by database backup and full recovery tooling.
+/// Refuses overwrite and proves attributes and relationship roles did not change during export.
+pub async fn checkpoint(
+    driver: &TypeDBDriver,
+    name: &str,
+    directory: &std::path::Path,
+) -> anyhow::Result<()> {
+    use anyhow::ensure;
+    let manifest = directory.join(format!("{name}.inventory.json"));
+    ensure!(!manifest.exists(), "Backup manifest already exists");
+    let before = inventory(driver, name).await?;
+    let original_records = records(driver, name).await?;
+    let original_graph = graph(driver, name, &[]).await?;
+    driver
+        .databases()
+        .get(name)
+        .await?
+        .export_to_file(
+            directory.join(format!("{name}.tql")),
+            directory.join(format!("{name}.typedb")),
+        )
+        .await?;
+    ensure!(records(driver,name).await?==original_records && graph(driver,name,&[]).await?==original_graph && inventory(driver,name).await?==before,"Source changed during export; preserve this attempt and quiesce writers for a new checkpoint");
+    std::fs::write(
+        directory.join(format!("{name}.records.json")),
+        serde_json::to_vec_pretty(&original_records)?,
+    )?;
+    std::fs::write(
+        directory.join(format!("{name}.graph.json")),
+        serde_json::to_vec_pretty(&original_graph)?,
+    )?;
+    std::fs::write(manifest, serde_json::to_vec_pretty(&before)?)?;
+    Ok(())
+}

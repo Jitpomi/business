@@ -74,29 +74,7 @@ async fn main() -> Result<()> {
         return Ok(());
     }
     if command == "export" {
-        ensure!(!manifest.exists(), "Backup manifest already exists");
-        let before = inventory(&driver, name).await?;
-        let original_records = records(&driver, name).await?;
-        driver
-            .databases()
-            .get(name)
-            .await?
-            .export_to_file(&schema, &data)
-            .await?;
-        let after = inventory(&driver, name).await?;
-        ensure!(
-            records(&driver, name).await? == original_records,
-            "Records changed during export"
-        );
-        std::fs::write(
-            directory.join(format!("{name}.records.json")),
-            serde_json::to_vec_pretty(&original_records)?,
-        )?;
-        ensure!(
-            before == after,
-            "Counts changed during export; quiesce writers and use a fresh backup directory"
-        );
-        std::fs::write(manifest, serde_json::to_vec_pretty(&before)?)?;
+        server::database::snapshot::checkpoint(&driver, name, directory).await?;
         println!("Backup exported for {name}; restore verification still required");
     } else {
         let expected: Value = serde_json::from_slice(&std::fs::read(manifest)?)?;

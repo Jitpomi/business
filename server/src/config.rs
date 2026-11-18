@@ -11,6 +11,11 @@ pub fn config(app: &mut DogAppBuilder<Value, BusinessParams>) -> Result<()> {
         &env::var("TYPEDB_FORCE_RECREATE").unwrap_or_else(|_| "false".into()),
         &env::var("TYPEDB_USERNAME").unwrap_or_default(),
     )?;
+    crate::operations::recovery_mode()?;
+    anyhow::ensure!(
+        std::env::var("OPERATIONS_ENABLED").map_or(true, |v| v == "true" || v == "false"),
+        "OPERATIONS_ENABLED must be true or false"
+    );
     crate::admission::configured_limit()?;
     config_http(app)?;
     config_typedb(app)?;

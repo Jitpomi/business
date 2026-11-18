@@ -2,7 +2,29 @@
   "name": "jitpomi-business-automation-wake",
   "main": "worker.js",
   "compatibility_date": "2026-10-08",
-  "workers_dev": false,
-  "triggers": { "crons": ["*/5 * * * *"] },
-  "vars": { "BUSINESS_URL": "https://jitpomi-business-validation.onrender.com" }
+  "workers_dev": true,
+  "triggers": {
+    "crons": [
+      "*/5 * * * *"
+    ]
+  },
+  "vars": {
+    "BUSINESS_URL": "https://jitpomi-business-validation.onrender.com",
+    "ALERT_TO": "dev@jitpomi.com",
+    "ALERT_FROM": "JITPOMI Operations <billing@jitpomi.com>"
+  },
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "preview_urls": false,
+  "observability": {
+    "enabled": true
+  },
+  "d1_databases": [
+    {
+      "binding": "MONITOR",
+      "database_name": "jitpomi-business-operations",
+      "database_id": "756c70e8-2692-4263-8600-d92f0709c955"
+    }
+  ]
 }
