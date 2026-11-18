@@ -21,3 +21,13 @@ test('backup receipts require dedicated credentials and acknowledged artifact id
  assert.deepEqual(await (await call('/backup',env.BACKUP_TOKEN,{...good,checkpoint_at:good.checkpoint_at-1})).json(),{rejected:'older_checkpoint'});
  const snapshot=await (await call('/snapshot')).json();assert.equal(snapshot.version,1);assert.deepEqual(Object.keys(snapshot.tables).sort(),['lease','monitors','outbox']);assert.equal(snapshot.tables.monitors.find(r=>r.id==='backup').state,db.prepare("SELECT state FROM monitors WHERE id='backup'").get().state);
 });
+test('missed daily backups open one durable incident and verified fresh receipts recover it',async()=>{
+ const {env,db}=fixture();env.BACKUPS_ENABLED='true';env.BACKUP_TOKEN='b'.repeat(43);const old=fetch;
+ globalThis.fetch=async(url)=>String(url).includes('api.resend.com')?Response.json({id:crypto.randomUUID()}):String(url).endsWith('/health')?new Response('ok'):Response.json({version:1,dependencies:'ready',metrics:zero});
+ try{
+  await run(env);await run(env);await run(env);assert.equal(db.prepare('SELECT count(*) AS n FROM outbox').get().n,1);assert.equal(JSON.parse(db.prepare("SELECT state FROM monitors WHERE id='backup_age'").get().state).issues[0],'backup_stale');
+  const receipt={checkpoint_at:Math.floor(Date.now()/1000),sha256:'a'.repeat(64),artifact_url:'https://github.com/Jitpomi/business/actions/runs/123/artifacts/456',graph_verified:true};
+  const r=await worker.fetch(new Request('https://monitor.example/backup',{method:'POST',headers:{authorization:'Bearer '+env.BACKUP_TOKEN},body:JSON.stringify(receipt)}),env);assert.equal((await r.json()).accepted,true);
+  await run(env);await run(env);await run(env);assert.equal(db.prepare('SELECT count(*) AS n FROM outbox').get().n,2);assert.equal(db.prepare('SELECT count(*) AS n FROM outbox WHERE accepted IS NOT NULL').get().n,2);assert.equal(JSON.parse(db.prepare("SELECT state FROM monitors WHERE id='backup_age'").get().state).incident,null);
+ }finally{globalThis.fetch=old;}
+});

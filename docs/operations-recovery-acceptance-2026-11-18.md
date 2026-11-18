@@ -71,3 +71,7 @@ scheduled backup/RPO service. Define the production backup cadence, retention
 and independent provider-account recovery before accepting real money. Existing
 upstream maintenance findings, retained attention runs and Mercury settlement
 limits remain visible. This deployment does not authorize live payments.
+
+Follow-up: the six historical attention runs and daily encrypted backup gate
+were addressed in [the subsequent acceptance report](attention-backups-acceptance-2026-11-18.md).
+The earlier pending-gate notes above describe the state of the initial deployment.

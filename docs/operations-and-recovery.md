@@ -127,7 +127,7 @@ or logs. Re-seal the configuration capsule after runtime credential/configuratio
 changes; changing the recipient requires a coordinated new capsule and a tested
 recovery identity, never silently rotating away the only usable key.
 
-The native TypeDB online export is transactionally consistent while source
+The [native TypeDB online export](https://typedb.com/docs/maintenance-operation/database-export-import/) is transactionally consistent while source
 writes continue. Its schema/data are imported into an isolated generated database
 before inventory, records and relationship-role manifests are computed. The
 ciphertext store is immutable and is captured *after* the TypeDB export, ensuring
