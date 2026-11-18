@@ -8,6 +8,7 @@ pub const FUNCTIONS: &str = include_str!("functions.tql");
 pub const SCHEMA_POLICY: &str = include_str!("schema-policy.tql");
 pub const ACCOUNT_LINKS: &str = include_str!("account_links.tql");
 pub const BILLING: &str = include_str!("billing.tql");
+pub const COMMERCE: &str = include_str!("commerce.tql");
 pub const BUSINESS_RULES: &str = include_str!("business-rules.tql");
 pub async fn documents(tx: &Transaction, query: &str) -> Result<Vec<Value>> {
     let mut stream = tx.query(query).await?.into_documents();
@@ -74,6 +75,7 @@ pub async fn install(driver: &TypeDBDriver, name: &str) -> Result<()> {
         crate::automation::store::SCHEMA,
         crate::automation::store::POLICY_SCHEMA,
         BUSINESS_RULES,
+        COMMERCE,
     ] {
         tx.query(source).await?;
     }
@@ -170,6 +172,7 @@ pub fn import_schema() -> String {
         crate::automation::store::SCHEMA,
         crate::automation::store::POLICY_SCHEMA,
         BUSINESS_RULES,
+        COMMERCE,
     ] {
         schema.push_str(
             source

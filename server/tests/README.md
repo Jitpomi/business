@@ -170,3 +170,14 @@ selected instead. The existing development/source guards still apply. It
 restores only into new UUID databases, compares records and relationship roles,
 verifies additive policy backfill twice, and makes no provider calls. It never
 changes the source database or its immutable backup.
+
+## Commerce foundation
+
+`BUSINESS_ENV_FILE=/private/dev.env cargo test --locked --test backend native_commerce_pricing_isolation_and_immutable_orders -- --ignored --nocapture --test-threads=1`
+provisions a new UUID database and exercises the real scoped `/data` adapter.
+It verifies catalogue ownership, immutable pricing and accepted order lines,
+bounded donations, recurring terms, merchant-approved instalments/deposits,
+integer rounding, discounts/shipping/tax, company isolation and revoked membership.
+It makes no payment or mail calls and does not migrate the existing development
+database. See `../docs/commerce-and-checkout.md` for the remaining execution,
+checkout UI and provider acceptance work; this test is not checkout certification.

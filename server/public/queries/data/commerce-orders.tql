@@ -1,0 +1,5 @@
+match $o isa commerce_order;
+let $subtotal,$discount,$tax,$total=request_commerce_totals($o);
+fetch {"id":$o.cx_id,"currency":$o.cx_currency,"mode":$o.cx_mode,
+  "interval":$o.cx_interval,"count":$o.cx_count,"deposit":$o.cx_deposit,
+  "subtotal":$subtotal,"discount":$discount,"tax":$tax,"total":$total};

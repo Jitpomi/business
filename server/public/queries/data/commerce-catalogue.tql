@@ -1,0 +1,4 @@
+match $o isa commerce_offer,has cx_enabled true;
+fetch {"id":$o.cx_id,"name":$o.name,"kind":$o.cx_kind,
+  "currency":$o.cx_currency,"unit":$o.cx_unit,"minimum":$o.cx_min,
+  "maximum":$o.cx_max,"interval":$o.cx_interval};
