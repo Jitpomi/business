@@ -7,7 +7,7 @@ Real payments remain disabled.
 
 ## Evidence
 
-- Real TypeDB 3.15 scoped pricing tests: all six currencies, immutable currency,
+- Real TypeDB 3.15 and isolated 3.14.1 scoped pricing tests: all six currencies, immutable currency,
   rejection of cross-currency offers and USD pricing applied to foreign currency,
   and rejection of a USD-only saved method for a JPY plan.
 - Actual website Worker, dog-auth, TypeDB and dog-queue acceptance in JPY: cart,
@@ -39,3 +39,17 @@ Historical pricing without a currency and non-commerce billing plans remain USD.
 Existing external IDs, invoice links, consent grants and delivery journals are
 preserved. Existing field names ending in `_cents` remain compatibility labels for
 integer minor units and now include a currency in their read projections.
+
+## Hosted validation interruption
+
+The hosted 3.14.1 end-to-end attempt was interrupted by a database transport
+failure and queue shutdown errors while the cluster restarted. A second native
+attempt also lost its gRPC stream before commit. Both generated test databases
+were retained; no ambiguous provider operation was replayed. The restart’s root
+cause has not been established, so this is not a passing hosted acceptance run.
+
+The unchanged deployed backend temporarily returned dependency-unavailable and
+then recovered to HTTP 200 with all seven operational counters clear. Read-only
+inspection confirmed its existing settled payment, successful partial refund and
+original payment/refund receipt IDs were unchanged. This feature remains in its
+pull requests, pending a controlled development migration and deployment.
