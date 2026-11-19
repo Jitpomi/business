@@ -83,3 +83,9 @@ The explicit successor for these function changes is `business_native_dev_v10`.
 Deployment must follow the same fresh checkpoint, isolated rehearsal, graph
 verification and disabled-worker warmup procedure. All existing order, payment,
 refund and notification journals remain unchanged by the migration.
+
+The development acceptance also identified overlapping startup cycles. One worker
+per tenant in this service now drains every original occurrence through dog-queue,
+with four global slots retaining parallel execution across tenants. No occurrence,
+uncertain attempt, or payment journal is discarded, and native fences remain in
+force across processes and user requests.
