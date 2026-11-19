@@ -131,3 +131,11 @@ Verification logs, provider observations and recovery evidence are retained in
 `work/checkout-final-audit-2026-11-19` in the private operator workspace. No secrets
 are included in this repository report. These results authorize continued sandbox
 validation, not real-money activation.
+
+## Capacity and recovery follow-up
+
+The [production capacity and recovery configuration](production-capacity-and-recovery.md)
+now defines priced separate infrastructure, resource/load acceptance, a two-hour
+RPO, four-hour RTO, hourly encrypted production checkpoints and a ninety-minute
+freshness alert. Paid provisioning and measured production acceptance remain open;
+these targets do not themselves enable money or certify an uncreated environment.

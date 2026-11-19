@@ -1,3 +1,5 @@
+export function environment(env){const value=env.ENVIRONMENT||'development';if(!['development','production'].includes(value))throw Error('Invalid operations environment');return value;}
+function backupAge(env){const value=Number(env.BACKUP_MAX_AGE_SECONDS||129600);if(!Number.isSafeInteger(value)||value<3600||value>129600||(environment(env)==='production'&&value>5400))throw Error('Invalid backup freshness target');return value;}
 // Independent operations monitor. Never invokes a tenant workflow, payment or write capability.
 import {timingSafeEqual} from 'node:crypto';
 const now=()=>Math.floor(Date.now()/1000);
@@ -12,7 +14,7 @@ export async function probe(env){
   const r=await fetch(new URL('/health/ready',base),{redirect:'manual',headers:{authorization:`Bearer ${env.OPERATIONS_READ_TOKEN}`},signal:AbortSignal.timeout(30000)});
   if(r.status!==200)return {issues:[r.status===401?'monitor_credentials_rejected':'dependencies_unavailable']};
   const text=await r.text();if(text.length>8192)throw Error('Invalid readiness body');const v=JSON.parse(text);
-  if(![1,2].includes(v.version)||v.dependencies!=='ready'||!v.metrics)throw Error('Invalid readiness protocol');
+  if(![1,2].includes(v.version)||(environment(env)==='production'&&v.version!==2)||v.dependencies!=='ready'||!v.metrics)throw Error('Invalid readiness protocol');
   const keys=['failed_jobs','failed_runs','overdue_jobs','attention_runs','attention_invoices','stale_reconciliations','attention_refunds'];
   // Deploy the observer first; v1 remains supported during the backend rollout.
   if(v.version===2)keys.push('attention_notices','stalled_refunds');
@@ -30,7 +32,7 @@ export async function record(env,id,observation,time=now()){
  if(!bad&&next.recoveries>=2&&s.incident){event={id:s.incident+'-recovered',kind:'RECOVERED',issues:[]};next.incident=null;}
  if(observation.counter!==undefined&&(event?.kind==='OUTAGE'||(bad&&s.incident)))next.counter_ack=observation.counter;
  const statements=[env.MONITOR.prepare('INSERT INTO monitors(id,state) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET state=excluded.state').bind(id,JSON.stringify(next))];
- if(event){const body=JSON.stringify({subject:`${id==='drill'?'[DRILL] ':''}JITPOMI development ${event.kind}`,text:`${id==='drill'?'This is a monitoring drill; no production outage or payment is implied.\n':''}Monitor: ${id}\nState: ${event.kind}\nObserved at: ${new Date(time*1000).toISOString()}\nChecks: ${event.issues.join(', ')||'healthy'}\nNo customer details or credentials are included. Review the protected operations status and retained journals. Do not retry uncertain payments.`});statements.push(env.MONITOR.prepare('INSERT INTO outbox(id,body,created) VALUES(?,?,?) ON CONFLICT(id) DO NOTHING').bind(event.id,body,time));}
+ if(event){const body=JSON.stringify({subject:`${id==='drill'?'[DRILL] ':''}JITPOMI ${environment(env)} ${event.kind}`,text:`${id==='drill'?'This is a monitoring drill; no production outage or payment is implied.\n':''}Monitor: ${id}\nState: ${event.kind}\nObserved at: ${new Date(time*1000).toISOString()}\nChecks: ${event.issues.join(', ')||'healthy'}\nNo customer details or credentials are included. Review the protected operations status and retained journals. Do not retry uncertain payments.`});statements.push(env.MONITOR.prepare('INSERT INTO outbox(id,body,created) VALUES(?,?,?) ON CONFLICT(id) DO NOTHING').bind(event.id,body,time));}
  await env.MONITOR.batch(statements);return next;
 }
 export async function deliver(env,time=now()){
@@ -62,7 +64,7 @@ export async function run(env){return locked(env,async()=>{
   await record(env,key,{issues:value>(counter?(previous.counter_ack||0):0)?[key]:[],...(counter?{counter:value}:{})});
  }
  await env.MONITOR.prepare('INSERT INTO monitors(id,state) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET state=excluded.state').bind('business',JSON.stringify({...v,checked_at:now()})).run();
- if(env.BACKUPS_ENABLED==='true'){const b=await state(env,'backup');await record(env,'backup_age',{issues:!b.checkpoint_at||now()-b.checkpoint_at>129600?['backup_stale']:[]});}
+ if(env.BACKUPS_ENABLED==='true'){const b=await state(env,'backup');await record(env,'backup_age',{issues:!b.checkpoint_at||now()-b.checkpoint_at>backupAge(env)?['backup_stale']:[]});}
  await deliver(env);return v;
 });}
 export default {
@@ -80,13 +82,14 @@ export default {
    if(!auth(request,env.BACKUP_TOKEN))return response({},401);
    const text=await request.text();if(text.length>4096)return response({},413);
    let b;try{b=JSON.parse(text);}catch{return response({},400);}
+   if(environment(env)==='production'&&(b.profile!=='production'||b.source_database!=='business_prod'||b.native_schema_verified!==true))return response({},400);
    if(!Number.isSafeInteger(b.checkpoint_at)||b.checkpoint_at>now()+60||b.checkpoint_at<now()-86400||!/^[a-f0-9]{64}$/.test(b.sha256)||!/^https:\/\/github\.com\/Jitpomi\/business\/actions\/runs\/[0-9]+\/artifacts\/[0-9]+$/.test(b.artifact_url)||b.graph_verified!==true)return response({},400);
    const accepted=await env.MONITOR.prepare("INSERT INTO monitors(id,state) VALUES('backup',?) ON CONFLICT(id) DO UPDATE SET state=excluded.state WHERE CAST(json_extract(monitors.state,'$.checkpoint_at') AS INTEGER)<=? RETURNING state").bind(JSON.stringify({...b,checked_at:now()}),b.checkpoint_at).first();
    return response(accepted?{accepted:true}:{rejected:'older_checkpoint'});
   }
   if(path==='/status'&&request.method==='GET'){
    if(!auth(request,env.MONITOR_STATUS_TOKEN))return response({},401);
-   const s=await state(env,'business');const pending=await env.MONITOR.prepare('SELECT count(*) AS count,min(created) AS oldest FROM outbox WHERE accepted IS NULL').first();const b=await state(env,'backup');return response({...s,pending_alerts:pending.count,oldest_pending:pending.oldest,backup:env.BACKUPS_ENABLED==='true'?{checkpoint_at:b.checkpoint_at||0,stale:!b.checkpoint_at||now()-b.checkpoint_at>129600}:null});
+   const s=await state(env,'business');const pending=await env.MONITOR.prepare('SELECT count(*) AS count,min(created) AS oldest FROM outbox WHERE accepted IS NULL').first();const b=await state(env,'backup');return response({...s,pending_alerts:pending.count,oldest_pending:pending.oldest,backup:env.BACKUPS_ENABLED==='true'?{checkpoint_at:b.checkpoint_at||0,stale:!b.checkpoint_at||now()-b.checkpoint_at>backupAge(env)}:null});
   }
   if(!auth(request,env.MONITOR_ADMIN_TOKEN))return response({},401);
   if(request.method!=='POST')return response({},405);

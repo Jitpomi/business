@@ -1,0 +1,10 @@
+{
+  "development": {
+    "vault_url": "https://jitpomi-business-dev-secrets.steep-hill-e6f3.workers.dev",
+    "monitor_url": "https://jitpomi-business-automation-wake.steep-hill-e6f3.workers.dev"
+  },
+  "production": {
+    "vault_url": "https://jitpomi-business-production-secrets.steep-hill-e6f3.workers.dev",
+    "monitor_url": "https://jitpomi-business-production-operations.steep-hill-e6f3.workers.dev"
+  }
+}

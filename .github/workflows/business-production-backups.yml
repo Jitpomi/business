@@ -1,0 +1,19 @@
+name: Business production encrypted backups
+on:
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  checkpoint:
+    if: vars.BUSINESS_PRODUCTION_BACKUPS_ENABLED == 'true'
+    uses: ./.github/workflows/business-backups.yml
+    with:
+      profile: production
+    secrets:
+      BUSINESS_BACKUP_DATABASE_ENV: ${{ secrets.BUSINESS_PRODUCTION_BACKUP_DATABASE_ENV }}
+      BUSINESS_BACKUP_VAULT_TOKEN: ${{ secrets.BUSINESS_PRODUCTION_BACKUP_VAULT_TOKEN }}
+      BUSINESS_BACKUP_MONITOR_TOKEN: ${{ secrets.BUSINESS_PRODUCTION_BACKUP_MONITOR_TOKEN }}
+      BUSINESS_BACKUP_CONFIG_AGE: ${{ secrets.BUSINESS_PRODUCTION_BACKUP_CONFIG_AGE }}
+      BUSINESS_OPERATIONS_ALERT_TOKEN: ${{ secrets.BUSINESS_OPERATIONS_ALERT_TOKEN }}

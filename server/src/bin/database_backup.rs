@@ -1,4 +1,4 @@
-//! Development-only backup and restore verification. Never overwrites a database.
+//! Explicit profile-bound backup and restore verification. Never overwrites a database.
 use anyhow::{ensure, Result};
 use serde_json::Value;
 use std::{collections::BTreeMap, path::Path};
@@ -18,13 +18,30 @@ async fn main() -> Result<()> {
             "verify-preserved"
         ]
         .contains(&command),
-        "Use inspect/export/restore-verify and an explicit development database"
+        "Use inspect/export/export-online/restore-verify/verify-preserved and an explicit database/profile"
     );
     let name = args
         .get(2)
         .ok_or_else(|| anyhow::anyhow!("Explicit database required"))?;
     server::database::target(name)?;
-    ensure!(name != "business_prod", "Development databases only");
+    let production = std::env::var("BUSINESS_BACKUP_PROFILE").as_deref() == Ok("production");
+    if production {
+        ensure!(name == "business_prod"
+            && std::env::var("TYPEDB_DB")? == *name
+            && std::env::var("TYPEDB_USERNAME")? == "business_prod_backup"
+            && std::env::var("TYPEDB_TLS")? == "true"
+            && matches!(command, "inspect" | "export" | "export-online"),
+            "Production backup requires the exact source, dedicated account, TLS and a read-only command");
+    } else {
+        ensure!(
+            std::env::var("BUSINESS_BACKUP_PROFILE").map_or(true, |p| p == "development"),
+            "Unknown backup profile"
+        );
+        ensure!(
+            name != "business_prod",
+            "Production requires an explicit production backup profile"
+        );
+    }
     let driver = dog_typedb::TypeDBDriverFactory::connect(
         &std::env::var("TYPEDB_ADDR")?,
         &std::env::var("TYPEDB_USERNAME")?,

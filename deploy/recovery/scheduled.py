@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Daily application checkpoint: read-only source, isolated graph rehearsal, public-key encryption.
+"""Application checkpoint: read-only source, isolated graph rehearsal, public-key encryption.
 The recovery identity and decrypted runtime/vault master key are never needed on this runner.
 """
 import argparse, base64, hashlib, importlib.util, json, os, re, shlex, sqlite3, subprocess, sys, time, uuid
@@ -7,6 +7,15 @@ from pathlib import Path
 ROOT=Path(__file__).resolve().parents[2]
 spec=importlib.util.spec_from_file_location('bundle',Path(__file__).with_name('bundle.py'));bundle=importlib.util.module_from_spec(spec);spec.loader.exec_module(bundle)
 MAX=32*1024*1024
+PROFILES=json.loads(Path(__file__).with_name('profiles.json').read_text())
+def profile():
+    name=os.environ.get('BUSINESS_BACKUP_PROFILE','development')
+    if name not in PROFILES:raise ValueError('Unknown backup profile')
+    return name,PROFILES[name]
+
+def endpoint(kind,path):
+    if (kind,path) not in {('vault','snapshot'),('monitor','snapshot'),('monitor','backup')}:raise ValueError('Unknown backup endpoint')
+    return profile()[1][kind+'_url']+'/'+path
 
 def run(args, **kwargs):
     p=subprocess.run([str(a) for a in args],capture_output=True,**kwargs)
@@ -26,7 +35,7 @@ def run(args, **kwargs):
 
 def request(url, token, data=None):
     # Explicitly fixed HTTPS targets, no redirects and no credentials in argv/process logs.
-    if not re.fullmatch(r'https://jitpomi-business-(dev-secrets|automation-wake)\.steep-hill-e6f3\.workers\.dev/(snapshot|backup)',url):
+    if url not in {endpoint('vault','snapshot'),endpoint('monitor','snapshot'),endpoint('monitor','backup')}:
         raise ValueError('Unapproved backup target')
     if not re.fullmatch(r'[A-Za-z0-9_-]{32,256}',token):raise ValueError('Invalid backup credential')
     config=f'url = "{url}"\nheader = "Authorization: Bearer {token}"\n'
@@ -62,10 +71,11 @@ def monitor_sql(snapshot):
             db.execute(f'INSERT INTO {table}({",".join(columns)}) VALUES({",".join("?" for _ in columns)})',[row[c] for c in columns])
     return ('\n'.join(db.iterdump())+'\n').encode()
 
-def valid_database_configuration(parsed):
+def valid_database_configuration(parsed,selected_profile="development"):
     allowed={'TYPEDB_ADDR','TYPEDB_DB','TYPEDB_USERNAME','TYPEDB_PASSWORD','TYPEDB_TLS'}
     versioned=bool(re.fullmatch(r'business_native_dev_v(?:[2-9]|[1-9][0-9]{1,3})',parsed.get('TYPEDB_DB','')))
-    return set(parsed)==allowed and versioned and parsed['TYPEDB_TLS']=='true' and parsed['TYPEDB_USERNAME']!='admin'
+    approved=versioned if selected_profile=='development' else selected_profile=='production' and parsed.get('TYPEDB_DB')=='business_prod' and parsed.get('TYPEDB_USERNAME')=='business_prod_backup'
+    return set(parsed)==allowed and approved and parsed['TYPEDB_TLS']=='true' and bool(parsed['TYPEDB_USERNAME']) and parsed['TYPEDB_USERNAME']!='admin'
 
 def checkpoint(destination):
     destination=Path(destination).resolve();destination.mkdir(mode=0o700)
@@ -74,7 +84,8 @@ def checkpoint(destination):
     for line in db_env.splitlines():
         if line.strip():
             k,v=line.split('=',1);parsed[k]=shlex.split(v)[0]
-    if not valid_database_configuration(parsed):raise ValueError('Explicit non-admin TLS development backup credentials required')
+    selected_profile,_=profile()
+    if not valid_database_configuration(parsed,selected_profile):raise ValueError('Explicit matching non-admin TLS backup profile required')
     # Refuse a fallback to the application cluster. The local container has only
     # its disposable default account, never cloud credentials or runtime keys.
     local=os.environ['BUSINESS_RECOVERY_LOCAL_ADDR']
@@ -87,14 +98,15 @@ def checkpoint(destination):
     started=int(time.time())
     # No retries of a write/commit/provider request. Concurrent source changes fail the checkpoint.
     run([binary/'database_backup','export-online',parsed['TYPEDB_DB'],cp],env=env)
-    private(files/'secrets.sql',vault_sql(request('https://jitpomi-business-dev-secrets.steep-hill-e6f3.workers.dev/snapshot',os.environ['BUSINESS_BACKUP_VAULT_TOKEN'])))
-    private(files/'monitor.sql',monitor_sql(request('https://jitpomi-business-automation-wake.steep-hill-e6f3.workers.dev/snapshot',os.environ['BUSINESS_BACKUP_MONITOR_TOKEN'])))
+    private(files/'secrets.sql',vault_sql(request(endpoint('vault','snapshot'),os.environ['BUSINESS_BACKUP_VAULT_TOKEN'])))
+    private(files/'monitor.sql',monitor_sql(request(endpoint('monitor','snapshot'),os.environ['BUSINESS_BACKUP_MONITOR_TOKEN'])))
     sealed=base64.b64decode(os.environ['BUSINESS_BACKUP_CONFIG_AGE'],validate=True)
     if not sealed.startswith(b'age-encryption.org/v1\n'):raise ValueError('Runtime configuration must already be recipient-encrypted')
     private(files/'configuration.age',sealed)
     # Exact source at this checkpoint, including locked dependencies and recovery tools.
     run(['git','archive','HEAD','-o',files/'business-source.tar'],cwd=ROOT)
-    private(files/'RUNBOOK.md',(ROOT/'docs/operations-and-recovery.md').read_bytes())
+    private(files/'RUNBOOK.md',(ROOT/('docs/production-capacity-and-recovery.md' if selected_profile=='production' else 'docs/operations-and-recovery.md')).read_bytes())
+    if selected_profile=='production':private(files/'RECOVERY.md',(ROOT/'docs/operations-and-recovery.md').read_bytes())
     recovery_env={k:v for k,v in os.environ.items() if k in {'PATH','HOME','TMPDIR','SSL_CERT_FILE','SSL_CERT_DIR'}}
     recovery_env['BUSINESS_RECOVERY_LOCAL_ADDR']=local
     verification=json.loads(run([binary/'recovery','rehearse-local',cp,parsed['TYPEDB_DB']],env=recovery_env))
@@ -107,7 +119,7 @@ def checkpoint(destination):
             if ref:
                 if ref.removeprefix('secret:') not in known:raise ValueError('Checkpoint references missing ciphertext')
                 references+=1
-    metadata={'version':1,'checkpoint_at':started,'source_database':parsed['TYPEDB_DB'],'source_commit':run(['git','rev-parse','HEAD'],cwd=ROOT).decode().strip(),'records':len(records),'ciphertext_rows':len(known),'connection_references':references,'graph_verified':True,'native_schema_verified':True,'rehearsal_location':'isolated runner loopback container','credential_decryption':'Requires separately held recovery identity; verified in operator restore drills'}
+    metadata={'profile':selected_profile,'version':1,'checkpoint_at':started,'source_database':parsed['TYPEDB_DB'],'source_commit':run(['git','rev-parse','HEAD'],cwd=ROOT).decode().strip(),'records':len(records),'ciphertext_rows':len(known),'connection_references':references,'graph_verified':True,'native_schema_verified':True,'rehearsal_location':'isolated runner loopback container','credential_decryption':'Requires separately held recovery identity; verified in operator restore drills'}
     private(files/'checkpoint.json',json.dumps(metadata,indent=2).encode())
     bundle.pack(files,destination/'bundle.zip')
     recipient=os.environ['BUSINESS_BACKUP_RECIPIENT']

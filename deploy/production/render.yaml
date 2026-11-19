@@ -1,0 +1,114 @@
+{
+  "services": [
+    {
+      "type": "web",
+      "name": "jitpomi-business-production",
+      "runtime": "rust",
+      "plan": "1c-2g",
+      "region": "virginia",
+      "numInstances": 1,
+      "repo": "https://github.com/Jitpomi/business",
+      "branch": "main",
+      "rootDir": "server",
+      "buildCommand": "cargo build --locked --release --bin server",
+      "startCommand": "./target/release/server",
+      "healthCheckPath": "/health",
+      "maxShutdownDelaySeconds": 300,
+      "autoDeployTrigger": "off",
+      "envVars": [
+        {
+          "key": "ENVIRONMENT",
+          "value": "production"
+        },
+        {
+          "key": "HTTP_HOST",
+          "value": "0.0.0.0"
+        },
+        {
+          "key": "HTTP_PORT",
+          "value": "10000"
+        },
+        {
+          "key": "TYPEDB_DB",
+          "value": "business_prod"
+        },
+        {
+          "key": "TYPEDB_TLS",
+          "value": "true"
+        },
+        {
+          "key": "TYPEDB_FORCE_RECREATE",
+          "value": "false"
+        },
+        {
+          "key": "AUTH_LOCAL_ENABLED",
+          "value": "false"
+        },
+        {
+          "key": "AUTOMATION_ENABLED",
+          "value": "true"
+        },
+        {
+          "key": "BILLING_ENABLED",
+          "value": "true"
+        },
+        {
+          "key": "OPERATIONS_ENABLED",
+          "value": "true"
+        },
+        {
+          "key": "BUSINESS_ACTIVE_REQUESTS",
+          "value": "3"
+        },
+        {
+          "key": "AUTH_JWT_SECRET",
+          "sync": false
+        },
+        {
+          "key": "BUSINESS_GATEWAY_SECRET",
+          "sync": false
+        },
+        {
+          "key": "TYPEDB_ADDR",
+          "sync": false
+        },
+        {
+          "key": "TYPEDB_USERNAME",
+          "sync": false
+        },
+        {
+          "key": "TYPEDB_PASSWORD",
+          "sync": false
+        },
+        {
+          "key": "AUTH_OIDC_PROVIDERS_JSON",
+          "sync": false
+        },
+        {
+          "key": "AUTOMATION_MASTER_KEY_B64",
+          "sync": false
+        },
+        {
+          "key": "AUTOMATION_SECRET_STORE_URL",
+          "sync": false
+        },
+        {
+          "key": "AUTOMATION_SECRET_STORE_TOKEN",
+          "sync": false
+        },
+        {
+          "key": "OPERATIONS_READ_TOKEN",
+          "sync": false
+        },
+        {
+          "key": "OPERATIONS_VAULT_CANARY_REF",
+          "sync": false
+        },
+        {
+          "key": "ACCOUNT_TENANT_ID",
+          "sync": false
+        }
+      ]
+    }
+  ]
+}

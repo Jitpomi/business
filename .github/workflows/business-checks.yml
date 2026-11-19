@@ -1,10 +1,10 @@
 name: Business correctness
 on:
   pull_request:
-    paths: ['server/**', 'deploy/**', 'render.yaml', '.github/workflows/business-checks.yml', '.github/workflows/business-operations.yml', '.github/workflows/business-backups.yml']
+    paths: ['server/**', 'deploy/**', 'render.yaml', '.github/workflows/business-production-backups.yml', '.github/workflows/business-checks.yml', '.github/workflows/business-operations.yml', '.github/workflows/business-backups.yml']
   push:
     branches: [main]
-    paths: ['server/**', 'deploy/**', 'render.yaml', '.github/workflows/business-checks.yml', '.github/workflows/business-operations.yml', '.github/workflows/business-backups.yml']
+    paths: ['server/**', 'deploy/**', 'render.yaml', '.github/workflows/business-production-backups.yml', '.github/workflows/business-checks.yml', '.github/workflows/business-operations.yml', '.github/workflows/business-backups.yml']
   workflow_dispatch:
 permissions:
   contents: read
