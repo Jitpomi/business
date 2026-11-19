@@ -123,9 +123,14 @@ pub async fn metrics(state: &TypeDBState) -> Result<Value> {
         "$r isa commerce_refund,has cx_refund_status 'attention';",
     )
     .await?;
+    // A send may have reached its provider before its acknowledgement was lost.
+    // Observe the retained journal; never retry or rewrite it from monitoring.
+    let notice_attention = count(&tx, &format!("$notice isa bill_notice,has bill_status $status;{{$status=='attention';}} or {{$status=='sending';$notice has bill_updated $at;$at<{stale_job};}};")).await?;
+    let at = crate::clock::native_utc();
+    let refund_stalled = count(&tx, &format!("$r isa commerce_refund,has cx_refund_status $status,has cx_created $created;$created<{at} - PT15M;{{$status=='queued';}} or {{$status=='processing';}};")).await?;
     tx.close().await?;
     Ok(
-        json!({"failed_jobs":failed,"failed_runs":failed_runs,"overdue_jobs":overdue,"attention_runs":attention,"attention_invoices":invoice_attention,"stale_reconciliations":stale,"attention_refunds":refund_attention}),
+        json!({"failed_jobs":failed,"failed_runs":failed_runs,"overdue_jobs":overdue,"attention_runs":attention,"attention_invoices":invoice_attention,"stale_reconciliations":stale,"attention_refunds":refund_attention,"attention_notices":notice_attention,"stalled_refunds":refund_stalled}),
     )
 }
 async fn readiness(State(m): State<Monitor>, headers: HeaderMap) -> Response {
@@ -150,11 +155,11 @@ async fn readiness(State(m): State<Monitor>, headers: HeaderMap) -> Response {
     let (status, body) = match result {
         Ok(Ok(metrics)) => (
             StatusCode::OK,
-            json!({"version":1,"dependencies":"ready","metrics":metrics}),
+            json!({"version":2,"dependencies":"ready","metrics":metrics}),
         ),
         _ => (
             StatusCode::SERVICE_UNAVAILABLE,
-            json!({"version":1,"dependencies":"unavailable"}),
+            json!({"version":2,"dependencies":"unavailable"}),
         ),
     };
     (status, [("cache-control", "no-store")], Json(body)).into_response()

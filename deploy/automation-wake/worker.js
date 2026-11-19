@@ -12,8 +12,10 @@ export async function probe(env){
   const r=await fetch(new URL('/health/ready',base),{redirect:'manual',headers:{authorization:`Bearer ${env.OPERATIONS_READ_TOKEN}`},signal:AbortSignal.timeout(30000)});
   if(r.status!==200)return {issues:[r.status===401?'monitor_credentials_rejected':'dependencies_unavailable']};
   const text=await r.text();if(text.length>8192)throw Error('Invalid readiness body');const v=JSON.parse(text);
-  if(v.version!==1||v.dependencies!=='ready'||!v.metrics)throw Error('Invalid readiness protocol');
+  if(![1,2].includes(v.version)||v.dependencies!=='ready'||!v.metrics)throw Error('Invalid readiness protocol');
   const keys=['failed_jobs','failed_runs','overdue_jobs','attention_runs','attention_invoices','stale_reconciliations','attention_refunds'];
+  // Deploy the observer first; v1 remains supported during the backend rollout.
+  if(v.version===2)keys.push('attention_notices','stalled_refunds');
   if(keys.some(k=>!Number.isSafeInteger(v.metrics[k])||v.metrics[k]<0))throw Error('Invalid aggregate');
   failure={issues:keys.filter(k=>v.metrics[k]>0),metrics:Object.fromEntries(keys.map(k=>[k,v.metrics[k]]))};
  }catch{failure={issues:['probe_unavailable']};}

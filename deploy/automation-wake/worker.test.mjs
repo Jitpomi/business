@@ -31,3 +31,13 @@ test('missed daily backups open one durable incident and verified fresh receipts
   await run(env);await run(env);await run(env);assert.equal(db.prepare('SELECT count(*) AS n FROM outbox').get().n,2);assert.equal(db.prepare('SELECT count(*) AS n FROM outbox WHERE accepted IS NOT NULL').get().n,2);assert.equal(JSON.parse(db.prepare("SELECT state FROM monitors WHERE id='backup_age'").get().state).incident,null);
  }finally{globalThis.fetch=old;}
 });
+
+test('v2 alerts on uncertain receipts and stalled refunds without treating fresh work as an incident',async()=>{
+ const {env,db}=fixture(),old=fetch;const metrics={...zero,attention_notices:1,stalled_refunds:1};
+ globalThis.fetch=async(url)=>String(url).includes('api.resend.com')?Response.json({id:crypto.randomUUID()}):String(url).endsWith('/health')?new Response('ok'):Response.json({version:2,dependencies:'ready',metrics});
+ try{await run(env);await run(env);assert.equal(db.prepare('SELECT count(*) AS n FROM outbox').get().n,2);for(const k of ['attention_notices','stalled_refunds'])assert.deepEqual(JSON.parse(db.prepare('SELECT state FROM monitors WHERE id=?').get(k).state).issues,[k]);metrics.attention_notices=0;metrics.stalled_refunds=0;await run(env);await run(env);assert.equal(db.prepare('SELECT count(*) AS n FROM outbox').get().n,4);}finally{globalThis.fetch=old;}
+});
+test('v2 cannot silently omit or corrupt the added money-safety aggregates',async()=>{
+ const {env}=fixture(),old=fetch;
+ try{for(const metrics of [zero,{...zero,attention_notices:0,stalled_refunds:'0'}]){let n=0;globalThis.fetch=async()=>++n===1?new Response('ok'):Response.json({version:2,dependencies:'ready',metrics});assert.deepEqual((await probe(env)).issues,['probe_unavailable']);}}finally{globalThis.fetch=old;}
+});
