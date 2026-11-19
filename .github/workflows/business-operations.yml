@@ -31,3 +31,21 @@ jobs:
           ALERT_TO: ${{ vars.BUSINESS_OPERATIONS_ALERT_TO }}
           ALERT_FROM: ${{ vars.BUSINESS_OPERATIONS_ALERT_FROM }}
           WATCHDOG_DRILL: ${{ inputs.drill && 'true' || 'false' }}
+  production-heartbeat:
+    if: vars.BUSINESS_PRODUCTION_MONITOR_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node deploy/automation-wake/watchdog.mjs
+        env:
+          ENVIRONMENT: production
+          MONITOR_URL: https://jitpomi-business-production-operations.steep-hill-e6f3.workers.dev
+          MONITOR_STATUS_TOKEN: ${{ secrets.BUSINESS_PRODUCTION_MONITOR_STATUS_TOKEN }}
+          ALERT_TOKEN: ${{ secrets.BUSINESS_OPERATIONS_ALERT_TOKEN }}
+          ALERT_TO: ${{ vars.BUSINESS_OPERATIONS_ALERT_TO }}
+          ALERT_FROM: ${{ vars.BUSINESS_OPERATIONS_ALERT_FROM }}
+          WATCHDOG_DRILL: ${{ inputs.drill && 'true' || 'false' }}

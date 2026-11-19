@@ -41,3 +41,14 @@ test('v2 cannot silently omit or corrupt the added money-safety aggregates',asyn
  const {env}=fixture(),old=fetch;
  try{for(const metrics of [zero,{...zero,attention_notices:0,stalled_refunds:'0'}]){let n=0;globalThis.fetch=async()=>++n===1?new Response('ok'):Response.json({version:2,dependencies:'ready',metrics});assert.deepEqual((await probe(env)).issues,['probe_unavailable']);}}finally{globalThis.fetch=old;}
 });
+
+test('production freshness is 90 minutes and cannot accept a development checkpoint',async()=>{
+ const {env,db}=fixture();Object.assign(env,{ENVIRONMENT:'production',BACKUPS_ENABLED:'true',BACKUP_MAX_AGE_SECONDS:'5400',BACKUP_TOKEN:'b'.repeat(43)});
+ const now=Math.floor(Date.now()/1000),base={checkpoint_at:now-6000,sha256:'a'.repeat(64),artifact_url:'https://github.com/Jitpomi/business/actions/runs/123/artifacts/456',graph_verified:true};
+ const accept=v=>worker.fetch(new Request('https://monitor.example/backup',{method:'POST',headers:{authorization:'Bearer '+env.BACKUP_TOKEN},body:JSON.stringify(v)}),env);
+ assert.equal((await accept(base)).status,400);
+ assert.equal((await accept({...base,profile:'production',source_database:'business_native_dev_v10',native_schema_verified:true})).status,400);
+ assert.equal((await accept({...base,profile:'production',source_database:'business_prod',native_schema_verified:true})).status,200);
+ const old=fetch;globalThis.fetch=async(url)=>String(url).includes('api.resend.com')?Response.json({id:crypto.randomUUID()}):String(url).endsWith('/health')?new Response('ok'):Response.json({version:2,dependencies:'ready',metrics:{...zero,attention_notices:0,stalled_refunds:0}});
+ try{await run(env);await run(env);assert.deepEqual(JSON.parse(db.prepare("SELECT state FROM monitors WHERE id='backup_age'").get().state).issues,['backup_stale']);const notice=JSON.parse(db.prepare('SELECT body FROM outbox').get().body);assert.match(notice.subject,/production OUTAGE/);}finally{globalThis.fetch=old;}
+});

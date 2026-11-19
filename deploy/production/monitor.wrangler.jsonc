@@ -1,0 +1,33 @@
+{
+  "name": "jitpomi-business-production-operations",
+  "main": "../automation-wake/worker.js",
+  "compatibility_date": "2026-10-08",
+  "workers_dev": true,
+  "triggers": {
+    "crons": [
+      "*/5 * * * *"
+    ]
+  },
+  "vars": {
+    "BUSINESS_URL": "https://jitpomi-business-production.onrender.com",
+    "ALERT_TO": "dev@jitpomi.com",
+    "ALERT_FROM": "JITPOMI Operations <billing@jitpomi.com>",
+    "BACKUPS_ENABLED": "true",
+    "ENVIRONMENT": "production",
+    "BACKUP_MAX_AGE_SECONDS": "5400"
+  },
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "preview_urls": false,
+  "observability": {
+    "enabled": true
+  },
+  "d1_databases": [
+    {
+      "binding": "MONITOR",
+      "database_name": "jitpomi-business-production-operations",
+      "database_id": "REQUIRES_NEW_PRODUCTION_D1_ID"
+    }
+  ]
+}

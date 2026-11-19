@@ -3,16 +3,34 @@ on:
   schedule:
     - cron: '17 9 * * *'
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      profile:
+        type: string
+        required: true
+    secrets:
+      BUSINESS_BACKUP_DATABASE_ENV:
+        required: true
+      BUSINESS_BACKUP_VAULT_TOKEN:
+        required: true
+      BUSINESS_BACKUP_MONITOR_TOKEN:
+        required: true
+      BUSINESS_BACKUP_CONFIG_AGE:
+        required: true
+      BUSINESS_OPERATIONS_ALERT_TOKEN:
+        required: true
 permissions:
   contents: read
 concurrency:
-  group: business-encrypted-backup
+  group: ${{ inputs.profile == 'production' && 'business-encrypted-backup-production' || 'business-encrypted-backup' }}
   cancel-in-progress: false
 jobs:
   checkpoint:
-    if: vars.BUSINESS_BACKUPS_ENABLED == 'true'
+    if: (inputs.profile == 'production' && vars.BUSINESS_PRODUCTION_BACKUPS_ENABLED == 'true') || (inputs.profile != 'production' && vars.BUSINESS_BACKUPS_ENABLED == 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      BUSINESS_BACKUP_PROFILE: ${{ inputs.profile || 'development' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/cache@v4
@@ -50,7 +68,7 @@ jobs:
           BUSINESS_BACKUP_VAULT_TOKEN: ${{ secrets.BUSINESS_BACKUP_VAULT_TOKEN }}
           BUSINESS_BACKUP_MONITOR_TOKEN: ${{ secrets.BUSINESS_BACKUP_MONITOR_TOKEN }}
           BUSINESS_BACKUP_CONFIG_AGE: ${{ secrets.BUSINESS_BACKUP_CONFIG_AGE }}
-          BUSINESS_BACKUP_RECIPIENT: ${{ vars.BUSINESS_BACKUP_RECIPIENT }}
+          BUSINESS_BACKUP_RECIPIENT: ${{ vars[inputs.profile == 'production' && 'BUSINESS_PRODUCTION_BACKUP_RECIPIENT' || 'BUSINESS_BACKUP_RECIPIENT'] }}
           BUSINESS_RECOVERY_LOCAL_ADDR: http://127.0.0.1:1729
       - name: Store only recipient-encrypted backup
         id: archive

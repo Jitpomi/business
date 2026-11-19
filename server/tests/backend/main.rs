@@ -26,3 +26,5 @@ fn seed_accounts(database: &str) -> anyhow::Result<()> {
 mod operations_tests;
 
 mod commerce_tests;
+
+mod capacity_tests;
