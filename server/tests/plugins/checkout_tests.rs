@@ -181,6 +181,14 @@ async fn bridge(path: &std::path::Path, phase: &str) -> Result<Value> {
 #[tokio::test]
 #[ignore = "Real development TypeDB and actual website gateway; isolated database and synthetic provider effects"]
 async fn checkout_gateway_queue_payment_and_refund_recovery() -> Result<()> {
+    checkout_gateway_scenario(false).await
+}
+#[tokio::test]
+#[ignore = "Real TypeDB and gateway; mixed checkout with independent synthetic payment and notification plugins"]
+async fn mixed_checkout_gateway_queue_payment_and_refund_recovery() -> Result<()> {
+    checkout_gateway_scenario(true).await
+}
+async fn checkout_gateway_scenario(mixed_only: bool) -> Result<()> {
     let _environment = environment::Environment::capture(&[
         "BILLING_ENABLED",
         "AUTOMATION_ENABLED",
@@ -235,6 +243,7 @@ async fn checkout_gateway_queue_payment_and_refund_recovery() -> Result<()> {
   let directory=tempfile::tempdir()?;let config_file=directory.path().join("checkout.json");
   std::fs::write(&config_file,serde_json::to_vec(&json!({"currency":std::env::var("CHECKOUT_TEST_CURRENCY").unwrap_or("USD".into()),"base":base,"merchant":merchant,"customer":customer,"seller":{"email":"seller@checkout.example.invalid"},"buyer":{"email":"buyer@checkout.example.invalid"},"outsider":{"email":"outsider@checkout.example.invalid"}}))?)?;
   let worker=server::background::spawn_all((*template).clone());
+  if mixed_only {worker.shutdown().await?;bridge(&config_file,"mixed-prepare").await?;return exercise_mixed_gateway(&config_file,&template,&bank,&mail).await;}
   let test=async{
    eprintln!("Gateway catalogue, quote, confirmation and company isolation");let created=bridge(&config_file,"create").await?;let order=created["order"].as_str().context("Order id")?;
    eprintln!("Awaiting dog-queue invoice execution for {order}");
@@ -273,7 +282,11 @@ async fn checkout_gateway_queue_payment_and_refund_recovery() -> Result<()> {
   ensure!(bank.submissions.load(Ordering::SeqCst)==1&&bank.invoice_calls.lock().unwrap().values().all(|n|*n==1));
   ensure!(bank.base.attempts.lock().unwrap().values().all(|n|*n==1),"A payment collection was submitted twice");
   ensure!(mail.calls.lock().unwrap().values().all(|n|*n==1),"A notification was submitted twice");
-  let messages=mail.messages.lock().unwrap();ensure!(messages.values().filter(|m|m.subject.contains("Payment received")).count()==1,"Duplicate payment receipt");ensure!(messages.values().filter(|m|m.subject.contains("Refund confirmed")).count()==1,"Refund receipt missing or duplicated");
+  {let messages=mail.messages.lock().unwrap();ensure!(messages.values().filter(|m|m.subject.contains("Payment received")).count()==1,"Duplicate payment receipt");ensure!(messages.values().filter(|m|m.subject.contains("Refund confirmed")).count()==1,"Refund receipt missing or duplicated");
+  }
+  exercise_mixed_gateway(&config_file,&template,&bank,&mail).await?;
+
+
   Ok::<_,anyhow::Error>(())
  }.await;
     if result.is_ok() {
@@ -282,4 +295,144 @@ async fn checkout_gateway_queue_payment_and_refund_recovery() -> Result<()> {
         eprintln!("Retained checkout fixture: {db}");
     }
     result
+}
+
+async fn exercise_mixed_gateway(
+    config_file: &std::path::Path,
+    template: &Arc<server::automation::engine::Engine>,
+    bank: &Arc<CheckoutBank>,
+    mail: &Arc<Mail>,
+) -> Result<()> {
+    eprintln!("Atomic mixed checkout, independent manual invoices and scoped partial refund");
+    let submissions_before = bank.submissions.load(Ordering::SeqCst);
+    bridge(config_file, "mixed-create").await?;
+    let attempts_before = bank.base.attempts.lock().unwrap().clone();
+    let mixed_worker = server::background::spawn_all((**template).clone());
+    let mixed_test = async {
+        let groups = tokio::time::timeout(std::time::Duration::from_secs(240), async {
+            loop {
+                let r = bridge(config_file, "mixed-status").await?;
+                let groups = r["mixed_last"]["groups"]
+                    .as_array()
+                    .context("Mixed groups")?;
+                if groups.len() == 3
+                    && groups.iter().all(|g| {
+                        g["plans"].as_array().is_some_and(|p| p.len() == 1)
+                            && g["plans"][0]["invoices"]
+                                .as_array()
+                                .is_some_and(|i| i.len() == 1)
+                            && g["plans"][0]["invoices"][0]["status"] == "open"
+                    })
+                {
+                    break Ok::<_, anyhow::Error>(groups.clone());
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            }
+        })
+        .await??;
+        let once_invoice = groups.iter().find(|g| g["mode"] == "once").unwrap()["plans"][0]
+            ["invoices"][0]["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let other_invoices = groups
+            .iter()
+            .filter(|g| g["mode"] != "once")
+            .map(|g| {
+                g["plans"][0]["invoices"][0]["id"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned()
+            })
+            .collect::<Vec<_>>();
+        for group in groups {
+            let invoice = group["plans"][0]["invoices"][0]["id"]
+                .as_str()
+                .context("Mixed invoice")?;
+            ensure!(
+                group["plans"][0]["choice"] == "manual",
+                "Checkout acceptance silently authorized automatic collection"
+            );
+            let mut all = bank.base.invoices.lock().unwrap();
+            let row = all
+                .values_mut()
+                .find(|v| v.invoice_id == invoice)
+                .context("Mixed provider invoice")?;
+            row.state = match group["interval"].as_str().unwrap() {
+                "once" => InvoiceState::Paid,
+                "month" => InvoiceState::Processing,
+                _ => InvoiceState::Open,
+            };
+        }
+        tokio::time::timeout(std::time::Duration::from_secs(240), async {
+            loop {
+                let r = bridge(config_file, "mixed-status").await?;
+                let groups = r["mixed_last"]["groups"].as_array().unwrap();
+                let ready = groups.iter().all(|g| {
+                    g["plans"][0]["invoices"][0]["status"]
+                        == match g["interval"].as_str().unwrap() {
+                            "once" => "paid",
+                            "month" => "processing",
+                            _ => "open",
+                        }
+                });
+                let received = {
+                    let messages = mail.messages.lock().unwrap();
+                    messages.contains_key(&format!("{once_invoice}-receipt"))
+                        && other_invoices
+                            .iter()
+                            .all(|id| !messages.contains_key(&format!("{id}-receipt")))
+                };
+                if ready && received {
+                    break Ok::<_, anyhow::Error>(());
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            }
+        })
+        .await??;
+        ensure!(
+            *bank.base.attempts.lock().unwrap() == attempts_before,
+            "Mixed checkout collected without scoped consent"
+        );
+        bridge(config_file, "mixed-refund").await?;
+        tokio::time::timeout(std::time::Duration::from_secs(240), async {
+            loop {
+                let r = bridge(config_file, "mixed-status").await?;
+                let once = r["mixed_last"]["groups"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|g| g["mode"] == "once")
+                    .unwrap();
+                let refunds = &once["plans"][0]["invoices"][0]["refunds"];
+                if refunds.as_array().is_some_and(|r| r.len() == 1)
+                    && refunds[0]["status"] == "succeeded"
+                    && refunds[0]["id"].as_str().is_some_and(|id| {
+                        mail.messages
+                            .lock()
+                            .unwrap()
+                            .contains_key(&format!("{id}-refund-receipt"))
+                    })
+                {
+                    break Ok::<_, anyhow::Error>(());
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            }
+        })
+        .await??;
+        bridge(config_file, "mixed-cancel").await?;
+        ensure!(
+            bank.submissions.load(Ordering::SeqCst) == submissions_before + 1
+                && bank.invoice_calls.lock().unwrap().values().all(|n| *n == 1)
+        );
+        ensure!(
+            mail.calls.lock().unwrap().values().all(|n| *n == 1),
+            "Mixed checkout duplicated a receipt or reminder"
+        );
+        Ok::<_, anyhow::Error>(())
+    }
+    .await;
+    mixed_worker.shutdown().await?;
+    mixed_test?;
+    Ok(())
 }

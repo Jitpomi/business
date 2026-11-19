@@ -241,6 +241,8 @@ fun cx_can_activate($merchant:tenant,$o:commerce_order,$now:datetime)->boolean:
   return check;
 fun create_commerce_signatory($tenant:string,$actor:string,$now:datetime,$link:commerce_signatory)->boolean:
   match $link links(order:$o,actor:$person),has cx_created == $now;$person has identity_id == $actor;
+    {not {(order:$o) isa commerce_checkout_item;};}
+    or {(order:$o,checkout:$checkout) isa commerce_checkout_item;let $complete=cx_checkout_signed_at($checkout,$person,$now);$complete==true;};
     $o has cx_created $at;$at >= $now - PT15M;
     not {(order:$o) isa commerce_execution;};not {(order:$o) isa commerce_cancellation;};
     (order:$o,customer:$c,pricing:$pricing) isa commerce_order_owner;
@@ -469,3 +471,90 @@ fun bill_method_supports_plan($c:bill_customer,$p:bill_plan)->boolean:
     (customer:$c,method:$m) isa bill_method_owner;$m has method_plugin == $plugin,has method_ref == $ref;
     {$m has method_currency == $currency;} or {not {$m has method_currency $_;};$currency=="USD";};
   return check;
+# A checkout groups independently priced obligations. Orders and their existing
+# billing/payment lifecycle remain authoritative; acceptance is atomic across all
+# schedules and cannot be extended after review.
+attribute cx_groups,value integer @range(1..4);
+entity commerce_checkout,owns cx_id @key,owns cx_created @card(1),owns cx_currency @card(1),
+  owns cx_groups @card(1),owns cx_request_hash @card(1);
+relation commerce_checkout_owner,relates checkout @card(1),relates customer @card(1),relates pricing @card(1);
+commerce_checkout plays commerce_checkout_owner:checkout @card(1);
+bill_customer plays commerce_checkout_owner:customer;
+commerce_pricing plays commerce_checkout_owner:pricing;
+relation commerce_checkout_item,relates checkout @card(1),relates order @card(1);
+commerce_checkout plays commerce_checkout_item:checkout;
+commerce_order plays commerce_checkout_item:order @card(0..1);
+relation commerce_checkout_signatory,relates checkout @card(1),relates actor @card(1),owns cx_created @card(1);
+commerce_checkout plays commerce_checkout_signatory:checkout @card(0..1);
+identity plays commerce_checkout_signatory:actor;
+
+fun cx_checkout_group_count($checkout:commerce_checkout)->integer:
+  match $link isa commerce_checkout_item,links(checkout:$checkout);
+  return count($link);
+fun cx_checkout_line_count($checkout:commerce_checkout)->integer:
+  match (checkout:$checkout,order:$o) isa commerce_checkout_item;
+    $line isa commerce_line,links(order:$o);
+  return count($line);
+fun cx_checkout_layout($checkout:commerce_checkout)->boolean:
+  match $checkout has cx_groups $expected,has cx_currency $currency;
+    (checkout:$checkout,customer:$customer,pricing:$pricing) isa commerce_checkout_owner;
+    let $actual=cx_checkout_group_count($checkout);$actual==$expected;
+    let $lines=cx_checkout_line_count($checkout);$lines<=60;
+    not {(checkout:$checkout,order:$customer_order) isa commerce_checkout_item;
+      (order:$customer_order,customer:$other_customer) isa commerce_order_owner;not {$other_customer is $customer;};};
+    not {(checkout:$checkout,order:$pricing_order) isa commerce_checkout_item;
+      (order:$pricing_order,pricing:$other_pricing) isa commerce_order_owner;not {$other_pricing is $pricing;};};
+    not {(checkout:$checkout,order:$currency_order) isa commerce_checkout_item;
+      $currency_order has cx_currency $other_currency;$other_currency!=$currency;};
+    not {(checkout:$checkout,order:$one) isa commerce_checkout_item;
+      (checkout:$checkout,order:$two) isa commerce_checkout_item;not {$one is $two;};
+      $one has cx_mode $mode,has cx_interval $period;$two has cx_mode == $mode,has cx_interval == $period;};
+  return check;
+fun scope_commerce_checkout($tenant:string,$actor:string,$now:datetime,$checkout:commerce_checkout)->boolean:
+  match (checkout:$checkout,customer:$c) isa commerce_checkout_owner;
+    let $allowed=scope_bill_customer($tenant,$actor,$now,$c);$allowed==true;
+  return check;
+fun create_commerce_checkout($tenant:string,$actor:string,$now:datetime,$checkout:commerce_checkout)->boolean:
+  match $checkout has cx_created == $now;
+    (checkout:$checkout,customer:$c) isa commerce_checkout_owner;
+    $t isa tenant,has tenant_id == $tenant;$person isa identity,has identity_id == $actor;
+    let $buyer=bill_buyer($person,$t,$c,$now);$buyer==true;
+    let $layout=cx_checkout_layout($checkout);$layout==true;
+    not {(checkout:$checkout,order:$timed_order) isa commerce_checkout_item;$timed_order has cx_created $at;$at!=$now;};
+    not {(checkout:$checkout,order:$signed_order) isa commerce_checkout_item;(order:$signed_order) isa commerce_signatory;};
+  return check;
+fun scope_commerce_checkout_owner($tenant:string,$actor:string,$now:datetime,$link:commerce_checkout_owner)->boolean:
+  match $link links(checkout:$checkout);let $allowed=scope_commerce_checkout($tenant,$actor,$now,$checkout);$allowed==true;
+  return check;
+fun create_commerce_checkout_owner($tenant:string,$actor:string,$now:datetime,$link:commerce_checkout_owner)->boolean:
+  match $link links(checkout:$checkout);let $allowed=create_commerce_checkout($tenant,$actor,$now,$checkout);$allowed==true;
+  return check;
+fun scope_commerce_checkout_item($tenant:string,$actor:string,$now:datetime,$link:commerce_checkout_item)->boolean:
+  match $link links(checkout:$checkout);let $allowed=scope_commerce_checkout($tenant,$actor,$now,$checkout);$allowed==true;
+  return check;
+fun create_commerce_checkout_item($tenant:string,$actor:string,$now:datetime,$link:commerce_checkout_item)->boolean:
+  match $link links(checkout:$checkout);let $allowed=create_commerce_checkout($tenant,$actor,$now,$checkout);$allowed==true;
+  return check;
+fun cx_checkout_signature_count($checkout:commerce_checkout,$person:identity,$at:datetime)->integer:
+  match (checkout:$checkout,order:$o) isa commerce_checkout_item;
+    $link isa commerce_signatory,links(order:$o,actor:$person),has cx_created == $at;
+  return count($link);
+fun cx_checkout_signed_at($checkout:commerce_checkout,$person:identity,$at:datetime)->boolean:
+  match (checkout:$checkout,actor:$person) isa commerce_checkout_signatory,has cx_created == $at;
+    $checkout has cx_groups $expected;let $signed=cx_checkout_signature_count($checkout,$person,$at);$signed==$expected;
+    let $layout=cx_checkout_layout($checkout);$layout==true;
+  return check;
+fun create_commerce_checkout_signatory($tenant:string,$actor:string,$now:datetime,$link:commerce_checkout_signatory)->boolean:
+  match $link links(checkout:$checkout,actor:$person),has cx_created == $now;$person has identity_id == $actor;
+    $checkout has cx_created $at;$at >= $now - PT15M;
+    (checkout:$checkout,customer:$c) isa commerce_checkout_owner;
+    $t isa tenant,has tenant_id == $tenant;let $buyer=bill_buyer($person,$t,$c,$now);$buyer==true;
+    let $complete=cx_checkout_signed_at($checkout,$person,$now);$complete==true;
+  return check;
+fun scope_commerce_checkout_signatory($tenant:string,$actor:string,$now:datetime,$link:commerce_checkout_signatory)->boolean:
+  match $link links(checkout:$checkout);let $allowed=scope_commerce_checkout($tenant,$actor,$now,$checkout);$allowed==true;
+  return check;
+entity commerce_checkout @meta("dog.security.scope","scope_commerce_checkout") @meta("dog.security.read","scope_commerce_checkout") @meta("dog.security.create","create_commerce_checkout");
+relation commerce_checkout_owner @meta("dog.security.scope","scope_commerce_checkout_owner") @meta("dog.security.read","scope_commerce_checkout_owner") @meta("dog.security.create","create_commerce_checkout_owner");
+relation commerce_checkout_item @meta("dog.security.scope","scope_commerce_checkout_item") @meta("dog.security.read","scope_commerce_checkout_item") @meta("dog.security.create","create_commerce_checkout_item");
+relation commerce_checkout_signatory @meta("dog.security.scope","scope_commerce_checkout_signatory") @meta("dog.security.read","scope_commerce_checkout_signatory") @meta("dog.security.create","create_commerce_checkout_signatory");
