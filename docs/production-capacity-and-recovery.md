@@ -1,6 +1,11 @@
 # Production capacity and recovery — 19 November 2026
 
-Status: implementation prepared; paid infrastructure not purchased or deployed.
+Status: upgrade preparation merged; **remain on the free services** by the
+owner's instruction on 19 November 2026. Paid infrastructure is not purchased or
+deployed. Production backup and monitor repository switches are explicitly
+`false`; daily development backups and development monitoring remain enabled.
+Do not treat the prepared Blueprint, cost estimate or recovery targets as spending
+approval, live-payment approval or evidence that production has been provisioned.
 Real customer payments remain disabled in the existing checkout implementation.
 Development remains on its original service, database and encrypted stores. This
 file does not waive the three dependency advisories or authorize live activation.
@@ -149,3 +154,41 @@ and live merchant/money acceptance are separately tracked release blockers.
 Sources checked: [Render compute plans](https://render.com/docs/compute-plans),
 [Blueprint fields](https://render.com/docs/blueprint-spec), and
 [TypeDB backup/clone support](https://typedb.com/docs/maintenance-operation/typedb-backups/).
+
+## Resuming the upgrade safely
+
+The upgrade is parked, not abandoned. Use this runbook and the checked-in
+production configurations when the owner explicitly requests the paid upgrade.
+Recheck current prices, quotas, available regions and the tested TypeDB version;
+the November quotes and small local workload are not a permanent capacity promise.
+Do not deploy the template to the existing validation service or reuse a source
+D1 ID. Missing production IDs/credentials intentionally prevent activation.
+
+Before cutover, take a fresh verified encrypted checkpoint and retain source
+archives, lockfiles, configuration, original database generations and provider
+journals. Restore to independent targets and compare the complete graph, roles,
+connection references and every expected invoice/payment/refund/notice identity.
+Retain the original export and failed rehearsal evidence. Never reset or overwrite
+an existing database to make a rehearsal pass.
+
+Decide the data move explicitly: synthetic sandbox tenants remain recoverable in
+development. Any useful records selected for production need a reviewed migration
+inventory and full preservation verification, not silent omission. If moving the
+whole current environment to paid capacity, preserve its exact graph and plugin
+bindings in the new target and keep that environment sandbox-only. Moving hosting
+and enabling real payments are separate decisions.
+
+At the actual traffic cutover, stop all source writers and drain workers, capture
+and verify the final checkpoint, then keep destination workers/payment execution
+withheld during native RBAC and read-only reconciliation checks. Release only one
+writer environment after verification. Do not run source and restored recurring
+schedules concurrently. Keep a tested rollback route to the retained source;
+rollback after new writes requires reconciliation of destination journals first,
+not merely switching back to an older snapshot. Unknown provider outcomes remain
+withheld in either direction.
+
+Re-run the paid hardware soak, full restore/RPO/RTO acceptance, key retrieval and
+alert delivery described above before declaring the upgrade accepted. Revisit
+upstream advisories and exact provider registration separately. Real checkout
+payments remain disabled throughout; no live key or merchant activation is part
+of the infrastructure upgrade.
