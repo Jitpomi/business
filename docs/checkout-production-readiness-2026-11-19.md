@@ -1,0 +1,75 @@
+# Checkout production readiness audit — 19 November 2026
+
+**Real payments remain disabled. This is not a live-money release approval.**
+The current deployment remains development validation. Production infrastructure,
+live merchant registration and a separately authorized live acceptance remain
+explicit gates; sandbox success does not prove real settlement.
+
+## Audit coverage
+
+| Boundary | Authority and verification |
+| --- | --- |
+| Identity and tenant access | dog-auth validates proofs; native TypeDB policies bind identities, active memberships, merchant/buyer access, scoped reads and writes. No credentials enter the graph. |
+| Prices and cart acceptance | TypeDB owns immutable offers, currency, donation bounds, totals, instalment bounds, mixed schedules, signatures and consent. Frontend inputs are proposals. |
+| External effects | Tenant-selected plugins bind invoice, customer, currency and amount. Native claims, immutable IDs and provider observations preserve payment/refund safety. Unknown outcomes are not blindly resubmitted. |
+| Widgets and hosted pages | Exact approved origin, popup, nonce, merchant and invoice bindings; account proofs remain in HttpOnly cookies; provider fields remain provider-owned. |
+| Scheduling and recovery | dog-queue drains durable occurrences. Native fences and journals survive restart. Backups include full graph, external ciphertext and separately encrypted runtime configuration. |
+| Operations | Protected aggregate probes and independent alert/watchdog services; no monitor invokes a payment, tenant workflow or business-state write. |
+
+## Gaps corrected by this audit
+
+- Receipt sends that were uncertain, or interrupted in `sending` for over fifteen
+  minutes, were retained safely but invisible to readiness. The new
+  `attention_notices` aggregate makes them alertable without resending them.
+- Refund submissions stuck in `queued` or `processing` for over fifteen minutes
+  now appear as `stalled_refunds`. Provider-confirmed `pending` refunds remain
+  distinct; they can legitimately take time. Existing `attention_refunds` remains.
+- Readiness protocol v2 requires both new aggregates. The monitor also understands
+  v1 for an ordered rollout: deploy the observer first, then the backend. Missing
+  v2 fields fail closed. Outage and recovery alerts retain their durable history.
+- Inline payment fields now cancel a delayed mount when their widget is removed
+  or a native settlement/status update arrives. Teardown during provider
+  confirmation cannot overwrite the settled display or enable another submission.
+- Payment return URLs require the exact JITPOMI HTTPS origin, including its port.
+- Hosted sign-in reports temporary enrollment, verification or profile failures
+  as unavailable, rather than claiming the buyer lost access. No session is
+  granted by these error paths; encrypted retry context is preserved.
+- Checkout errors no longer promise that an unacknowledged request changed no
+  state. Buyers are directed to the existing order/payment record.
+
+These changes introduce no schema migration, payment-state overrides, new
+credentials, wider tenant access or automatic retry of an uncertain charge,
+refund or customer receipt.
+
+## Remaining release gates
+
+1. The strict dependency audit still reports the existing Chrono, Chrono-TZ and
+   Chrono-TZ-build maintenance findings. They are not suppressed. The upstream
+   parser proposal remains draft; it is not an available adopted release.
+2. Production capacity, availability and a production-specific least-privilege
+   deployment have not been established by the free development service. No paid
+   hosting purchase or production database migration is authorized by this audit.
+3. Live Stripe platform/merchant registration and exact callback/webhook setup
+   require a separate activation. Production recovery and key custody must be
+   verified against that eventual deployment before live acceptance.
+4. Mercury refunds remain unavailable. Its bank-payment settlement is not claimed
+   verified merely because sandbox payment initiation works.
+5. The supported product boundary remains explicit: six currencies, versioned flat
+   tax/discount/shipping policies, up to sixty cart lines and four schedules;
+   separate first invoices for mixed schedules. Automated tax jurisdiction,
+   fulfilment/stock and guest access are not implied by checkout success.
+
+## Provider contracts checked
+
+- [Stripe payment lifecycle](https://docs.stripe.com/payments/payment-intents):
+  reuse the invoice's existing payment intent; confirmation is distinct from native
+  settlement and notification authority.
+- [Stripe refunds](https://docs.stripe.com/refunds): pending refunds and completed
+  refunds are distinct; no local status override substitutes for provider results.
+- [Stripe webhooks](https://docs.stripe.com/webhooks): signatures, current provider
+  observations, duplicate/out-of-order safety and independent reconciliation.
+- [TypeQL proposal #477](https://github.com/typedb/typeql/pull/477): still draft on
+  this audit date, with the broader driver work separate.
+
+Verification logs and recovery evidence are retained in the private operator audit
+directory. Final deployment and acceptance results are recorded after checks pass.

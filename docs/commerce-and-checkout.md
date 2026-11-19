@@ -30,8 +30,8 @@ from future recurring obligations; it does not invent a lifetime total. Checkout
 
 Checkout execution remains sandbox-only at the server, scheduler and capability
 boundaries. A browser setting cannot enable real payments. The widget hands off to
-our hosted checkout for account authentication and native price review; it does
-not embed a card form or expose credentials. New customers may enrol only where
+our hosted checkout for account authentication and native price review; it can then render provider-owned inline fields on an explicitly approved
+website. Account credentials stay inside the authenticated top-level checkout. New customers may enrol only where
 the merchant explicitly permits public checkout; existing private billing is not
 made public. A signed, verified provider identity receives an independent buyer
 account, never merchant membership and never an email-based identity merge.
