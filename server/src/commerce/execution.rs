@@ -65,6 +65,18 @@ impl Engine {
                 .iter()
                 .map(|v| format!(",has cx_supported_currency {}", q(v)))
                 .collect::<String>();
+            // Reuse only an exact current attestation under the native freshness
+            // policy. Configuration is still resolved afresh; no Rust role or
+            // provider decision is cached. Avoid fencing the business journal
+            // merely to rewrite facts a scheduled cycle has already published.
+            let excludes = currencies
+                .iter()
+                .map(|currency| format!("$other != {};", q(currency)))
+                .collect::<String>();
+            let current = self.read(format!("{} (merchant:$t,plugin:$fact) isa commerce_plugin_owner;$fact has cx_id {key},has cx_plugin {},has cx_enabled {hosted},has cx_refunds {refunds},has cx_inline_payment {inline}{};not {{$fact has cx_supported_currency $other;{excludes}}};let $fresh=cx_plugin_fresh($fact,{at});$fresh==true;fetch {{'id':$fact.cx_id}};", self.prefix(),q(id),owns)).await?;
+            if current.len() == 1 {
+                continue;
+            }
             // The entire attested set and freshness timestamp change in one fenced commit.
             self.write(format!("{} select $t;distinct;put $fact isa commerce_plugin,has cx_id {key};(merchant:$t,plugin:$fact) isa commerce_plugin_owner;match try {{$fact has cx_supported_currency $old;}};delete try {{has $old of $fact;}};select $t,$fact;distinct;update $fact has cx_plugin {},has cx_enabled {hosted},has cx_refunds {refunds},has cx_inline_payment {inline},has cx_verified {at};insert $fact {} ;fetch {{'id':$fact.cx_id}};",self.prefix(),q(id),owns.trim_start_matches(','))).await?;
         }

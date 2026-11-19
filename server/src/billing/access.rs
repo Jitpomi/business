@@ -71,8 +71,9 @@ impl BillingAccess {
                 )?)?)
             )
         };
-        let e = self.engine(&ctx.tenant_id.0).await?;
-        let rows=e.read(format!("match $viewer isa person,has identity_id {};$scope isa tenant,has tenant_id {};$merchant isa tenant;$c isa bill_customer;(merchant:$merchant,customer:$c) isa bill_account;{selector}let $allowed=bill_reader($viewer,$scope,$c,{});$allowed==true;select $merchant,$c;distinct;fetch {{'merchant':$merchant.tenant_id,'customer':$c.bill_key}};",quoted(actor),quoted(&ctx.tenant_id.0),now())).await?;
+        // Resolve credentials only for the merchant selected by native access,
+        // never for the viewer before authorization or twice for a seller.
+        let rows=crate::storage::read(&self.state,&format!("match $viewer isa person,has identity_id {};$scope isa tenant,has tenant_id {};$merchant isa tenant;$c isa bill_customer;(merchant:$merchant,customer:$c) isa bill_account;{selector}let $allowed=bill_reader($viewer,$scope,$c,{});$allowed==true;select $merchant,$c;distinct;fetch {{'merchant':$merchant.tenant_id,'customer':$c.bill_key}};",quoted(actor),quoted(&ctx.tenant_id.0),now())).await?;
         if rows.len() != 1 {
             return Err(DogError::forbidden("Billing account unavailable").into_anyhow());
         }

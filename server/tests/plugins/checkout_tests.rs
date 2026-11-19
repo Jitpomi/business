@@ -260,7 +260,17 @@ async fn checkout_gateway_scenario(scenario: Scenario) -> Result<()> {
   let (app,http)=server::app::build_with_connectors(state.clone(),"checkout-test-signing-secret-at-least-32-bytes".into(),Arc::new(TenantRegistry::default()),catalog)?;
   let template:Arc<server::automation::engine::Engine>=app.get("automation.engine").context("Queue template")?;
   let registry:Arc<TenantRegistry>=app.get("tenant.plugins").context("Tenant registry")?;
-  server::billing::engine::Engine::new(state.clone(),&merchant,registry.resolve(&merchant).await?)?.refresh_commerce_plugins().await.context("Initial plugin currency attestation")?;
+  let attester=server::billing::engine::Engine::new(state.clone(),&merchant,registry.resolve(&merchant).await?)?;
+  attester.refresh_commerce_plugins().await.context("Initial plugin currency attestation")?;
+  let fact_query=format!("{} (merchant:$t,plugin:$f) isa commerce_plugin_owner;$f has cx_plugin 'bank';fetch {{'revision':$t.revision,'verified':$f.cx_verified,'inline':$f.cx_inline_payment,'currencies':[$f.cx_supported_currency]}};",attester.prefix());
+  let first=attester.read(fact_query.clone()).await?;
+  attester.refresh_commerce_plugins().await?;
+  ensure!(attester.read(fact_query.clone()).await?==first,"Unchanged fresh facts rewrote the tenant fence");
+  attester.write(format!("{} (merchant:$t,plugin:$f) isa commerce_plugin_owner;$f has cx_plugin 'bank';update $f has cx_inline_payment false;fetch {{'id':$f.cx_id}};",attester.prefix())).await?;
+  attester.refresh_commerce_plugins().await?;
+  let repaired=attester.read(fact_query.clone()).await?;
+  ensure!(repaired.len()==1&&repaired[0]["inline"]==true&&repaired[0]["revision"]!=first[0]["revision"],"Changed capability was hidden by an attestation cache");
+
   let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await?;let base=format!("http://{}",listener.local_addr()?);
   let server=tokio::spawn(async move{axum::serve(listener,server::app::router(http)).await.unwrap();});
   struct Listener(tokio::task::JoinHandle<()>);impl Drop for Listener{fn drop(&mut self){self.0.abort();}}let _listener=Listener(server);

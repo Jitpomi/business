@@ -62,3 +62,24 @@ Real payments remain disabled. Mercury refunds remain unavailable: its published
 invoice API does not document a refund operation. A bank refund payout would be
 a separate capability with verified destination and approval requirements, not
 an invoice-status override or an undocumented transfer workaround.
+
+## Native planning and attestation follow-up
+
+A real development form request reached the transport timeout. Read-only profiling
+of the same open invoice isolated native eligibility planning: the original
+origin disjunction took 7.8–8.5 seconds per check. Keeping the same approved-origin
+condition in a dedicated TypeDB predicate reduced that check to 2.4 seconds.
+Both pre-provider and post-provider native checks remain in place. No timeout,
+transaction deadline, origin approval or buyer permission is relaxed.
+
+Capability producers now reuse only an exact current attestation under the shared
+native freshness policy. They resolve current connection configuration first,
+compare all capability flags and the complete currency set in TypeDB, and write
+only when the facts differ or expire. Unchanged facts no longer rewrite the
+merchant fence and conflict with a billing cycle. Viewer credentials are not
+resolved before native access has selected the authorized merchant.
+
+The explicit successor for these function changes is `business_native_dev_v10`.
+Deployment must follow the same fresh checkpoint, isolated rehearsal, graph
+verification and disabled-worker warmup procedure. All existing order, payment,
+refund and notification journals remain unchanged by the migration.
