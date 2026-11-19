@@ -99,7 +99,11 @@ impl dog_queue::supervisor::TenantWorkers for TenantSource {
             dog_queue::QueueError::Internal("Durable outbox recovery deferred".into())
         })?;
         let config = QueueConfig {
-            max_workers: 4,
+            // Native business writes share a tenant revision fence. Keep one
+            // delivery in flight per tenant in this service instead of racing
+            // independent billing cycles through that same journal. The global
+            // capacity still runs different tenants concurrently.
+            max_workers: 1,
             poll_interval: Duration::from_secs(2),
             worker_idle_timeout: Duration::MAX,
             lease_duration: Duration::from_secs(300),

@@ -34,3 +34,11 @@ calls no providers. Keep original snapshots and all uncertain-outcome journals.
 Rolling versions share workflow CAS and stable occurrence keys. New scheduled job
 payloads remain durable if an older binary does not support their handler; never
 remove or rewrite them to force rollback. Restore a supporting binary to drain them.
+
+The service starts one dog-queue worker per tenant, with four global execution
+slots across tenants. Native business writes share a tenant revision fence;
+concurrent cycles for the same tenant must not compete with each other merely
+because several occurrences became due during downtime. Catch-up occurrences are
+retained and drained in order, not coalesced or skipped. Native revision/lease
+checks and financial journals still protect races with requests or other service
+instances; this worker configuration is not a replacement for those checks.

@@ -221,10 +221,13 @@ commerce_order plays commerce_execution:order @card(0..1);
 bill_plan plays commerce_execution:plan @card(0..1);
 relation commerce_cancellation,relates order @card(1),owns cx_created @card(1);
 commerce_order plays commerce_cancellation:order @card(0..1);
+fun cx_plugin_fresh($fact:commerce_plugin,$now:datetime)->boolean:
+  match $fact has cx_verified $at;$at<=$now;$at>=$now - PT10M;
+  return check;
 fun cx_plugin_ready($merchant:tenant,$id:string,$now:datetime)->boolean:
   match (merchant:$merchant,plugin:$fact) isa commerce_plugin_owner;
-    $fact has cx_plugin == $id,has cx_enabled true,has cx_verified $at;
-    $at <= $now;$at >= $now - PT10M;
+    $fact has cx_plugin == $id,has cx_enabled true;
+    let $fresh=cx_plugin_fresh($fact,$now);$fresh==true;
   return check;
 fun cx_order_live($merchant:tenant,$o:commerce_order,$now:datetime)->boolean:
   match $merchant has status "active";
@@ -583,6 +586,9 @@ relation commerce_embed_origin @meta("dog.security.scope","scope_commerce_embed_
 fun cx_inline_state($i:bill_invoice)->boolean:
   match $i has bill_status "open",has bill_choice "manual",has bill_amount $amount;$amount>0;
   return check;
+fun cx_inline_origin($m:tenant,$origin:string)->boolean:
+  match {$origin=="";}or{$e isa commerce_embed_origin,links(merchant:$m),has cx_origin == $origin,has cx_enabled true;};
+  return check;
 fun cx_inline_invoice($tenant:string,$actor:string,$now:datetime,$i:bill_invoice,$origin:string)->boolean:
   match $person isa person,has identity_id == $actor;$viewer isa tenant,has tenant_id == $tenant;
     let $state_ready=cx_inline_state($i);$state_ready==true;
@@ -590,10 +596,10 @@ fun cx_inline_invoice($tenant:string,$actor:string,$now:datetime,$i:bill_invoice
     (merchant:$m,customer:$c) isa bill_account;$m has status "active";
     $i has bill_provider $provider_attr;let $plugin=$provider_attr;let $currency=bill_invoice_currency($i);
     (merchant:$m,plugin:$fact) isa commerce_plugin_owner;
-    $fact has cx_plugin == $plugin,has cx_enabled true,has cx_inline_payment true,has cx_supported_currency == $currency,has cx_verified $verified;
-    $verified<=$now;$verified>=$now - PT10M;
+    $fact has cx_plugin == $plugin,has cx_enabled true,has cx_inline_payment true,has cx_supported_currency == $currency;
+    let $fresh=cx_plugin_fresh($fact,$now);$fresh==true;
     let $buyer=bill_buyer($person,$viewer,$c,$now);$buyer==true;
-    {$origin=="";}or{$e isa commerce_embed_origin,links(merchant:$m),has cx_origin == $origin,has cx_enabled true;};
+    let $site=cx_inline_origin($m,$origin);$site==true;
   return check;
 fun request_inline_payment_allowed($tenant:string,$actor:string,$now:datetime,$i:bill_invoice,$origin:string)->boolean @meta("dog.security.context","true"):
   match let $allowed=cx_inline_invoice($tenant,$actor,$now,$i,$origin);$allowed==true;
