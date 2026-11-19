@@ -62,7 +62,11 @@ full graph and approval decisions are checked again. Rehearsal never writes the
 application cluster. The CLI requires an explicit loopback verifier; source
 connections retain verified TLS. It rejects
 unreviewed custom definitions, keeps the source and recovery shadows, never
-creates consent and never runs providers. No startup schema migrations occur.
+creates consent and never runs providers. No startup schema migrations occur. After verification and while writers remain
+stopped, the explicit retirement command suspends tenant access only in the old
+database copy and records its original active set. The successor preserves the
+original tenant states. Existing TypeDB policies fence the retired copy; no
+credentials, consent or payment states are changed.
 
 ## Ownership and boundaries
 

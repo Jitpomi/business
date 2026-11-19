@@ -46,3 +46,28 @@ provider effect or payment-state override is performed by the migration. Source
 databases, checkpoints and recovery shadows are retained. Real checkout payments
 remain disabled. Inline card widgets and Mercury refund execution are separate
 capabilities and are not claimed by this change.
+
+## Explicit retirement of the old development copy
+
+After the successor exactly matches the quiesced checkpoint, `migrate_checkout
+--retire SOURCE TARGET CHECKPOINT` records a private intent and suspends tenants
+only in the retired database copy. The successor retains every original tenant
+state. Existing native membership, billing and automation policies then deny
+application access in the old copy, preventing Render’s resume step from running
+old workflows against it. Authentication credentials, memberships, consent,
+invoices, payments, refunds and secret references are not rewritten.
+
+The command requires stopped writers, consecutive development generations, an
+unchanged source and an exact verified successor. It checks every source record
+and every relationship after the intentional tenant-state change, and checks
+that the successor remains identical to the checkpoint. An intent journal permits
+read-after-unknown-acknowledgement recovery without blindly repeating a write.
+It has no production target or automatic startup path.
+
+A loopback-only test using the complete checkpoint proved that an unverified
+successor prevents retirement, native reads and writes are denied in the retired
+copy, successor access remains valid, a repeated retirement is safe, and restoring
+only the recorded original active tenant set restores the complete original
+graph. No worker or provider ran on either fixture. Rollback in development must
+first stop and fence the successor before restoring access to the old copy; two
+active generations must never be started together.

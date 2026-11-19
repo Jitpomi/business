@@ -118,3 +118,109 @@ async fn decisions(driver: &TypeDBDriver, database: &str) -> Result<Vec<String>>
     normalized.sort();
     Ok(normalized)
 }
+/// Fence application access in a retired development generation only after its
+/// successor exactly matches the checkpoint. This is an explicit cutover step,
+/// never startup behaviour or a payment-state mutation.
+pub async fn retire_source(
+    driver: &TypeDBDriver,
+    source: &str,
+    target: &str,
+    directory: &Path,
+) -> Result<serde_json::Value> {
+    use serde_json::{json, Value};
+    let version = database::development_version(source)
+        .ok_or_else(|| anyhow::anyhow!("Versioned development source required"))?;
+    ensure!(
+        database::development_version(target) == Some(version + 1),
+        "Explicit next development generation required"
+    );
+    database::verify_runtime(driver, target).await?;
+    let original: BTreeMap<String, Value> = serde_json::from_slice(&std::fs::read(
+        directory.join(format!("{source}.records.json")),
+    )?)?;
+    let expected_graph: BTreeMap<String, usize> = serde_json::from_slice(&std::fs::read(
+        directory.join(format!("{source}.graph.json")),
+    )?)?;
+    ensure!(
+        snapshot::graph(driver, target, &[]).await? == expected_graph,
+        "Successor changed since verification; retire nothing"
+    );
+    let normalize = |rows: &BTreeMap<String, Value>| -> Result<Vec<String>> {
+        let mut values = rows
+            .values()
+            .map(serde_json::to_string)
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        values.sort();
+        Ok(values)
+    };
+    let mut fenced = original.clone();
+    let mut tenants = Vec::new();
+    for row in fenced.values_mut() {
+        if row.get("tenant_id").is_some() && row["status"] == "active" {
+            tenants.push(row["tenant_id"].clone());
+            row["status"] = json!("suspended");
+        }
+    }
+    ensure!(
+        !tenants.is_empty(),
+        "Checkpoint contains no active development tenants"
+    );
+    tenants.sort_by_key(Value::to_string);
+    let current = snapshot::records(driver, source).await?;
+    let journal = directory.join(format!("retire-{source}.intent.json"));
+    let without_status = snapshot::graph(driver, source, &["status"]).await?;
+    let intent = if journal.exists() {
+        let value: Value = serde_json::from_slice(&std::fs::read(&journal)?)?;
+        ensure!(
+            value["source"] == source
+                && value["target"] == target
+                && value["tenants"] == json!(tenants)
+                && value["graph_without_status"] == json!(without_status),
+            "Retirement intent differs; preserve it and stop"
+        );
+        value
+    } else {
+        ensure!(
+            normalize(&current)? == normalize(&original)?
+                && snapshot::graph(driver, source, &[]).await? == expected_graph,
+            "Source changed; retire nothing"
+        );
+        let value = json!({"source":source,"target":target,"tenants":tenants,"graph_without_status":without_status});
+        crate::recovery::private_new(&journal, &serde_json::to_vec_pretty(&value)?)?;
+        value
+    };
+    if normalize(&current)? != normalize(&fenced)? {
+        ensure!(
+            normalize(&current)? == normalize(&original)?
+                && snapshot::graph(driver, source, &[]).await? == expected_graph,
+            "Source changed; no retirement write attempted"
+        );
+        let tx = driver
+            .transaction(source, typedb_driver::TransactionType::Write)
+            .await?;
+        let rows=database::documents(&tx,"match $t isa tenant,has status 'active';update $t has status 'suspended';fetch {'id':$t.tenant_id};").await?;
+        ensure!(
+            rows.len() == tenants.len(),
+            "Active tenant set changed; transaction not committed"
+        );
+        tx.commit().await?;
+    }
+    // Records independently check every status; the graph comparison additionally
+    // checks all relationship roles without treating the intentional fence as loss.
+    ensure!(
+        normalize(&snapshot::records(driver, source).await?)? == normalize(&fenced)?
+            && json!(snapshot::graph(driver, source, &["status"]).await?)
+                == intent["graph_without_status"],
+        "Retired source differs beyond tenant status; retain evidence"
+    );
+    ensure!(
+        snapshot::graph(driver, target, &[]).await? == expected_graph,
+        "Successor changed during retirement; retain evidence"
+    );
+    let report = json!({"source":source,"target":target,"retired_tenants":tenants.len(),"only_retired_tenant_status_changed":true,"all_relationship_roles_preserved":true,"successor_preserved_original_graph":true,"payment_state_overrides":false,"provider_calls":false});
+    let proof = directory.join(format!("retire-{source}.complete.json"));
+    if !proof.exists() {
+        crate::recovery::private_new(&proof, &serde_json::to_vec_pretty(&report)?)?;
+    }
+    Ok(report)
+}

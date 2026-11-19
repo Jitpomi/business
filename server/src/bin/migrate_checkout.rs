@@ -3,6 +3,23 @@ use anyhow::{ensure, Result};
 #[tokio::main]
 async fn main() -> Result<()> {
     let args: Vec<_> = std::env::args().collect();
+    if args.len() == 5 && args[1] == "--retire" {
+        ensure!(
+            std::env::var("BUSINESS_WRITERS_STOPPED").as_deref() == Ok("true"),
+            "Quiesce all development writers first"
+        );
+        let driver = operator_driver().await?;
+        let report = server::commerce::migration::retire_source(
+            &driver,
+            &args[2],
+            &args[3],
+            std::path::Path::new(&args[4]),
+        )
+        .await?;
+        println!("{report}");
+        return Ok(());
+    }
+
     ensure!(
         args.len() == 4 && matches!(args[1].as_str(), "--rehearse" | "--apply"),
         "Use --rehearse/--apply SOURCE PRIVATE_CHECKPOINT_DIRECTORY"
@@ -19,14 +36,7 @@ async fn main() -> Result<()> {
             std::env::var("BUSINESS_WRITERS_STOPPED").as_deref() == Ok("true"),
             "Quiesce all development writers first"
         );
-        dotenvy::from_path(std::env::var("BUSINESS_ENV_FILE")?)?;
-        let driver = dog_typedb::TypeDBDriverFactory::connect(
-            &std::env::var("TYPEDB_ADDR")?,
-            &std::env::var("TYPEDB_USERNAME")?,
-            &std::env::var("TYPEDB_PASSWORD")?,
-            true,
-        )
-        .await?;
+        let driver = operator_driver().await?;
         let expected: std::collections::BTreeMap<String, serde_json::Value> =
             serde_json::from_slice(&std::fs::read(
                 directory.join(format!("{source}.records.json")),
@@ -52,4 +62,15 @@ async fn main() -> Result<()> {
     println!("Checkout shadow: {target}");
     println!("Verified {n} original objects, attributes and relationship roles. Source and recovery shadows retained. No consent, provider effects or payment status invented.");
     Ok(())
+}
+
+async fn operator_driver() -> Result<typedb_driver::TypeDBDriver> {
+    dotenvy::from_path(std::env::var("BUSINESS_ENV_FILE")?)?;
+    dog_typedb::TypeDBDriverFactory::connect(
+        &std::env::var("TYPEDB_ADDR")?,
+        &std::env::var("TYPEDB_USERNAME")?,
+        &std::env::var("TYPEDB_PASSWORD")?,
+        true,
+    )
+    .await
 }

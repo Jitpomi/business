@@ -336,3 +336,79 @@ async fn mixed_checkout_policies(
     ensure!(write(adapter,buyer,"match $checkout isa commerce_checkout,has cx_id 'mixed';$o isa commerce_order,has cx_id 'late-group';insert $l isa commerce_checkout_item,links(checkout:$checkout,order:$o);fetch {'ok':true};".into()).await.is_err(),"Grafted another order after acceptance");
     Ok(())
 }
+#[tokio::test]
+#[ignore = "Private development checkpoint; loopback verifier only; disposable source/successor copies, no providers"]
+async fn retired_generation_is_fenced_by_native_rbac_and_remains_recoverable() -> Result<()> {
+    dotenvy::from_path(std::env::var("BUSINESS_ENV_FILE")?)?;
+    ensure!(std::env::var("TYPEDB_DB")? == "business_dev");
+    let driver = Arc::new(server::recovery::local_driver().await?);
+    let checkpoint = std::path::PathBuf::from(std::env::var("BUSINESS_CHECKOUT_CHECKPOINT")?);
+    let original = std::env::var("BUSINESS_CHECKOUT_SOURCE")?;
+    ensure!(database::development_version(&original).is_some());
+    let version = 5000 + (uuid::Uuid::new_v4().as_u128() % 2000) as u32 * 2;
+    let source = format!("business_native_dev_v{version}");
+    let target = format!("business_native_dev_v{}", version + 1);
+    ensure!(
+        !driver.databases().contains(&source).await?
+            && !driver.databases().contains(&target).await?,
+        "Generated fixture exists; overwrite nothing"
+    );
+    let directory = tempfile::tempdir()?;
+    for suffix in ["records.json", "graph.json"] {
+        std::fs::copy(
+            checkpoint.join(format!("{original}.{suffix}")),
+            directory.path().join(format!("{source}.{suffix}")),
+        )?;
+    }
+    let data = checkpoint.join(format!("{original}.typedb"));
+    driver
+        .databases()
+        .import_from_file(
+            &source,
+            std::fs::read_to_string(checkpoint.join(format!("{original}.tql")))?,
+            &data,
+        )
+        .await?;
+    driver
+        .databases()
+        .import_from_file(&target, database::import_schema(), &data)
+        .await?;
+    let result=async{
+        let tx=driver.transaction(&source,TransactionType::Read).await?;
+        let rows=database::documents(&tx,&format!("match $t isa tenant;$i isa identity;let $allowed=role_at_least($i,$t,'owner',{});$allowed==true;select $t,$i;limit 1;fetch {{'tenant':$t.tenant_id,'identity':$i.identity_id,'name':$t.name}};",server::clock::native_utc())).await?;tx.close().await?;
+        ensure!(rows.len()==1,"Checkpoint needs an active owner for the fence proof");
+        let scope=AuthenticatedScope::new(rows[0]["tenant"].as_str().context("Tenant")?,rows[0]["identity"].as_str().context("Identity")?)?;
+        let source_adapter=SchemaPolicyAdapter::new(Arc::new(TypeDBState{driver:driver.clone(),database:source.clone()}));
+        let target_adapter=SchemaPolicyAdapter::new(Arc::new(TypeDBState{driver:driver.clone(),database:target.clone()}));
+        let visible=|value:&Value|value["ok"]["answers"].as_array().map_or(0,Vec::len);
+        let query=json!({"query":"match $t isa tenant;fetch {'id':$t.tenant_id};"});
+        ensure!(visible(&source_adapter.read(&scope,query.clone()).await?)>0);
+        let tenant=serde_json::to_string(&rows[0]["tenant"])?;let original_name=serde_json::to_string(&rows[0]["name"])?;
+        let tx=driver.transaction(&target,TransactionType::Write).await?;tx.query(format!("match $t isa tenant,has tenant_id {tenant};update $t has name 'Unverified successor';")).await?;tx.commit().await?;
+        ensure!(server::commerce::migration::retire_source(&driver,&source,&target,directory.path()).await.is_err(),"Retired against an unverified successor");
+        ensure!(visible(&source_adapter.read(&scope,query.clone()).await?)>0,"Failed preflight changed source access");
+        let tx=driver.transaction(&target,TransactionType::Write).await?;tx.query(format!("match $t isa tenant,has tenant_id {tenant};update $t has name {original_name};")).await?;tx.commit().await?;
+        let report=server::commerce::migration::retire_source(&driver,&source,&target,directory.path()).await?;
+        ensure!(visible(&source_adapter.read(&scope,query.clone()).await?)==0,"Retired source retained tenant access");
+        ensure!(visible(&target_adapter.read(&scope,query).await?)>0,"Retirement deactivated the successor");
+        let denied=source_adapter.write(&scope,json!({"query":format!("match $t isa tenant,has tenant_id {tenant};update $t has revision 'retirement-bypass';fetch {{'id':$t.tenant_id}};")})).await;
+        ensure!(denied.is_err()||visible(&denied?)==0,"Retired source accepted an application write");
+        ensure!(server::commerce::migration::retire_source(&driver,&source,&target,directory.path()).await?==report,"Retirement is not safely repeatable");
+        // A rollback can restore only the recorded original active set. No worker
+        // runs on either disposable fixture and no payment state is changed.
+        let intent:Value=serde_json::from_slice(&std::fs::read(directory.path().join(format!("retire-{source}.intent.json")))?)?;
+        let choices=intent["tenants"].as_array().context("Original active set")?.iter().map(|id|format!("{{$id=={id};}}")).collect::<Vec<_>>().join("or");
+        let tx=driver.transaction(&source,TransactionType::Write).await?;tx.query(format!("match $t isa tenant,has tenant_id $id;{choices};update $t has status 'active';")).await?;tx.commit().await?;
+        let expected:std::collections::BTreeMap<String,usize>=serde_json::from_slice(&std::fs::read(directory.path().join(format!("{source}.graph.json")))?)?;
+        ensure!(database::snapshot::graph(&driver,&source,&[]).await?==expected&&database::snapshot::graph(&driver,&target,&[]).await?==expected,"Fence/rollback changed original work");
+        println!("Verified native source read/write denial, unchanged successor access, safe retry, full graph preservation and exact rollback without providers");
+        Ok::<_,anyhow::Error>(())
+    }.await;
+    if result.is_ok() {
+        driver.databases().get(&source).await?.delete().await?;
+        driver.databases().get(&target).await?.delete().await?;
+    } else {
+        eprintln!("Retained retirement fixtures {source} and {target}");
+    }
+    result
+}
