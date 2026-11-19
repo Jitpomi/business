@@ -89,3 +89,54 @@ per tenant in this service now drains every original occurrence through dog-queu
 with four global slots retaining parallel execution across tenants. No occurrence,
 uncertain attempt, or payment journal is discarded, and native fences remain in
 force across processes and user requests.
+
+## Deployed acceptance — 19 November 2026
+
+Business PR #42 is merged and development runs commit
+`74ed063a72ab40f646fffe176bef729f23b5ecff` against
+`business_native_dev_v10`. Website PR #13 is deployed. Stripe fields mount in
+Light DOM, slotted into the widget: Stripe does not support mounting its payment
+element inside a ShadowRoot. The surrounding widget keeps its isolated styling;
+scoped provider styles, exact origin/nonce/popup bindings and CSP remain enforced.
+
+The final browser acceptance used a new synthetic tenant and its own separately
+encrypted Stripe and notification connections on an approved external website.
+The buyer signed in through Auth0, reviewed native pricing, confirmed one USD 1.00
+order and paid using Stripe’s documented test card inside that external widget.
+The widget showed paid only after native reconciliation. The merchant then
+requested one USD 0.40 refund through the account UI; the tenant plugin executed
+it and native reconciliation recorded success. Independent Stripe observation
+found exactly one matching invoice, one paid payment and one matching refund.
+No payment status was overridden and no raw provider payment/refund fallback was
+used. The preceding deployed acceptance also verified a declined card without a
+paid state or payment receipt.
+
+The test mailbox received exactly one reminder, payment receipt and refund
+receipt for the final invoice. Native scope checks for its actual buyer allowed
+their own invoice, filtered a foreign invoice, denied a seller refund and left no
+unauthorized proposal. Earlier invoices, payment/refund IDs and notification
+acceptance IDs remained unchanged across cutover.
+
+Before import, the drained database and independently encrypted offsite backup
+matched all 6,973 original records and the complete relationship graph. Local
+rehearsal and application-cluster verification preserved existing plan approvals.
+The old development generation and recovery shadows remain retained; only its
+active tenant statuses were fenced. A separate offsite restore verified all 20
+pre-existing connection credentials, wrong-key rejection and wrong-tenant
+rejection. The master encryption key is unchanged.
+
+Final code validation passed correctness CI, the full TypeDB 3.14.1 gateway,
+dog-auth and dog-queue lifecycle suite (549.87 seconds), the focused TypeDB 3.15
+suite, native policy checks on both versions, strict Clippy and 65 website tests.
+After the final startup catch-up window, all seven operational counters were zero.
+Real payments remain disabled and Mercury refunds remain unavailable. The three
+existing TypeDB chrono dependency findings remain visible in the separate security
+audit; this release does not resolve or suppress those upstream findings.
+
+The post-payment encrypted backup (Actions run `44521008004`) independently
+restored 7,322 records and their full graph. The downloaded archive contained the
+paid invoice, successful USD 0.40 refund and exactly one of each accepted notice.
+The operator drill decrypted all 22 referenced connection credentials from 26
+ciphertext rows without contacting the source secret store, and rejected both a
+wrong key and a wrong tenant. Its isolated recovery shadow remains retained.
+The scheduled backup now targets v10 with the matching encrypted runtime capsule.
