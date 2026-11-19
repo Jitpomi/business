@@ -58,17 +58,23 @@ refund or customer receipt.
 3. Live Stripe platform/merchant registration and exact callback/webhook setup
    require a separate activation. Production recovery and key custody must be
    verified against that eventual deployment before live acceptance.
-4. Mercury refunds remain unavailable. Its bank-payment settlement is not claimed
+4. Production recovery objectives need an explicit decision. Daily encrypted
+   archives and a tested restore do not establish zero data loss between snapshots.
+   Set acceptable RPO/RTO and verify the production backup/journal arrangement
+   before accepting real money.
+5. Mercury refunds remain unavailable. Its bank-payment settlement is not claimed
    verified merely because sandbox payment initiation works.
-5. The supported product boundary remains explicit: six currencies, versioned flat
+6. The supported product boundary remains explicit: six currencies, versioned flat
    tax/discount/shipping policies, up to sixty cart lines and four schedules;
    separate first invoices for mixed schedules. Automated tax jurisdiction,
    fulfilment/stock and guest access are not implied by checkout success.
 
 The live audit identified one retained uncertain periodic sandbox cycle from the
-preceding deployment. Its original attempt/error is retained for independent
-financial reconciliation and evidence-backed native cancellation; it is not
-silently retried or marked successful.
+preceding deployment. Independent read-only Stripe and native checks confirmed its single invoice,
+settled payment, succeeded partial refund and accepted notices. The owner-scoped
+native cancellation recorded that evidence and verified later cycles already
+complete. Its original attempt/error remains retained. No provider write or
+financial status override was used.
 
 ## Provider contracts checked
 
@@ -85,5 +91,43 @@ silently retried or marked successful.
 - [TypeQL proposal #477](https://github.com/typedb/typeql/pull/477): still draft on
   this audit date, with the broader driver work separate.
 
-Verification logs and recovery evidence are retained in the private operator audit
-directory. Final deployment and acceptance results are recorded after checks pass.
+## Final development acceptance
+
+- Business runtime `95414968d06caad89a2a889d09e9e7ba756f9b22` deployed
+  successfully on 19 November. No schema, database generation, credentials or
+  live-payment settings changed. Subsequent acceptance commits contain tests/docs.
+- Correctness CI passed for the exact runtime source, including strict Clippy.
+  The separate strict dependency workflow remains red for the same three findings.
+- Full checkout gateway scenarios passed on real TypeDB 3.14.1 (488.41 seconds)
+  and 3.15 (549.68 seconds): native pricing/currency/tenant boundaries, processing
+  without premature receipts, exactly one settled receipt, ambiguous refund
+  recovery without a second provider write, instalments, recurring donations,
+  mixed schedules, partial refunds and cancellation through dog-queue and plugins.
+- Forced native transaction conflicts passed on both versions. A concurrent owner
+  revocation is rechecked on the fresh transaction and leaves no unauthorized
+  resource; ambiguous errors and application denials never retry.
+- Seventy frontend tests and eleven monitoring tests passed. The final widget fix
+  aborts the removed view immediately while allowing another widget to finish
+  using the shared provider SDK download.
+- Account/checkout worker `fe329f0c-f8e9-491d-86ef-32271cdd601c` deployed from
+  website main after PRs 14 and 15. Fresh hosted sign-in displays the retained
+  paid sandbox invoice and succeeded USD 0.40 refund, with no second Pay button.
+- The deployed native buyer scope returned its own invoice, filtered a foreign
+  invoice, rejected a seller refund and left no denied proposal. Independent
+  provider reads verified all three retained Stripe fixtures: one settled payment
+  and one succeeded partial refund each, without new charges or refunds.
+- Monitor `500839db-edbf-40d5-b543-9f4202a3ed76` reports all nine counters zero,
+  no pending alerts and a fresh backup. A controlled monitor-only outage/recovery
+  produced exactly one accepted message of each kind; both arrived in the
+  development operations inbox. It invoked no customer payment workflow.
+- Writers drained before the encrypted checkpoint in backup run `44538923625`.
+  The independent recovery restored 9,025 graph records and 26 ciphertext rows,
+  verified all 22 connection credential references without contacting the source
+  secret store, and rejected wrong-key and wrong-tenant access. Original database
+  generations and the isolated recovery shadow remain preserved. Daily 09:17 UTC
+  encrypted backups with thirty-day artifact retention remain enabled.
+
+Verification logs, provider observations and recovery evidence are retained in
+`work/checkout-final-audit-2026-11-19` in the private operator workspace. No secrets
+are included in this repository report. These results authorize continued sandbox
+validation, not real-money activation.
