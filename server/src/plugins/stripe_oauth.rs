@@ -88,10 +88,11 @@ impl Provider for Stripe {
         }
         let value: Value =
             serde_json::from_slice(&bytes).map_err(|_| bad("Invalid provider response"))?;
-        stripe_grant(&value, &secret)
+        let public_key = std::env::var("STRIPE_CONNECT_PLATFORM_PUBLISHABLE_KEY").ok();
+        stripe_grant(&value, &secret, public_key.as_deref())
     }
 }
-fn stripe_grant(value: &Value, secret: &str) -> Result<Grant> {
+fn stripe_grant(value: &Value, secret: &str, public_key: Option<&str>) -> Result<Grant> {
     let account = value["stripe_user_id"]
         .as_str()
         .filter(|s| {
@@ -107,8 +108,15 @@ fn stripe_grant(value: &Value, secret: &str) -> Result<Grant> {
         live == secret.starts_with("sk_live_") && value["scope"] == "read_write",
         bad("Unexpected Stripe environment or permission")
     );
+    let mut config = json!({"sandbox":!live,"connected_account":account});
+    // Stripe recommends the platform publishable key + connected-account
+    // binding. Deprecated OAuth publishable/access tokens are not consumed.
+    if let Some(key) = public_key {
+        crate::plugins::builtin_transport::validate_publishable_key(key, live)?;
+        config["publishable_key"] = json!(key);
+    }
     Ok(Grant {
-        config: json!({"sandbox":!live,"connected_account":account}),
+        config,
         secrets: json!({"token":secret}),
     })
 }
@@ -118,7 +126,7 @@ mod tests {
     #[test]
     fn stripe_account_is_provider_bound() {
         let v = json!({"stripe_user_id":"acct_test","livemode":false,"scope":"read_write","access_token":"unused"});
-        let g = stripe_grant(&v, "sk_test_private").unwrap();
+        let g = stripe_grant(&v, "sk_test_private", None).unwrap();
         assert_eq!(
             g.config,
             json!({"sandbox":true,"connected_account":"acct_test"})
@@ -130,7 +138,10 @@ mod tests {
             json!({"stripe_user_id":"acct_ok","livemode":true,"scope":"read_write"}),
             json!({"stripe_user_id":"acct_ok","livemode":false,"scope":"read_only"}),
         ] {
-            assert!(stripe_grant(&v, "sk_test_private").is_err());
+            assert!(stripe_grant(&v, "sk_test_private", None).is_err());
         }
+        let granted = stripe_grant(&v, "sk_test_private", Some("pk_test_platform123456")).unwrap();
+        assert_eq!(granted.config["publishable_key"], "pk_test_platform123456");
+        assert!(stripe_grant(&v, "sk_test_private", Some("pk_live_platform123456")).is_err());
     }
 }

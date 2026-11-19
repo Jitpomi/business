@@ -59,6 +59,82 @@ impl DogService<Value, BusinessParams> for FinancialService {
         if action == "checkout_options" {
             return Ok(json!({"plugins":e.attest_checkout_plugins().await?}));
         }
+        if action == "payment_form" {
+            let id = crate::billing::billing_schema::id(field(&data, "invoice_id")?)?;
+            let origin = data
+                .get("embed_origin")
+                .map(|v| {
+                    v.as_str().ok_or_else(|| {
+                        DogError::bad_request("Invalid embedding origin").into_anyhow()
+                    })
+                })
+                .transpose()?
+                .unwrap_or("");
+            if !origin.is_empty() {
+                let parsed = reqwest::Url::parse(origin)
+                    .map_err(|_| DogError::bad_request("Invalid embedding origin").into_anyhow())?;
+                ensure!(
+                    parsed.scheme() == "https" && parsed.origin().ascii_serialization() == origin,
+                    DogError::bad_request("Use an exact HTTPS origin").into_anyhow()
+                );
+            }
+            let selected = e
+                .read(format!(
+                    "{} let $state_ready=cx_inline_state($i);$state_ready==true;fetch {{'plugin':$i.bill_provider,'merchant_name':$t.name}};",
+                    e.invoice_match(&id)?
+                ))
+                .await?;
+            let selected = selected
+                .first()
+                .filter(|_| selected.len() == 1)
+                .ok_or_else(|| {
+                    DogError::conflict("This invoice is not available for manual payment")
+                        .into_anyhow()
+                })?;
+            let plugin_id = field(selected, "plugin")?;
+            let plugin = e.runtime.financial(plugin_id)?;
+            ensure!(plugin.capabilities().inline_payment,DogError::bad_request("Inline payments are unavailable for this connection; use its hosted payment link").into_anyhow());
+            // The existing attestation producer disables checkout capabilities
+            // outside sandbox and records them as fresh native policy facts.
+            e.attest_checkout_plugins().await?;
+            let eligibility = |payable: Option<i64>| -> Result<String> {
+                let amount=payable.map(|value| format!("let $amount_allowed=cx_inline_amount_valid($i,{value});$amount_allowed==true;")).unwrap_or_default();
+                Ok(format!("{} let $allowed=cx_inline_invoice({},{},{},$i,{});$allowed==true;{amount}fetch {{'external':$i.bill_external_id,'plugin':$i.bill_provider}};",e.invoice_match(&id)?,quoted(&ctx.tenant_id.0),quoted(&actor),crate::clock::native_utc(),quoted(origin)))
+            };
+            let rows = e.read(eligibility(None)?).await?;
+            let row = rows.first().filter(|_| rows.len() == 1).ok_or_else(|| {
+                DogError::forbidden("This invoice or embedding site is unavailable for payment")
+                    .into_anyhow()
+            })?;
+            ensure!(
+                row["plugin"] == plugin_id,
+                DogError::conflict("Invoice connection changed; refresh it").into_anyhow()
+            );
+            plugin.ready()?;
+            let presentation = plugin.payment_form(field(row, "external")?).await?;
+            e.validate_observation(&id, plugin_id, &presentation.invoice)
+                .await
+                .map_err(|error| {
+                    DogError::bad_gateway("Provider payment form does not match this invoice")
+                        .with_source(error)
+                        .into_anyhow()
+                })?;
+            ensure!(
+                presentation.invoice.state == crate::finance::InvoiceState::Open,
+                DogError::conflict("Refresh this invoice before paying").into_anyhow()
+            );
+            // Recheck current native permission, origin approval and invoice state
+            // after provider I/O; never return a form under an expired decision.
+            ensure!(
+                e.read(eligibility(Some(presentation.payable_minor))?)
+                    .await?
+                    == rows,
+                DogError::forbidden("Payment access changed; refresh this invoice").into_anyhow()
+            );
+            return Ok(
+                json!({"invoice_id":id,"merchant_id":e.merchant,"merchant_name":selected["merchant_name"],"amount":presentation.payable_minor,"invoice_amount":presentation.invoice.amount_minor,"currency":presentation.invoice.currency,"embed_origin":origin,"form":presentation.form}),
+            );
+        }
         if action == "history" {
             let id = crate::billing::billing_schema::id(field(&data, "invoice_id")?)?;
             let rows=e.read(format!("{} fetch {{'customer':$c.bill_key,'status':$i.bill_status,'amount':$i.bill_amount,'provider':$i.bill_provider,'updated':$i.bill_updated}};",e.invoice_match(&id)?)).await?;

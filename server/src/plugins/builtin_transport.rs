@@ -26,6 +26,7 @@ pub struct Providers {
     stripe_token: Option<String>,
     mercury_token: Option<String>,
     pub connected_account: Option<String>,
+    pub publishable_key: Option<String>,
     destination: Option<String>,
     mercury_card_enabled: bool,
     mercury_ach_debit_enabled: bool,
@@ -110,6 +111,7 @@ impl Providers {
                 .build()?,
             live,
             connected_account,
+            publishable_key: None,
             stripe_token,
             mercury_token,
             destination,
@@ -121,6 +123,13 @@ impl Providers {
         self.mercury_card_enabled = card;
         self.mercury_ach_debit_enabled = ach_debit;
         self
+    }
+    pub fn with_publishable_key(mut self, key: Option<&str>) -> Result<Self> {
+        if let Some(key) = key {
+            validate_publishable_key(key, self.live)?;
+            self.publishable_key = Some(key.to_owned());
+        }
+        Ok(self)
     }
     pub async fn stripe(
         &self,
@@ -372,46 +381,56 @@ impl Providers {
                 self.mercury(Method::GET, &format!("/ar/invoices/{id}"), None)
                     .await
             }
-            Provider::Stripe => {
-                let mut invoice = self
-                    .stripe(Method::GET, &format!("/invoices/{id}"), "", &[])
-                    .await?;
-                if invoice["status"] == "open" {
-                    for payment in self
-                        .list_history("/invoice_payments", "invoice", id)
-                        .await?
-                    {
-                        ensure!(
-                            payment["invoice"] == id && payment["livemode"] == self.live,
-                            "Invoice payment binding mismatch"
-                        );
-                        if payment["status"] == "open"
-                            && payment["payment"]["type"] == "payment_intent"
-                        {
-                            let intent_id = field(&payment["payment"], "payment_intent")?;
-                            safe_id(intent_id)?;
-                            let intent = self
-                                .stripe(
-                                    Method::GET,
-                                    &format!("/payment_intents/{intent_id}"),
-                                    "",
-                                    &[],
-                                )
-                                .await?;
-                            ensure!(
-                                intent["customer"] == invoice["customer"]
-                                    && intent["livemode"] == self.live,
-                                "Payment customer mismatch"
-                            );
-                            if intent["status"] == "processing" {
-                                invoice["business_payment_processing"] = json!(true);
-                            }
-                        }
+            Provider::Stripe => self.stripe_invoice(id, false).await,
+        }
+    }
+    /// Shared invoice/intent observation for reconciliation and inline forms.
+    /// Expanding the existing confirmation secret never creates a new intent.
+    pub async fn stripe_invoice(&self, id: &str, confirmation: bool) -> Result<Value> {
+        safe_id(id)?;
+        let expansion = if confirmation {
+            pairs(&[("expand[]", "confirmation_secret")])
+        } else {
+            vec![]
+        };
+        let mut invoice = self
+            .stripe(Method::GET, &format!("/invoices/{id}"), "", &expansion)
+            .await?;
+        if invoice["status"] == "open" {
+            for payment in self
+                .list_history("/invoice_payments", "invoice", id)
+                .await?
+            {
+                ensure!(
+                    payment["invoice"] == id && payment["livemode"] == self.live,
+                    "Invoice payment binding mismatch"
+                );
+                if payment["status"] == "open" && payment["payment"]["type"] == "payment_intent" {
+                    let intent_id = field(&payment["payment"], "payment_intent")?;
+                    safe_id(intent_id)?;
+                    let intent = self
+                        .stripe(
+                            Method::GET,
+                            &format!("/payment_intents/{intent_id}"),
+                            "",
+                            &[],
+                        )
+                        .await?;
+                    ensure!(
+                        intent["customer"] == invoice["customer"]
+                            && intent["livemode"] == self.live,
+                        "Payment customer mismatch"
+                    );
+                    if matches!(
+                        intent["status"].as_str(),
+                        Some("processing" | "requires_capture")
+                    ) {
+                        invoice["business_payment_processing"] = json!(true);
                     }
                 }
-                Ok(invoice)
             }
         }
+        Ok(invoice)
     }
 }
 pub struct InvoiceRequest {
@@ -526,6 +545,17 @@ pub fn decimal_cents(value: &Value) -> Result<i64> {
             fraction.parse::<i64>()? * if fraction.len() == 1 { 10 } else { 1 }
         })
         .ok_or_else(|| anyhow::anyhow!("Amount overflow"))
+}
+
+pub(crate) fn validate_publishable_key(key: &str, live: bool) -> Result<()> {
+    ensure!(
+        key.starts_with(if live { "pk_live_" } else { "pk_test_" })
+            && key.len() > 16
+            && key.len() < 256
+            && key.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_'),
+        "Publishable key must match this connection's environment"
+    );
+    Ok(())
 }
 
 #[cfg(test)]

@@ -31,6 +31,7 @@ impl FinancialPlugin for CheckoutBank {
             automatic_collection: true,
             saved_methods: true,
             hosted_checkout: true,
+            inline_payment: true,
             refunds: true,
             ..Default::default()
         }
@@ -55,6 +56,18 @@ impl FinancialPlugin for CheckoutBank {
     }
     async fn observe_invoice(&self, id: &str) -> Result<InvoiceObservation> {
         self.base.observe_invoice(id).await
+    }
+    async fn payment_form(&self, id: &str) -> Result<server::finance::PaymentPresentation> {
+        let invoice = self.base.observe_invoice(id).await?;
+        Ok(server::finance::PaymentPresentation {
+            payable_minor: invoice.amount_minor,
+            invoice,
+            form: server::finance::PaymentForm::StripeElement {
+                publishable_key: "pk_test_synthetic_gateway123".into(),
+                stripe_account: None,
+                client_secret: "pi_synthetic123_secret_synthetic123".into(),
+            },
+        })
     }
     async fn method(&self, c: &str, id: &str) -> Result<SavedMethod> {
         self.base.method(c, id).await
@@ -181,14 +194,25 @@ async fn bridge(path: &std::path::Path, phase: &str) -> Result<Value> {
 #[tokio::test]
 #[ignore = "Real development TypeDB and actual website gateway; isolated database and synthetic provider effects"]
 async fn checkout_gateway_queue_payment_and_refund_recovery() -> Result<()> {
-    checkout_gateway_scenario(false).await
+    checkout_gateway_scenario(Scenario::Full).await
 }
 #[tokio::test]
 #[ignore = "Real TypeDB and gateway; mixed checkout with independent synthetic payment and notification plugins"]
 async fn mixed_checkout_gateway_queue_payment_and_refund_recovery() -> Result<()> {
-    checkout_gateway_scenario(true).await
+    checkout_gateway_scenario(Scenario::Mixed).await
 }
-async fn checkout_gateway_scenario(mixed_only: bool) -> Result<()> {
+#[tokio::test]
+#[ignore = "Real TypeDB, dog-auth and website gateway; synthetic invoice form, no real provider credentials"]
+async fn inline_checkout_gateway_authorization() -> Result<()> {
+    checkout_gateway_scenario(Scenario::Inline).await
+}
+#[derive(Clone, Copy, PartialEq)]
+enum Scenario {
+    Full,
+    Mixed,
+    Inline,
+}
+async fn checkout_gateway_scenario(scenario: Scenario) -> Result<()> {
     let _environment = environment::Environment::capture(&[
         "BILLING_ENABLED",
         "AUTOMATION_ENABLED",
@@ -243,11 +267,18 @@ async fn checkout_gateway_scenario(mixed_only: bool) -> Result<()> {
   let directory=tempfile::tempdir()?;let config_file=directory.path().join("checkout.json");
   std::fs::write(&config_file,serde_json::to_vec(&json!({"currency":std::env::var("CHECKOUT_TEST_CURRENCY").unwrap_or("USD".into()),"base":base,"merchant":merchant,"customer":customer,"seller":{"email":"seller@checkout.example.invalid"},"buyer":{"email":"buyer@checkout.example.invalid"},"outsider":{"email":"outsider@checkout.example.invalid"}}))?)?;
   let worker=server::background::spawn_all((*template).clone());
-  if mixed_only {worker.shutdown().await?;bridge(&config_file,"mixed-prepare").await?;return exercise_mixed_gateway(&config_file,&template,&bank,&mail).await;}
+  if scenario==Scenario::Mixed {worker.shutdown().await?;bridge(&config_file,"mixed-prepare").await?;return exercise_mixed_gateway(&config_file,&template,&bank,&mail).await;}
   let test=async{
    eprintln!("Gateway catalogue, quote, confirmation and company isolation");let created=bridge(&config_file,"create").await?;let order=created["order"].as_str().context("Order id")?;
    eprintln!("Awaiting dog-queue invoice execution for {order}");
    let invoice=tokio::time::timeout(std::time::Duration::from_secs(240),async{loop{let result=bridge(&config_file,"status").await?;let invoices=result["last"]["plans"].as_array().into_iter().flatten().flat_map(|p|p["invoices"].as_array().into_iter().flatten()).collect::<Vec<_>>();if let Some(i)=invoices.first(){if i["status"]=="open"{break Ok::<_,anyhow::Error>(i["id"].as_str().unwrap().to_owned());}}tokio::time::sleep(std::time::Duration::from_secs(5)).await;}}).await??;
+   if scenario==Scenario::Inline {
+    let proof=bridge(&config_file,"status").await?;ensure!(proof["inline_verified"]==true,"Inline gateway authorization was not exercised");
+    let records=server::database::snapshot::records(&driver,&db).await?;
+    ensure!(!serde_json::to_string(&records)?.contains("pi_synthetic123_secret_synthetic123"),"Provider confirmation secret entered TypeDB");
+    ensure!(bank.invoice_calls.lock().unwrap().values().all(|n|*n==1),"Form read created another invoice");
+    return Ok(());
+   }
    let external=bank.base.invoices.lock().unwrap().iter().find(|(_,v)|v.invoice_id==invoice).map(|(k,_)|k.clone()).context("Provider invoice")?;
    let native_engine=server::billing::engine::Engine::new(state.clone(),&merchant,registry.resolve(&merchant).await?)?;
    let mut mismatched=bank.base.observe_invoice(&external).await?;let expected_currency=std::env::var("CHECKOUT_TEST_CURRENCY").unwrap_or("USD".into());ensure!(mismatched.currency==expected_currency);
@@ -269,6 +300,7 @@ async fn checkout_gateway_scenario(mixed_only: bool) -> Result<()> {
    Ok::<_,anyhow::Error>(())
   }.await;
   worker.shutdown().await?;test?;
+  if scenario==Scenario::Inline {return Ok::<_,anyhow::Error>(());}
   eprintln!("Native logical-clock instalment and recurring-donation collection");
   let engine=server::billing::engine::Engine::new(state.clone(),&merchant,registry.resolve(&merchant).await?)?;
   let future=server::clock::unix_seconds()+95*86400;

@@ -71,3 +71,39 @@ only the recorded original active tenant set restores the complete original
 graph. No worker or provider ran on either fixture. Rollback in development must
 first stop and fence the successor before restoring access to the old copy; two
 active generations must never be started together.
+
+## Development cutover completed
+
+Business #40 was merged as `edce33f` and deployed to the development service on
+`business_native_dev_v8`. Website #11 was merged and the account/checkout Worker
+was deployed as `5993b5b2-faf8-4b6c-b698-29071314420b`.
+
+Writers were stopped before the fresh checkpoint. Encrypted offsite backup run
+44434662579 passed independent recovery. Its downloaded/decrypted manifest,
+all 3,502 original object values and complete graph matched the stopped source.
+Migration checked the old and new schemas locally before importing the verified
+candidate. Its final full graph and plan-approval checks passed. Explicit source
+retirement suspended only the old copy's 48 active tenants; successor tenant
+states, credentials, consent, financial records and relationship roles remained
+unchanged. Source databases and private recovery evidence were retained.
+
+The v8 backup run 44435477326 passed independent isolated recovery. Its retrieved
+archive was decrypted and manifest-verified: all 3,502 original objects and
+relationships matched the stopped checkpoint, with 22 ciphertext rows and 18
+connection references. Backup bindings now target v8.
+
+A fresh hosted Auth0 sign-in loaded the deployed catalogue and original order.
+Native buyer reads included the original invoice and excluded a foreign invoice;
+a buyer refund proposal was denied without creating a record. Read-only Stripe
+and native checks matched the original paid USD 1.00 invoice, succeeded USD 0.40
+refund and original reminder/payment/refund receipt identifiers. No financial
+journal was replayed.
+
+One startup commerce-cycle action entered attention. Its exact attempt, single
+finished one-time plan, paid invoice, succeeded refund, and a later independently
+completed identical cycle with zero errors were verified before cancelling only
+that obsolete run with evidence. The original attempt and error were retained;
+no provider was called and no payment status was overridden. Final readiness
+reported all seven counters at zero. Merged correctness passed; the separate
+strict dependency audit still reports the same three upstream TypeDB findings.
+Real payments remain disabled.

@@ -17,7 +17,7 @@ fn transport(kind: &str, ctx: &Invocation) -> Result<crate::plugins::builtin_tra
         .as_bool()
         .ok_or_else(|| anyhow::anyhow!("Choose sandbox or production explicitly"))?;
     let token = text(&ctx.secrets, "token")?.to_owned();
-    Ok(crate::plugins::builtin_transport::Providers::connected(
+    crate::plugins::builtin_transport::Providers::connected(
         !sandbox,
         if kind == "stripe" {
             Some(token.clone())
@@ -31,7 +31,8 @@ fn transport(kind: &str, ctx: &Invocation) -> Result<crate::plugins::builtin_tra
     .with_mercury_payment_options(
         ctx.config["card_enabled"] == true,
         ctx.config["ach_debit_enabled"] == true,
-    ))
+    )
+    .with_publishable_key(ctx.config["publishable_key"].as_str())
 }
 #[async_trait::async_trait]
 impl Connector for Builtin {
@@ -52,7 +53,7 @@ impl Connector for Builtin {
             json!({"key":"sandbox","label":"Environment","type":"environment","required":true}),
         ];
         match self.0 {
-          "stripe" => config.push(json!({"key":"connected_account","label":"Connected account ID (optional)","type":"text"})),
+          "stripe" => {config.push(json!({"key":"connected_account","label":"Connected account ID (optional)","type":"text"}));config.push(json!({"key":"publishable_key","label":"Publishable key for this API key (inline payments)","type":"text"}));},
           "mercury" => config.push(json!({"key":"destination","label":"Receiving account ID","type":"text","required":true})),
           "resend" => {config.push(json!({"key":"from","label":"Sender email","type":"text","required":true}));config.push(json!({"key":"allowed_test_recipients","label":"Allowed test emails (one per line)","type":"list"}));},
           _ => {}
@@ -119,7 +120,7 @@ impl Connector for Builtin {
         );
         let allowed = match self.0 {
             "resend" => vec!["from", "allowed_test_recipients", "sandbox"],
-            "stripe" => vec!["sandbox", "connected_account"],
+            "stripe" => vec!["sandbox", "connected_account", "publishable_key"],
             "mercury" => vec![
                 "sandbox",
                 "destination",
@@ -146,6 +147,13 @@ impl Connector for Builtin {
             "Unknown connection setting"
         );
         ensure!(c["sandbox"].is_boolean(), "Choose sandbox explicitly");
+        if let Some(key) = c.get("publishable_key") {
+            crate::plugins::builtin_transport::validate_publishable_key(
+                text(c, "publishable_key")?,
+                c["sandbox"] == false,
+            )?;
+            ensure!(key.is_string(), "Publishable key must be a string");
+        }
         if self.0 == "resend" {
             ensure!(
                 text(s, "token")?.starts_with("re_") && text(s, "token")?.len() > 12,

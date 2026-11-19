@@ -7,6 +7,7 @@ pub fn action(data: &Value) -> Result<&str> {
         matches!(
             action,
             "checkout_configuration"
+                | "payment_form"
                 | "checkout_options"
                 | "history"
                 | "payment_methods"

@@ -205,9 +205,10 @@ fun request_commerce_due($tenant:string,$actor:string,$now:datetime,$o:commerce_
 # Internal attestations contain capabilities, never provider credentials.
 attribute cx_plugin, value string;
 attribute cx_refunds, value boolean;
+attribute cx_inline_payment, value boolean;
 attribute cx_verified, value datetime;
 attribute cx_supported_currency,value string @values("USD", "EUR", "GBP", "CAD", "AUD", "JPY");
-entity commerce_plugin, owns cx_id @key,owns cx_plugin @card(0..1),owns cx_enabled @card(0..1),owns cx_refunds @card(0..1),owns cx_verified @card(0..1),owns cx_supported_currency @card(0..6);
+entity commerce_plugin, owns cx_id @key,owns cx_plugin @card(0..1),owns cx_enabled @card(0..1),owns cx_refunds @card(0..1),owns cx_inline_payment @card(0..1),owns cx_verified @card(0..1),owns cx_supported_currency @card(0..6);
 relation commerce_plugin_owner,relates merchant @card(1),relates plugin @card(1);
 tenant plays commerce_plugin_owner:merchant;
 commerce_plugin plays commerce_plugin_owner:plugin @card(1);
@@ -558,3 +559,45 @@ entity commerce_checkout @meta("dog.security.scope","scope_commerce_checkout") @
 relation commerce_checkout_owner @meta("dog.security.scope","scope_commerce_checkout_owner") @meta("dog.security.read","scope_commerce_checkout_owner") @meta("dog.security.create","create_commerce_checkout_owner");
 relation commerce_checkout_item @meta("dog.security.scope","scope_commerce_checkout_item") @meta("dog.security.read","scope_commerce_checkout_item") @meta("dog.security.create","create_commerce_checkout_item");
 relation commerce_checkout_signatory @meta("dog.security.scope","scope_commerce_checkout_signatory") @meta("dog.security.read","scope_commerce_checkout_signatory") @meta("dog.security.create","create_commerce_checkout_signatory");
+
+# Merchants explicitly approve exact embedding origins. Payment credentials and
+# provider confirmation secrets are never part of the domain graph.
+attribute cx_origin,value string @regex("^https://[a-z0-9][a-z0-9.-]*(:[0-9]{1,5})?$");
+relation commerce_embed_origin,relates merchant @card(1),owns cx_id @key,
+  owns cx_origin @card(1),owns cx_created @card(1),owns cx_enabled @card(1);
+tenant plays commerce_embed_origin:merchant;
+fun scope_commerce_embed_origin($tenant:string,$actor:string,$now:datetime,$e:commerce_embed_origin)->boolean:
+  match $e links(merchant:$m);let $owner=cx_owner($tenant,$actor,$now,$m);$owner==true;
+  return check;
+fun create_commerce_embed_origin($tenant:string,$actor:string,$now:datetime,$e:commerce_embed_origin)->boolean:
+  match let $owner=scope_commerce_embed_origin($tenant,$actor,$now,$e);$owner==true;
+    $e links(merchant:$m),has cx_id $id,has cx_origin $origin,has cx_created == $now,has cx_enabled true;
+    len($origin)<=255;
+    not {$other isa commerce_embed_origin,links(merchant:$m),has cx_origin == $origin,has cx_id $other_id;$other_id!=$id;};
+  return check;
+fun update_commerce_embed_origin_enabled($tenant:string,$actor:string,$now:datetime,$e:commerce_embed_origin,$next:boolean)->boolean:
+  match let $owner=scope_commerce_embed_origin($tenant,$actor,$now,$e);$owner==true;{$next==true;}or{$next==false;};
+  return check;
+relation commerce_embed_origin @meta("dog.security.scope","scope_commerce_embed_origin") @meta("dog.security.read","scope_commerce_embed_origin") @meta("dog.security.create","create_commerce_embed_origin"),
+  owns cx_enabled @meta("dog.security.update","update_commerce_embed_origin_enabled");
+fun cx_inline_state($i:bill_invoice)->boolean:
+  match $i has bill_status "open",has bill_choice "manual",has bill_amount $amount;$amount>0;
+  return check;
+fun cx_inline_invoice($tenant:string,$actor:string,$now:datetime,$i:bill_invoice,$origin:string)->boolean:
+  match $person isa person,has identity_id == $actor;$viewer isa tenant,has tenant_id == $tenant;
+    let $state_ready=cx_inline_state($i);$state_ready==true;
+    (plan:$p,invoice:$i) isa bill_invoice_owner;(customer:$c,plan:$p) isa bill_plan_owner;
+    (merchant:$m,customer:$c) isa bill_account;$m has status "active";
+    $i has bill_provider $provider_attr;let $plugin=$provider_attr;let $currency=bill_invoice_currency($i);
+    (merchant:$m,plugin:$fact) isa commerce_plugin_owner;
+    $fact has cx_plugin == $plugin,has cx_enabled true,has cx_inline_payment true,has cx_supported_currency == $currency,has cx_verified $verified;
+    $verified<=$now;$verified>=$now - PT10M;
+    let $buyer=bill_buyer($person,$viewer,$c,$now);$buyer==true;
+    {$origin=="";}or{$e isa commerce_embed_origin,links(merchant:$m),has cx_origin == $origin,has cx_enabled true;};
+  return check;
+fun request_inline_payment_allowed($tenant:string,$actor:string,$now:datetime,$i:bill_invoice,$origin:string)->boolean @meta("dog.security.context","true"):
+  match let $allowed=cx_inline_invoice($tenant,$actor,$now,$i,$origin);$allowed==true;
+  return check;
+fun cx_inline_amount_valid($i:bill_invoice,$payable:integer)->boolean:
+  match $i has bill_amount $total;$payable>=50;$payable<=$total;
+  return check;
