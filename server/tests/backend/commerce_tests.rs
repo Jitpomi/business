@@ -182,6 +182,7 @@ has cx_instalments false,has cx_limit 12,has cx_deposit_bp 0,has cx_plan_period 
         let tx=driver.transaction(&db,TransactionType::Read).await?;
         let method=database::documents(&tx,"match $c isa bill_customer,has bill_key 'customer';$p isa bill_plan,has bill_key 'yen-plan';let $supported=bill_method_supports_plan($c,$p);fetch {'supported':$supported};").await?;
         ensure!(method.len()==1&&method[0]["supported"]==false,"USD-only saved method accepted a JPY plan");tx.close().await?;
+        mixed_checkout_policies(&adapter,&buyer,&seller,&outsider).await?;
         write(&adapter,&seller,"match $f isa commerce_offer,has cx_id 'item';update $f has cx_enabled false;fetch {'id':$f.cx_id};".into()).await?;
         ensure!(write(&adapter,&buyer,order("withdrawn","item",1001,1,("once","once",1,0))).await.is_err(),"Withdrawn offer remained purchasable");
         let history=adapter.read(&buyer,json!({"query":"match $o isa commerce_order,has cx_id 'purchase';$f isa commerce_offer;(order:$o,offer:$f) isa commerce_line;fetch {'offer':$f.cx_id};"})).await?;
@@ -207,17 +208,207 @@ async fn checkout_checkpoint_preserves_full_graph_and_existing_approvals() -> Re
     let directory = std::path::PathBuf::from(std::env::var("BUSINESS_CHECKOUT_CHECKPOINT")?);
     let source = std::env::var("BUSINESS_CHECKOUT_SOURCE")?;
     ensure!(directory.is_absolute() && database::development_version(&source).is_some());
-    let driver = crate::test_driver::connect(
-        &std::env::var("TYPEDB_ADDR")?,
-        &std::env::var("TYPEDB_USERNAME")?,
-        &std::env::var("TYPEDB_PASSWORD")?,
-        true,
-    )
-    .await?;
+    let driver = server::recovery::local_driver().await?;
     let target = format!("business_backend_test_{}", uuid::Uuid::new_v4().simple());
     eprintln!("Checkout checkpoint rehearsal target: {target}");
-    let count = server::commerce::migration::import(&driver, &source, &target, &directory).await?;
+    let count =
+        server::commerce::migration::import(&driver, &driver, &source, &target, &directory).await?;
     ensure!(count > 0, "Empty checkpoint cannot prove preservation");
     println!("Preserved {count} original objects, all attributes, relation roles and existing plan approvals; source and checkpoint untouched, no provider calls");
     Ok(())
+}
+fn mixed_quote(id: &str) -> String {
+    format!(
+        r#"match $c isa bill_customer,has bill_key "customer";$p isa commerce_pricing,has cx_id "mixed-policy";
+      $f isa commerce_offer,has cx_id "item";$m isa commerce_offer,has cx_id "monthly";let $now=request_now();
+      insert $checkout isa commerce_checkout,has cx_id "{id}",has cx_created == $now,has cx_currency "USD",has cx_groups 2,has cx_request_hash "reviewed-cart";
+      (checkout:$checkout,customer:$c,pricing:$p) isa commerce_checkout_owner;
+      $once isa commerce_order,has cx_id "{id}-once",has cx_created == $now,has cx_currency "USD",has cx_lines 1,has cx_mode "once",has cx_interval "once",has cx_count 1,has cx_deposit 0;
+      (order:$once,customer:$c,pricing:$p) isa commerce_order_owner;
+      $line1 isa commerce_line,links(order:$once,offer:$f),has cx_id "{id}-line1",has cx_created == $now,has cx_unit 1001,has cx_quantity 1;
+      $monthly isa commerce_order,has cx_id "{id}-month",has cx_created == $now,has cx_currency "USD",has cx_lines 1,has cx_mode "recurring",has cx_interval "month",has cx_count 0,has cx_deposit 0;
+      (order:$monthly,customer:$c,pricing:$p) isa commerce_order_owner;
+      $line2 isa commerce_line,links(order:$monthly,offer:$m),has cx_id "{id}-line2",has cx_created == $now,has cx_unit 2500,has cx_quantity 1;
+      (checkout:$checkout,order:$once) isa commerce_checkout_item;(checkout:$checkout,order:$monthly) isa commerce_checkout_item;
+      fetch {{"id":$checkout.cx_id}};"#
+    )
+}
+async fn mixed_checkout_policies(
+    adapter: &SchemaPolicyAdapter,
+    buyer: &AuthenticatedScope,
+    seller: &AuthenticatedScope,
+    outsider: &AuthenticatedScope,
+) -> Result<()> {
+    write(adapter,seller,r#"match $t isa tenant,has tenant_id "seller";let $now=request_now();
+      insert $p isa commerce_pricing,has cx_id "mixed-policy",has cx_currency "USD",has cx_plugin "usd-only",has name "Per-schedule pricing",has cx_created == $now,has cx_tax_bp 500,has cx_discount_bp 1000,has cx_shipping 100,has cx_enabled true,has cx_instalments true,has cx_limit 12,has cx_deposit_bp 0,has cx_plan_period "month";
+      (merchant:$t,pricing:$p) isa commerce_pricing_owner;fetch {"id":$p.cx_id};"#.into()).await?;
+    write(adapter, buyer, mixed_quote("mixed"))
+        .await
+        .context("Atomic mixed quote")?;
+    let q = include_str!("../../public/queries/data/commerce-checkouts.tql");
+    for (scope, expected) in [(buyer, 1), (seller, 1), (outsider, 0)] {
+        let r = adapter.read(scope, json!({"query":q})).await?;
+        ensure!(
+            r["ok"]["answers"]
+                .as_array()
+                .context("Checkout projection")?
+                .len()
+                == expected,
+            "Checkout tenant isolation failed"
+        );
+        if expected == 1 {
+            ensure!(
+                r["ok"]["answers"][0]["data"]["groups"]
+                    .as_array()
+                    .context("Groups")?
+                    .len()
+                    == 2
+            );
+        }
+    }
+    let partial = r#"match $checkout isa commerce_checkout,has cx_id "mixed";$o isa commerce_order,has cx_id "mixed-once";let $actor=request_identity();let $now=request_now();insert (checkout:$checkout,actor:$actor) isa commerce_checkout_signatory,has cx_created == $now;(order:$o,actor:$actor) isa commerce_signatory,has cx_created == $now;fetch {"accepted":true};"#;
+    ensure!(
+        write(adapter, buyer, partial.into()).await.is_err(),
+        "Accepted only part of the reviewed checkout"
+    );
+    let individual = r#"match $o isa commerce_order,has cx_id "mixed-once";let $actor=request_identity();let $now=request_now();insert (order:$o,actor:$actor) isa commerce_signatory,has cx_created == $now;fetch {"accepted":true};"#;
+    ensure!(
+        write(adapter, buyer, individual.into()).await.is_err(),
+        "Single-order path bypassed aggregate acceptance"
+    );
+    let accepted=adapter.read(buyer,json!({"query":"match $o isa commerce_order,has cx_id 'mixed-once';fetch {'accepted':request_commerce_accepted($o)};"})).await?;
+    ensure!(
+        accepted["ok"]["answers"][0]["data"]["accepted"] == false,
+        "Denied partial acceptance left a signature"
+    );
+    let full=partial.replace("let $actor=request_identity();","$other isa commerce_order,has cx_id 'mixed-month';let $actor=request_identity();").replace("fetch {\"accepted\":true};","(order:$other,actor:$actor) isa commerce_signatory,has cx_created == $now;fetch {\"accepted\":true};");
+    ensure!(
+        write(adapter, seller, full.clone()).await.is_err(),
+        "Seller accepted a buyer's obligations"
+    );
+    write(adapter, buyer, full)
+        .await
+        .context("Atomic complete acceptance")?;
+    ensure!(
+        write(
+            adapter,
+            buyer,
+            mixed_quote("missing-group").replace("has cx_groups 2", "has cx_groups 3")
+        )
+        .await
+        .is_err(),
+        "Accepted incomplete group membership"
+    );
+    ensure!(
+        write(
+            adapter,
+            buyer,
+            mixed_quote("wrong-denomination").replacen(
+                "has cx_currency \"USD\"",
+                "has cx_currency \"JPY\"",
+                1
+            )
+        )
+        .await
+        .is_err(),
+        "Cross-currency checkout accepted"
+    );
+    let duplicate = mixed_quote("duplicate-cadence")
+        .replace(
+            "$f isa commerce_offer,has cx_id \"item\"",
+            "$f isa commerce_offer,has cx_id \"monthly\"",
+        )
+        .replace(
+            "has cx_mode \"once\",has cx_interval \"once\",has cx_count 1",
+            "has cx_mode \"recurring\",has cx_interval \"month\",has cx_count 0",
+        )
+        .replace("has cx_unit 1001", "has cx_unit 2500");
+    ensure!(
+        write(adapter, buyer, duplicate).await.is_err(),
+        "Duplicate cadence created duplicate obligations"
+    );
+    write(
+        adapter,
+        buyer,
+        order("late-group", "item", 1001, 1, ("once", "once", 1, 0)),
+    )
+    .await?;
+    ensure!(write(adapter,buyer,"match $checkout isa commerce_checkout,has cx_id 'mixed';$o isa commerce_order,has cx_id 'late-group';insert $l isa commerce_checkout_item,links(checkout:$checkout,order:$o);fetch {'ok':true};".into()).await.is_err(),"Grafted another order after acceptance");
+    Ok(())
+}
+#[tokio::test]
+#[ignore = "Private development checkpoint; loopback verifier only; disposable source/successor copies, no providers"]
+async fn retired_generation_is_fenced_by_native_rbac_and_remains_recoverable() -> Result<()> {
+    dotenvy::from_path(std::env::var("BUSINESS_ENV_FILE")?)?;
+    ensure!(std::env::var("TYPEDB_DB")? == "business_dev");
+    let driver = Arc::new(server::recovery::local_driver().await?);
+    let checkpoint = std::path::PathBuf::from(std::env::var("BUSINESS_CHECKOUT_CHECKPOINT")?);
+    let original = std::env::var("BUSINESS_CHECKOUT_SOURCE")?;
+    ensure!(database::development_version(&original).is_some());
+    let version = 5000 + (uuid::Uuid::new_v4().as_u128() % 2000) as u32 * 2;
+    let source = format!("business_native_dev_v{version}");
+    let target = format!("business_native_dev_v{}", version + 1);
+    ensure!(
+        !driver.databases().contains(&source).await?
+            && !driver.databases().contains(&target).await?,
+        "Generated fixture exists; overwrite nothing"
+    );
+    let directory = tempfile::tempdir()?;
+    for suffix in ["records.json", "graph.json"] {
+        std::fs::copy(
+            checkpoint.join(format!("{original}.{suffix}")),
+            directory.path().join(format!("{source}.{suffix}")),
+        )?;
+    }
+    let data = checkpoint.join(format!("{original}.typedb"));
+    driver
+        .databases()
+        .import_from_file(
+            &source,
+            std::fs::read_to_string(checkpoint.join(format!("{original}.tql")))?,
+            &data,
+        )
+        .await?;
+    driver
+        .databases()
+        .import_from_file(&target, database::import_schema(), &data)
+        .await?;
+    let result=async{
+        let tx=driver.transaction(&source,TransactionType::Read).await?;
+        let rows=database::documents(&tx,&format!("match $t isa tenant;$i isa identity;let $allowed=role_at_least($i,$t,'owner',{});$allowed==true;select $t,$i;limit 1;fetch {{'tenant':$t.tenant_id,'identity':$i.identity_id,'name':$t.name}};",server::clock::native_utc())).await?;tx.close().await?;
+        ensure!(rows.len()==1,"Checkpoint needs an active owner for the fence proof");
+        let scope=AuthenticatedScope::new(rows[0]["tenant"].as_str().context("Tenant")?,rows[0]["identity"].as_str().context("Identity")?)?;
+        let source_adapter=SchemaPolicyAdapter::new(Arc::new(TypeDBState{driver:driver.clone(),database:source.clone()}));
+        let target_adapter=SchemaPolicyAdapter::new(Arc::new(TypeDBState{driver:driver.clone(),database:target.clone()}));
+        let visible=|value:&Value|value["ok"]["answers"].as_array().map_or(0,Vec::len);
+        let query=json!({"query":"match $t isa tenant;fetch {'id':$t.tenant_id};"});
+        ensure!(visible(&source_adapter.read(&scope,query.clone()).await?)>0);
+        let tenant=serde_json::to_string(&rows[0]["tenant"])?;let original_name=serde_json::to_string(&rows[0]["name"])?;
+        let tx=driver.transaction(&target,TransactionType::Write).await?;tx.query(format!("match $t isa tenant,has tenant_id {tenant};update $t has name 'Unverified successor';")).await?;tx.commit().await?;
+        ensure!(server::commerce::migration::retire_source(&driver,&source,&target,directory.path()).await.is_err(),"Retired against an unverified successor");
+        ensure!(visible(&source_adapter.read(&scope,query.clone()).await?)>0,"Failed preflight changed source access");
+        let tx=driver.transaction(&target,TransactionType::Write).await?;tx.query(format!("match $t isa tenant,has tenant_id {tenant};update $t has name {original_name};")).await?;tx.commit().await?;
+        let report=server::commerce::migration::retire_source(&driver,&source,&target,directory.path()).await?;
+        ensure!(visible(&source_adapter.read(&scope,query.clone()).await?)==0,"Retired source retained tenant access");
+        ensure!(visible(&target_adapter.read(&scope,query).await?)>0,"Retirement deactivated the successor");
+        let denied=source_adapter.write(&scope,json!({"query":format!("match $t isa tenant,has tenant_id {tenant};update $t has revision 'retirement-bypass';fetch {{'id':$t.tenant_id}};")})).await;
+        ensure!(denied.is_err()||visible(&denied?)==0,"Retired source accepted an application write");
+        ensure!(server::commerce::migration::retire_source(&driver,&source,&target,directory.path()).await?==report,"Retirement is not safely repeatable");
+        // A rollback can restore only the recorded original active set. No worker
+        // runs on either disposable fixture and no payment state is changed.
+        let intent:Value=serde_json::from_slice(&std::fs::read(directory.path().join(format!("retire-{source}.intent.json")))?)?;
+        let choices=intent["tenants"].as_array().context("Original active set")?.iter().map(|id|format!("{{$id=={id};}}")).collect::<Vec<_>>().join("or");
+        let tx=driver.transaction(&source,TransactionType::Write).await?;tx.query(format!("match $t isa tenant,has tenant_id $id;{choices};update $t has status 'active';")).await?;tx.commit().await?;
+        let expected:std::collections::BTreeMap<String,usize>=serde_json::from_slice(&std::fs::read(directory.path().join(format!("{source}.graph.json")))?)?;
+        ensure!(database::snapshot::graph(&driver,&source,&[]).await?==expected&&database::snapshot::graph(&driver,&target,&[]).await?==expected,"Fence/rollback changed original work");
+        println!("Verified native source read/write denial, unchanged successor access, safe retry, full graph preservation and exact rollback without providers");
+        Ok::<_,anyhow::Error>(())
+    }.await;
+    if result.is_ok() {
+        driver.databases().get(&source).await?.delete().await?;
+        driver.databases().get(&target).await?.delete().await?;
+    } else {
+        eprintln!("Retained retirement fixtures {source} and {target}");
+    }
+    result
 }

@@ -68,3 +68,36 @@ application database or enable real payments.
 The deployment target for the explicit v6-to-v7 cutover is
 `business_native_dev_v7`. Keep the source database and fresh encrypted checkpoint
 before switching the runtime and scheduled backup configuration.
+
+## Development cutover and offsite recovery
+
+Business #38 and Website #10 were merged. Development runs Business `3f973ef`
+on `business_native_dev_v7`, with website `0bd5b8d` and Worker version
+`ab78edd9-e400-4cb2-9a88-eb1a120fa557`. The quiesced checkpoint contained 2,947
+objects; the shadow migration verified every original attribute, relationship
+role and plan approval. The source database and recovery evidence remain retained.
+Forty-two financial objects were independently compared without attribute changes.
+The existing hosted order survived fresh Auth0 sign-in and still showed the
+original paid invoice and successful partial refund. Read-only Stripe/native
+checks matched the original reminder, payment receipt and refund receipt IDs.
+No payment or refund request was replayed. Real checkout payments remain disabled.
+
+A TypeDB restart interrupted the first deployment and cloud restore rehearsal.
+Its exact cause is not established. Resume-period changes were reviewed and
+retained in the old database and private checkpoints; they contained scheduler
+and capability-refresh activity, with no changed invoice, payment, refund or
+receipt. Ten obsolete interrupted billing-cycle attempts were individually
+reviewed against later successful cycles and unchanged financial facts, then
+cancelled through the native owner-scoped evidence path. Attempts and errors
+were retained. A known rolled-back storage-conflict cancellation was retried
+without invoking a provider. All seven operational counters subsequently cleared.
+
+Business #39 moved both manifest imports and independent restore rehearsals off
+the application cluster to an isolated, digest-pinned TypeDB runner container.
+The source connection only exports transactionally; cloud TLS, native policies,
+encryption, alerts and upload acknowledgement remain enforced. The runner test
+and the fresh main backup run `44424035847` passed. Downloaded recipient-encrypted
+archives were decrypted and manifest-verified. An isolated full restore and
+ciphertext-store drill verified 22 ciphertext rows and 18 tenant connection
+credentials, rejecting the wrong key and wrong tenant without contacting the
+source secret store. The existing separately held recovery identity was retained.

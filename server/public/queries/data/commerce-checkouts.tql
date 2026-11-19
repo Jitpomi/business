@@ -1,0 +1,10 @@
+match $checkout isa commerce_checkout;
+fetch {"id":$checkout.cx_id,"currency":$checkout.cx_currency,
+  "created":$checkout.cx_created,
+  "groups":[match $o isa commerce_order;
+    (checkout:$checkout,order:$o) isa commerce_checkout_item;
+    let $subtotal,$discount,$tax,$total=request_commerce_totals($o);
+    let $first,$regular,$last=request_commerce_schedule($o);
+    fetch {"id":$o.cx_id,"mode":$o.cx_mode,"interval":$o.cx_interval,
+      "subtotal":$subtotal,"discount":$discount,"tax":$tax,"total":$total,
+      "first_due":$first,"regular_due":$regular,"last_due":$last};]};

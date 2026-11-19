@@ -8,7 +8,7 @@ use serde_json::{json, Value};
 use std::{path::Path, sync::Arc};
 const HEADER: &[u8] = b"JITPOMI-RECOVERY-v1\n";
 const MAX: usize = 256 * 1024 * 1024;
-fn private_new(path: &Path, bytes: &[u8]) -> Result<()> {
+pub(crate) fn private_new(path: &Path, bytes: &[u8]) -> Result<()> {
     use std::io::Write;
     let mut o = std::fs::OpenOptions::new();
     o.write(true).create_new(true);

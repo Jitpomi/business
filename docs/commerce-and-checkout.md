@@ -17,8 +17,16 @@ One-time purchases, matching-cadence subscriptions and recurring donations, fixe
 or chosen donations, finite instalments and deposits share that lifecycle.
 Merchant-approved flat discounts, tax rates and shipping amounts are included in
 the native quote snapshot. These are not a jurisdiction tax service, stock system
-or fulfilment integration. Mixed one-time and recurring carts must be checked out
-separately. Checkout supports USD, EUR, GBP, CAD, AUD and JPY. Each order and its pricing policy use one currency; there is no implicit conversion. Existing invoice minimums still apply in minor units, and the provider may enforce additional account/settlement minimums.
+or fulfilment integration. Mixed one-time and recurring carts use one sealed checkout containing up to four
+independently priced payment schedules, with at most 60 cart lines in total.
+Every schedule uses the same customer, currency and published pricing policy.
+Acceptance creates all reviewed order signatures in one TypeDB transaction;
+partial acceptance and later additions are rejected by native policy. Each
+schedule retains its ordinary invoice, settlement, receipt and refund lifecycle.
+First payments remain separate provider invoices, not one consolidated charge.
+Shipping, tax and discounts are shown for each schedule, including recurring
+shipping and tax each period. The page distinguishes the first payments due now
+from future recurring obligations; it does not invent a lifetime total. Checkout supports USD, EUR, GBP, CAD, AUD and JPY. Each order and its pricing policy use one currency; there is no implicit conversion. Existing invoice minimums still apply in minor units, and the provider may enforce additional account/settlement minimums.
 
 Checkout execution remains sandbox-only at the server, scheduler and capability
 boundaries. A browser setting cannot enable real payments. The widget hands off to
@@ -46,10 +54,19 @@ refund receipt. Cancellation stops future obligations without erasing invoices
 or inventing a refund. External refunds made outside this app are visible through
 provider history but are not automatically imported as commerce requests.
 
-Explicit migration imports a verified development checkpoint into a new database
-and compares every original logical object, attribute and relationship. It rejects
+Explicit migration restores and upgrades a verified development checkpoint in an
+isolated loopback TypeDB verifier, comparing every original logical object,
+attribute, relationship and existing plan-approval decision before export. Only
+that verified candidate is imported into the new development database, where the
+full graph and approval decisions are checked again. Rehearsal never writes the
+application cluster. The CLI requires an explicit loopback verifier; source
+connections retain verified TLS. It rejects
 unreviewed custom definitions, keeps the source and recovery shadows, never
-creates consent and never runs providers. No startup schema migrations occur.
+creates consent and never runs providers. No startup schema migrations occur. After verification and while writers remain
+stopped, the explicit retirement command suspends tenant access only in the old
+database copy and records its original active set. The successor preserves the
+original tenant states. Existing TypeDB policies fence the retired copy; no
+credentials, consent or payment states are changed.
 
 ## Ownership and boundaries
 
@@ -103,8 +120,8 @@ refund or reverse a settled historical payment.
 
 Invoice checkout reuses the original invoice and hosted payment link. It must not
 create an unrelated Stripe Checkout session that can collect the same debt twice.
-A cart purchase first becomes one durable order; payment obligations derive from
-that order, and provider objects are bound to its stable operation identifiers.
+A cart purchase first becomes an immutable order or a sealed checkout of
+independently priced orders; payment obligations derive from those orders, and provider objects are bound to its stable operation identifiers.
 An ambiguous non-idempotent result requires reconciliation, never automatic replay.
 
 ## Payment and order lifecycle
