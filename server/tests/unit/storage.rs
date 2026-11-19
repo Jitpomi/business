@@ -45,7 +45,7 @@ async fn actual_server_abort_retries_only_the_database_transaction() -> anyhow::
     };
     let result=async {
         let tx=driver.transaction(&database,TransactionType::Write).await?;
-        tx.query("insert $t isa tenant,has tenant_id 'conflict-fixture',has name 'Conflict acceptance',has status 'active',has revision 'initial';").await?;tx.commit().await?;
+        tx.query("insert $t isa tenant,has tenant_id 'conflict-fixture',has name 'Conflict acceptance',has status 'active',has revision 'initial';$u isa person,has identity_id 'conflict-owner',has name 'Owner',has status 'active';(tenant:$t,member:$u) isa membership,has membership_role 'owner',has start_at 2020-01-01T00:00:00;").await?;tx.commit().await?;
         let query="match $t isa tenant,has tenant_id 'conflict-fixture';update $t has revision 'desired';insert $r isa resource,has resource_id 'one-resource',has name 'Retained once',has status 'active';(tenant:$t,resource:$r) isa resource_ownership;fetch {'id':$r.resource_id};";
         let calls=AtomicUsize::new(0);
         let result=retry_aborted(||async {
@@ -62,6 +62,21 @@ async fn actual_server_abort_retries_only_the_database_transaction() -> anyhow::
         anyhow::ensure!(calls.load(Ordering::SeqCst)==2&&result.len()==1,"Expected one rejected transaction and one successful fresh transaction");
         let rows=read(&state,"match $r isa resource;fetch {'id':$r.resource_id};").await?;
         anyhow::ensure!(rows==vec![serde_json::json!({"id":"one-resource"})],"Database replay duplicated a committed resource");
+        // A fresh transaction must re-evaluate native authorization after a
+        // concurrent revocation; an earlier permitted snapshot is not a grant.
+        let at=crate::clock::native_utc();
+        let guarded=format!("match $t isa tenant,has tenant_id 'conflict-fixture';$u isa person,has identity_id 'conflict-owner';let $allowed=role_at_least($u,$t,'owner',{at});$allowed==true;select $t;update $t has revision 'guarded';insert $r isa resource,has resource_id 'must-not-exist',has name 'Denied after revocation',has status 'active';(tenant:$t,resource:$r) isa resource_ownership;fetch {{'id':$r.resource_id}};");
+        let calls=AtomicUsize::new(0);
+        let denied=retry_aborted(||async {
+            if calls.fetch_add(1,Ordering::SeqCst)>0{return write_once(&state,&guarded).await;}
+            let tx=driver.transaction(&database,TransactionType::Write).await?;
+            let rows=documents(&tx,&guarded).await?;anyhow::ensure!(rows.len()==1);
+            let rival=driver.transaction(&database,TransactionType::Write).await?;
+            rival.query("match $t isa tenant,has tenant_id 'conflict-fixture';$u isa person,has identity_id 'conflict-owner';update $t has revision 'revoked';$u has status 'suspended';").await?;rival.commit().await?;
+            tx.commit().await?;Ok(rows[0].clone())
+        }).await;
+        anyhow::ensure!(denied.is_err()&&calls.load(Ordering::SeqCst)==2,"Retry did not re-evaluate native revocation");
+        anyhow::ensure!(read(&state,"match $r isa resource,has resource_id 'must-not-exist';fetch {'id':$r.resource_id};").await?.is_empty(),"Revoked owner left an unauthorized resource");
         Ok::<_,anyhow::Error>(())
     }.await;
     if result.is_ok() {
