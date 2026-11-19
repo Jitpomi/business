@@ -18,6 +18,12 @@ explicit gates; sandbox success does not prove real settlement.
 
 ## Gaps corrected by this audit
 
+- Explicit TypeDB `STC2` isolation aborts now retry only their server-owned
+  database transaction, at most three attempts within the original thirty-second
+  deadline. All native predicates and fences execute again. String-matched errors,
+  application denials, timeouts and unknown commit acknowledgements never replay.
+  External provider calls remain outside this transaction boundary. A forced real
+  server conflict verifies one aborted attempt and one committed resource.
 - Receipt sends that were uncertain, or interrupted in `sending` for over fifteen
   minutes, were retained safely but invisible to readiness. The new
   `attention_notices` aggregate makes them alertable without resending them.
@@ -59,8 +65,16 @@ refund or customer receipt.
    separate first invoices for mixed schedules. Automated tax jurisdiction,
    fulfilment/stock and guest access are not implied by checkout success.
 
+The live audit identified one retained uncertain periodic sandbox cycle from the
+preceding deployment. Its original attempt/error is retained for independent
+financial reconciliation and evidence-backed native cancellation; it is not
+silently retried or marked successful.
+
 ## Provider contracts checked
 
+- [TypeDB transaction conflicts](https://typedb.com/docs/core-concepts/drivers/transactions/):
+  explicit aborted write transactions can be retried; unknown external outcomes
+  require separate reconciliation.
 - [Stripe payment lifecycle](https://docs.stripe.com/payments/payment-intents):
   reuse the invoice's existing payment intent; confirmation is distinct from native
   settlement and notification authority.
