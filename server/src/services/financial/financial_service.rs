@@ -80,7 +80,7 @@ impl DogService<Value, BusinessParams> for FinancialService {
             }
             let selected = e
                 .read(format!(
-                    "{} let $state_ready=cx_inline_state($i);$state_ready==true;fetch {{'plugin':$i.bill_provider}};",
+                    "{} let $state_ready=cx_inline_state($i);$state_ready==true;fetch {{'plugin':$i.bill_provider,'merchant_name':$t.name}};",
                     e.invoice_match(&id)?
                 ))
                 .await?;
@@ -132,7 +132,7 @@ impl DogService<Value, BusinessParams> for FinancialService {
                 DogError::forbidden("Payment access changed; refresh this invoice").into_anyhow()
             );
             return Ok(
-                json!({"invoice_id":id,"amount":presentation.payable_minor,"invoice_amount":presentation.invoice.amount_minor,"currency":presentation.invoice.currency,"embed_origin":origin,"form":presentation.form}),
+                json!({"invoice_id":id,"merchant_id":e.merchant,"merchant_name":selected["merchant_name"],"amount":presentation.payable_minor,"invoice_amount":presentation.invoice.amount_minor,"currency":presentation.invoice.currency,"embed_origin":origin,"form":presentation.form}),
             );
         }
         if action == "history" {
