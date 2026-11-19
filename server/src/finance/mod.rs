@@ -12,6 +12,7 @@ pub struct Capabilities {
     pub saved_methods: bool,
     pub payment_history: bool,
     pub hosted_checkout: bool,
+    pub inline_payment: bool,
     pub refunds: bool,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -56,6 +57,23 @@ pub struct InvoiceObservation {
     pub currency: String,
     pub state: InvoiceState,
     pub payment_url: String,
+}
+/// A provider-owned form for the existing invoice, never a second payment/order.
+/// Client secrets are returned only to the authorized buyer and never persisted.
+#[derive(Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PaymentForm {
+    StripeElement {
+        publishable_key: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        stripe_account: Option<String>,
+        client_secret: String,
+    },
+}
+pub struct PaymentPresentation {
+    pub invoice: InvoiceObservation,
+    pub payable_minor: i64,
+    pub form: PaymentForm,
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct SavedMethod {
@@ -136,6 +154,12 @@ pub trait FinancialPlugin: Send + Sync {
         external: &str,
     ) -> Result<InvoiceObservation>;
     async fn observe_invoice(&self, external: &str) -> Result<InvoiceObservation>;
+    async fn payment_form(&self, _external: &str) -> Result<PaymentPresentation> {
+        Err(
+            dog_core::DogError::bad_request("Inline payment unsupported by this plugin")
+                .into_anyhow(),
+        )
+    }
     async fn collect(&self, _external: &str, _key: &str, _method: &str) -> Result<()> {
         bail!("Automatic collection unsupported")
     }

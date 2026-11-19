@@ -41,6 +41,53 @@ impl BuiltinFinancial {
             payment_url: transport::pay_url(self.provider, v, self.transport.live)?,
         })
     }
+    fn presentation(&self, raw: &Value) -> Result<PaymentPresentation> {
+        ensure!(
+            self.capabilities().inline_payment,
+            dog_core::DogError::bad_request("Inline payment unsupported").into_anyhow()
+        );
+        let invoice = self.observation(raw).map_err(|error| {
+            dog_core::DogError::bad_gateway("Invalid provider invoice response")
+                .with_source(error)
+                .into_anyhow()
+        })?;
+        ensure!(
+            raw["livemode"] == self.transport.live
+                && raw["collection_method"] == "send_invoice"
+                && invoice.state == InvoiceState::Open,
+            dog_core::DogError::conflict(
+                "Refresh the invoice; it is not available for manual inline payment"
+            )
+            .into_anyhow()
+        );
+        let secret = field(&raw["confirmation_secret"], "client_secret").map_err(|error| {
+            dog_core::DogError::bad_gateway("Provider did not supply an invoice payment form")
+                .with_source(error)
+                .into_anyhow()
+        })?;
+        ensure!(
+            raw["confirmation_secret"]["type"] == "payment_intent"
+                && secret.starts_with("pi_")
+                && secret.contains("_secret_")
+                && secret.len() < 512,
+            dog_core::DogError::bad_gateway(
+                "Provider did not supply a supported invoice payment form"
+            )
+            .into_anyhow()
+        );
+        Ok(PaymentPresentation {
+            invoice,
+            payable_minor: raw["amount_remaining"].as_i64().ok_or_else(|| {
+                dog_core::DogError::bad_gateway("Provider did not supply the invoice balance")
+                    .into_anyhow()
+            })?,
+            form: PaymentForm::StripeElement {
+                publishable_key: self.transport.publishable_key.clone().unwrap(),
+                stripe_account: self.transport.connected_account.clone(),
+                client_secret: secret.into(),
+            },
+        })
+    }
     fn request(&self, r: &InvoiceRequest) -> Result<transport::InvoiceRequest> {
         ensure!(
             self.currencies().contains(&r.currency.as_str()),
@@ -155,11 +202,31 @@ impl FinancialPlugin for BuiltinFinancial {
             saved_methods: stripe,
             payment_history: stripe,
             hosted_checkout: true,
+            inline_payment: stripe && self.transport.publishable_key.is_some(),
             refunds: stripe,
         }
     }
     fn ready(&self) -> Result<()> {
         self.transport.ready(self.provider)
+    }
+    async fn payment_form(&self, external: &str) -> Result<PaymentPresentation> {
+        ensure!(
+            self.capabilities().inline_payment,
+            "Inline payment unsupported"
+        );
+        safe_id(external)?;
+        let raw = self
+            .transport
+            .stripe_invoice(external, true)
+            .await
+            .map_err(|error| {
+                dog_core::DogError::bad_gateway(
+                    "Payment provider is unavailable; check the invoice before retrying",
+                )
+                .with_source(error)
+                .into_anyhow()
+            })?;
+        self.presentation(&raw)
     }
     async fn create_customer(&self, key: &str, name: &str, email: &str) -> Result<String> {
         self.transport
@@ -390,5 +457,75 @@ impl FinancialPlugin for BuiltinFinancial {
         self.transport
             .payment_history(self.provider, &invoice)
             .await
+    }
+}
+
+#[cfg(test)]
+mod payment_form_tests {
+    use super::*;
+    fn plugin() -> BuiltinFinancial {
+        BuiltinFinancial {
+            transport: Providers::connected(
+                false,
+                Some("sk_test_fixture123456".into()),
+                None,
+                None,
+                None,
+            )
+            .unwrap()
+            .with_publishable_key(Some("pk_test_fixture123456"))
+            .unwrap(),
+            provider: Provider::Stripe,
+            webhook_secret: None,
+        }
+    }
+    fn invoice() -> Value {
+        json!({"id":"in_fixture","customer":"cus_fixture","metadata":{"business_invoice":"native-invoice"},"total":100,"amount_remaining":100,"currency":"usd","status":"open","livemode":false,"collection_method":"send_invoice","confirmation_secret":{"type":"payment_intent","client_secret":"pi_fixture_secret_fixture"}})
+    }
+    #[test]
+    fn form_reuses_the_existing_invoice_and_requires_its_provider_confirmation_secret() {
+        let p = plugin();
+        let v = invoice();
+        let form = p.presentation(&v).unwrap();
+        assert_eq!(form.invoice.external_id, "in_fixture");
+        assert_eq!(form.invoice.invoice_id, "native-invoice");
+        assert_eq!(form.invoice.amount_minor, 100);
+        let json = serde_json::to_value(form.form).unwrap();
+        assert_eq!(
+            json["client_secret"],
+            v["confirmation_secret"]["client_secret"]
+        );
+        assert_eq!(json["kind"], "stripe_element");
+        for (key, value) in [
+            ("livemode", json!(true)),
+            ("status", json!("paid")),
+            ("collection_method", json!("charge_automatically")),
+            ("confirmation_secret", Value::Null),
+        ] {
+            let mut v = invoice();
+            v[key] = value;
+            assert!(p.presentation(&v).is_err());
+        }
+    }
+    #[test]
+    fn partial_provider_balance_is_distinct_from_the_original_invoice_total() {
+        let p = plugin();
+        let mut v = invoice();
+        v["amount_remaining"] = json!(60);
+        let presentation = p.presentation(&v).unwrap();
+        assert_eq!(presentation.invoice.amount_minor, 100);
+        assert_eq!(presentation.payable_minor, 60);
+    }
+    #[test]
+    fn inline_support_is_connection_specific_and_environment_bound() {
+        let mut p = plugin();
+        assert!(p.capabilities().inline_payment);
+        p.transport.publishable_key = None;
+        assert!(!p.capabilities().inline_payment);
+        assert!(p.presentation(&invoice()).is_err());
+        p.provider = Provider::Mercury;
+        assert!(!p.capabilities().inline_payment);
+        assert!(transport::validate_publishable_key("pk_live_fixture123456", false).is_err());
+        assert!(transport::validate_publishable_key("sk_test_fixture123456", false).is_err());
     }
 }

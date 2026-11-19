@@ -159,8 +159,9 @@ Public SDK assets must live outside the existing Cloudflare Access-protected
 cookies intact. Use a top-level authenticated handoff for providers or browsers
 that cannot support embedded payment; do not depend on third-party cookies or
 weaken cookie attributes. Any popup integration checks the exact origin, source
-window and one-time state. Messages carry no credential and are not proof of
-payment. Returning from hosted authentication preserves only validated relative
+window and fresh per-popup state. Messages carry no account authentication proof.
+Only an explicitly approved origin can receive an invoice-scoped provider form;
+messages are never proof of settlement. Returning from hosted authentication preserves only validated relative
 checkout context, never an arbitrary redirect URL.
 
 Keep accessible keyboard navigation, clear pending states, a visible hosted-page
@@ -217,3 +218,51 @@ excess decimal precision. Notifications, order review, dashboard history and
 refund entry display the actual currency. Existing `amount_cents` API field names
 remain compatibility labels for integer minor units; consumers must use the
 accompanying `currency` rather than assume a divisor of 100.
+
+
+## Inline provider payment forms
+
+`FinancialPlugin::payment_form` describes a provider-owned form for an existing
+manual invoice. It must not create another order, invoice or PaymentIntent. Its
+`inline_payment` capability is opt-in per connection. Stripe supports its Payment
+Element using the invoice's expanded `confirmation_secret`. Mercury and plugins
+without that capability retain their hosted payment link and return a clear
+unsupported-operation error.
+
+TypeDB requires the current buyer, an active merchant, an open manual invoice,
+and a fresh supported-currency/inline capability attestation from the sandbox
+connection. The existing attestation producer disables checkout outside sandbox.
+For an external handoff it also requires a matching enabled `commerce_embed_origin`
+approved by that merchant's owner. Origins are immutable exact HTTPS origins;
+owners can disable or enable their approval. Buyer and foreign-tenant changes,
+duplicate origin records, and origin rewriting are denied by native policies.
+The form exposes the remaining provider balance separately from the immutable
+invoice total. TypeDB bounds the payable amount against that invoice. The
+financial service validates provider invoice/customer/amount/currency bindings
+and repeats the current native access decision after provider I/O.
+
+Hosted checkout uses an HttpOnly authenticated session. An embedded widget opens
+that checkout for review and confirmation, then receives only the selected
+invoice's provider form through an exact origin/source/per-popup nonce channel.
+It never receives an Auth0 proof or account cookie. No third-party cookie or
+relaxed cookie/frame-ancestor policy is required. Card fields are provider-owned;
+PAN/CVC never enter JITPOMI. The client treats provider confirmation as submitted,
+not paid. dog-queue reconciliation and native billing facts determine settlement
+and existing receipt/refund lifecycles.
+
+A Stripe API-key connection can supply its matching `publishable_key`. If a
+connected-account binding is present, that is the platform publishable key and
+Stripe.js receives the same `stripeAccount` binding used by the server. OAuth
+captures `STRIPE_CONNECT_PLATFORM_PUBLISHABLE_KEY` from platform configuration;
+it does not consume deprecated OAuth access or publishable-key response fields.
+Existing connections without a public key retain hosted checkout. Test/live key
+modes must match; the browser currently rejects live inline forms because real
+payments remain disabled. See Stripe's [invoice confirmation secret](https://docs.stripe.com/api/invoices/object?query=confirmation_secret)
+and [Connect OAuth guidance](https://docs.stripe.com/connect/oauth-reference).
+
+Provider confirmation secrets are never stored in TypeDB or tab persistence.
+Provider redirect secret parameters are removed from browser history and ignored
+as settlement proof. Revoking an embedding origin prevents new form handoffs;
+it cannot retract a confirmation secret already issued by the payment provider
+for its original invoice. Unknown submission outcomes keep the submit button
+disabled until payment status is checked; no second debt is created.

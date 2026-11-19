@@ -88,6 +88,32 @@ $c isa bill_customer,has bill_key "customer",has name "Buyer",has bill_email "bu
         let seller=AuthenticatedScope::new("seller","seller-owner")?;
         let buyer=AuthenticatedScope::new("buyer","buyer-owner")?;
         let outsider=AuthenticatedScope::new("outsider","outsider-owner")?;
+        let embed=|id:&str,origin:&str|format!("match $m isa tenant,has tenant_id 'seller';let $at=request_now();insert $e isa commerce_embed_origin,links(merchant:$m),has cx_id '{id}',has cx_origin '{origin}',has cx_created == $at,has cx_enabled true;fetch {{'id':$e.cx_id}};");
+        write(&adapter,&seller,embed("embed","https://merchant.example")).await.context("Approve embedding origin")?;
+        ensure!(write(&adapter,&buyer,embed("buyer-embed","https://attacker.example")).await.is_err(),"Buyer approved a merchant origin");
+        ensure!(write(&adapter,&outsider,embed("foreign-embed","https://attacker.example")).await.is_err(),"Foreign tenant approved origin");
+        ensure!(write(&adapter,&seller,embed("duplicate-embed","https://merchant.example")).await.is_err(),"Duplicate origin bypasses revocation");
+        ensure!(write(&adapter,&seller,embed("unsafe-embed","http://merchant.example/path")).await.is_err(),"Non-origin URL accepted");
+        ensure!(write(&adapter,&buyer,"match $e isa commerce_embed_origin,has cx_id 'embed';update $e has cx_enabled false;fetch {'id':$e.cx_id};".into()).await.is_err(),"Buyer revoked merchant origin");
+        ensure!(write(&adapter,&seller,"match $e isa commerce_embed_origin,has cx_id 'embed';update $e has cx_origin 'https://attacker.example';fetch {'id':$e.cx_id};".into()).await.is_err(),"Owner rewrote an immutable origin instead of explicitly approving it");
+        let tx=driver.transaction(&db,TransactionType::Write).await?;
+        tx.query(format!("match $c isa bill_customer,has bill_key 'customer';$m isa tenant,has tenant_id 'seller';insert $p isa bill_plan,has bill_key 'inline-plan',has name 'Inline fixture',has bill_amount 100,has bill_due_days 1,has bill_anchor 1,has bill_next 1,has bill_sequence 1,has bill_interval 'once',has bill_status 'finished';(customer:$c,plan:$p) isa bill_plan_owner;$i isa bill_invoice,has bill_key 'inline-invoice',has name 'Inline fixture',has bill_amount 100,has bill_anchor 1,has bill_next 1,has bill_sequence 0,has bill_choice 'manual',has bill_provider 'test',has bill_status 'open',has bill_external_id 'provider-invoice',has bill_url 'https://payment.example',has bill_updated 1,has bill_revision 'initial';(plan:$p,invoice:$i) isa bill_invoice_owner;$fact isa commerce_plugin,has cx_id 'inline-fact',has cx_plugin 'test',has cx_enabled true,has cx_inline_payment true,has cx_verified {},has cx_supported_currency 'USD';(merchant:$m,plugin:$fact) isa commerce_plugin_owner;",server::clock::native_utc())).await?;tx.commit().await?;
+        let amounts=adapter.read(&buyer,json!({"query":"match $i isa bill_invoice,has bill_key 'inline-invoice';fetch {'partial':cx_inline_amount_valid($i,60),'excess':cx_inline_amount_valid($i,101),'zero':cx_inline_amount_valid($i,0)};"})).await?;let amounts=&amounts["ok"]["answers"][0]["data"];ensure!(amounts["partial"]==true&&amounts["excess"]==false&&amounts["zero"]==false,"Native form balance bounds failed");
+        let allowed=|origin:&str|json!({"query":format!("match $i isa bill_invoice,has bill_key 'inline-invoice';fetch {{'allowed':request_inline_payment_allowed($i,'{origin}')}};")});
+        let result=adapter.read(&buyer,allowed("https://merchant.example")).await?;
+        ensure!(result["ok"]["answers"][0]["data"]["allowed"]==true,"Approved buyer cannot present invoice");
+        let tx=driver.transaction(&db,TransactionType::Write).await?;tx.query("match $f isa commerce_plugin,has cx_id 'inline-fact';update $f has cx_inline_payment false;").await?;tx.commit().await?;
+        let unavailable=adapter.read(&buyer,allowed("")).await?;ensure!(unavailable["ok"]["answers"][0]["data"]["allowed"]==false,"Disabled or non-sandbox inline attestation was ignored");
+        let tx=driver.transaction(&db,TransactionType::Write).await?;tx.query("match $f isa commerce_plugin,has cx_id 'inline-fact';update $f has cx_inline_payment true;").await?;tx.commit().await?;
+
+        for (scope,origin) in [(&seller,"https://merchant.example"),(&buyer,"https://attacker.example")] {
+            let result=adapter.read(scope,allowed(origin)).await?;ensure!(result["ok"]["answers"][0]["data"]["allowed"]==false,"Unauthorized payment presentation allowed");
+        }
+        write(&adapter,&seller,"match $e isa commerce_embed_origin,has cx_id 'embed';update $e has cx_enabled false;fetch {'id':$e.cx_id};".into()).await?;
+        let result=adapter.read(&buyer,allowed("https://merchant.example")).await?;ensure!(result["ok"]["answers"][0]["data"]["allowed"]==false,"Revoked origin still allowed");
+        let result=adapter.read(&buyer,allowed("")).await?;ensure!(result["ok"]["answers"][0]["data"]["allowed"]==true,"Hosted payment incorrectly requires an embedding origin");
+        let tx=driver.transaction(&db,TransactionType::Write).await?;tx.query("match $i isa bill_invoice,has bill_key 'inline-invoice';update $i has bill_status 'paid';").await?;tx.commit().await?;
+        let result=adapter.read(&buyer,allowed("")).await?;ensure!(result["ok"]["answers"][0]["data"]["allowed"]==false,"Paid invoice can be presented again");
         write(&adapter,&seller,offer("item","product",1001,1001,1001,"once")).await.context("Create product")?;
         write(&adapter,&seller,offer("monthly","service",2500,2500,2500,"month")).await?;
         write(&adapter,&seller,offer("donation","donation",0,100,100000,"once")).await?;
