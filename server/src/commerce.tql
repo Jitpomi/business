@@ -150,7 +150,7 @@ fun cx_order_terms_valid($tenant:string,$actor:string,$now:datetime,$o:commerce_
       or {$deposit>=50;let $lowest=floor(($total - $deposit) / ($count - 1));$lowest>=50;};};
   return check;
 fun create_commerce_order($tenant:string,$actor:string,$now:datetime,$o:commerce_order)->boolean:
-  match $o has cx_created == $now;let $valid=cx_order_terms_valid($tenant,$actor,$now,$o);$valid==true;
+  match $o has cx_created == $now;let $configured=cfg_order_allowed($o);$configured==true;let $valid=cx_order_terms_valid($tenant,$actor,$now,$o);$valid==true;
   return check;
 fun scope_commerce_order_owner($tenant:string,$actor:string,$now:datetime,$link:commerce_order_owner)->boolean:
   match $link links(order:$o);let $allowed_1=scope_commerce_order($tenant,$actor,$now,$o);$allowed_1==true;
@@ -247,7 +247,7 @@ fun create_commerce_signatory($tenant:string,$actor:string,$now:datetime,$link:c
   match $link links(order:$o,actor:$person),has cx_created == $now;$person has identity_id == $actor;
     {not {(order:$o) isa commerce_checkout_item;};}
     or {(order:$o,checkout:$checkout) isa commerce_checkout_item;let $complete=cx_checkout_signed_at($checkout,$person,$now);$complete==true;};
-    $o has cx_created $at;$at >= $now - PT15M;
+    let $fresh=cfg_quote_fresh($o,$now);$fresh==true;
     not {(order:$o) isa commerce_execution;};not {(order:$o) isa commerce_cancellation;};
     (order:$o,customer:$c,pricing:$pricing) isa commerce_order_owner;
     $t isa tenant,has tenant_id == $tenant;let $buyer=bill_buyer($person,$t,$c,$now);$buyer==true;
@@ -337,7 +337,7 @@ fun create_commerce_refund($tenant:string,$actor:string,$now:datetime,$r:commerc
     $fact has cx_plugin == $plugin,has cx_refunds true;let $ready=cx_plugin_ready($merchant,$plugin,$now);$ready==true;
     let $busy=$invoice+":refund";
     $r has cx_created == $now,has cx_refund_status "queued",has cx_busy == $busy;not {$r has cx_external $unbound;};
-    let $reserved=cx_reserved_refunds($i);$reserved <= $amount;
+    let $reserved=cx_reserved_refunds($i);$reserved <= $amount;let $policy=cfg_invoice_refunds($i,$now);$policy==true;
   return check;
 fun scope_commerce_refund_owner($tenant:string,$actor:string,$now:datetime,$link:commerce_refund_owner)->boolean:
   match $link links(request:$r);let $allowed=scope_commerce_refund($tenant,$actor,$now,$r);$allowed==true;
@@ -519,7 +519,7 @@ fun scope_commerce_checkout($tenant:string,$actor:string,$now:datetime,$checkout
     let $allowed=scope_bill_customer($tenant,$actor,$now,$c);$allowed==true;
   return check;
 fun create_commerce_checkout($tenant:string,$actor:string,$now:datetime,$checkout:commerce_checkout)->boolean:
-  match $checkout has cx_created == $now;
+  match $checkout has cx_created == $now;let $configured=cfg_checkout_allowed($checkout);$configured==true;
     (checkout:$checkout,customer:$c) isa commerce_checkout_owner;
     $t isa tenant,has tenant_id == $tenant;$person isa identity,has identity_id == $actor;
     let $buyer=bill_buyer($person,$t,$c,$now);$buyer==true;
@@ -550,7 +550,7 @@ fun cx_checkout_signed_at($checkout:commerce_checkout,$person:identity,$at:datet
   return check;
 fun create_commerce_checkout_signatory($tenant:string,$actor:string,$now:datetime,$link:commerce_checkout_signatory)->boolean:
   match $link links(checkout:$checkout,actor:$person),has cx_created == $now;$person has identity_id == $actor;
-    $checkout has cx_created $at;$at >= $now - PT15M;
+    not {(checkout:$checkout,order:$quoted) isa commerce_checkout_item;let $fresh=cfg_quote_fresh($quoted,$now);$fresh==false;};
     (checkout:$checkout,customer:$c) isa commerce_checkout_owner;
     $t isa tenant,has tenant_id == $tenant;let $buyer=bill_buyer($person,$t,$c,$now);$buyer==true;
     let $complete=cx_checkout_signed_at($checkout,$person,$now);$complete==true;

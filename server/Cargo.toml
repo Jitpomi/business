@@ -39,6 +39,7 @@ bcrypt = "0.19"
 base64 = "0.22"
 rusqlite = { version = "0.43", features = ["bundled"] }
 jsonwebtoken = "=10.4.0"
+jiff = { version = "1", features = ["tzdb-bundle-always"] }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

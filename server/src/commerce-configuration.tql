@@ -1,0 +1,196 @@
+define
+# Immutable versions and activations. The head is the only mutable pointer.
+attribute cfg_message_kind,value string @values("invoice","reminder","receipt","refund");
+attribute cfg_message_subject,value string @regex("^([^{}\r\n]|[{](invoice_id|description|amount|due_at|url|refund_id|merchant|support)[}]){1,200}$");
+attribute cfg_message_text,value string @regex("^([^{}]|[{](invoice_id|description|amount|due_at|url|refund_id|merchant|support)[}])+$");
+attribute cfg_message_enabled,value boolean;
+entity commerce_message,owns cx_id @key,owns cfg_message_kind @card(1),owns cfg_message_subject @card(1),owns cfg_message_text @card(1),owns cfg_message_enabled @card(1);
+relation commerce_configuration_owner,relates merchant @card(1),relates configuration @card(1);
+tenant plays commerce_configuration_owner:merchant;
+commerce_configuration plays commerce_configuration_owner:configuration @card(1);
+relation commerce_message_owner,relates configuration @card(1),relates message @card(1);
+commerce_configuration plays commerce_message_owner:configuration;
+commerce_message plays commerce_message_owner:message @card(1);
+entity commerce_configuration_head,owns cx_id @key,owns cfg_active @card(1);
+relation commerce_configuration_head_owner,relates merchant @card(1),relates head @card(1);
+tenant plays commerce_configuration_head_owner:merchant @card(0..1);
+commerce_configuration_head plays commerce_configuration_head_owner:head @card(1);
+relation commerce_configuration_activation,relates head @card(1),relates configuration @card(1),relates actor @card(1),owns cx_id @key,owns cx_created @card(1);
+commerce_configuration_head plays commerce_configuration_activation:head;
+commerce_configuration plays commerce_configuration_activation:configuration;
+identity plays commerce_configuration_activation:actor;
+relation commerce_configuration_snapshot,relates order @card(1),relates configuration @card(1);
+commerce_order plays commerce_configuration_snapshot:order @card(0..1);
+commerce_configuration plays commerce_configuration_snapshot:configuration;
+
+fun cfg_manage($tenant:string,$actor:string,$now:datetime,$t:tenant)->boolean:
+  match let $scoped=scope_tenant($tenant,$actor,$now,$t);$scoped==true;
+    {$i isa identity,has identity_id == $actor;let $owner=role_at_least($i,$t,"owner",$now);$owner==true;}
+    or {$i isa identity,has identity_id == $actor;(tenant:$t,resource:$r) isa resource_ownership;$r has resource_id "checkout-configuration";let $grant=is_permitted($i,$t,$r,"write",$now);$grant==true;};
+  return check;
+fun cfg_head_scope($tenant:string,$actor:string,$now:datetime,$h:commerce_configuration_head)->boolean:
+  match (head:$h,merchant:$t) isa commerce_configuration_head_owner;
+    {let $manage=cfg_manage($tenant,$actor,$now,$t);$manage==true;}
+    or {let $buyer=cx_catalogue_reader($tenant,$actor,$now,$t);$buyer==true;};
+  return check;
+fun cfg_profile_scope($tenant:string,$actor:string,$now:datetime,$p:commerce_configuration)->boolean:
+  match (configuration:$p,merchant:$t) isa commerce_configuration_owner;{let $manage=cfg_manage($tenant,$actor,$now,$t);$manage==true;}
+    or {$p has cx_id $id;(merchant:$t,head:$h) isa commerce_configuration_head_owner;$h has cfg_active == $id;let $buyer=cx_catalogue_reader($tenant,$actor,$now,$t);$buyer==true;}
+    or {(order:$o,configuration:$p) isa commerce_configuration_snapshot;let $order_allowed=scope_commerce_order($tenant,$actor,$now,$o);$order_allowed==true;};
+  return check;
+fun cfg_message_scope($tenant:string,$actor:string,$now:datetime,$m:commerce_message)->boolean:
+  match (message:$m,configuration:$p) isa commerce_message_owner;let $allowed=cfg_profile_scope($tenant,$actor,$now,$p);$allowed==true;
+  return check;
+fun cfg_message_count($p:commerce_configuration)->integer:
+  match (configuration:$p,message:$m) isa commerce_message_owner;
+  return count($m);
+fun cfg_profile_create($tenant:string,$actor:string,$now:datetime,$p:commerce_configuration)->boolean:
+  match (configuration:$p,merchant:$t) isa commerce_configuration_owner;let $allowed=cfg_manage($tenant,$actor,$now,$t);$allowed==true;
+    $p has cx_created == $now,has cfg_default_currency $currency,has cfg_default_mode $mode,has cx_currency == $currency,has cx_mode == $mode;
+    let $count=cfg_message_count($p);$count==4;
+    not {(configuration:$p,message:$m) isa commerce_message_owner;$m has cfg_message_subject $subject,has cfg_message_text $text;{let $size=len($subject);$size>200;} or {let $size=len($text);$size>8000;};};
+    (configuration:$p,message:$invoice) isa commerce_message_owner;$invoice has cfg_message_kind "invoice";
+    (configuration:$p,message:$reminder) isa commerce_message_owner;$reminder has cfg_message_kind "reminder";
+    (configuration:$p,message:$receipt) isa commerce_message_owner;$receipt has cfg_message_kind "receipt";
+    (configuration:$p,message:$refund) isa commerce_message_owner;$refund has cfg_message_kind "refund";
+  return check;
+fun cfg_owner_scope($tenant:string,$actor:string,$now:datetime,$l:commerce_configuration_owner)->boolean:
+  match $l links(configuration:$p);let $allowed=cfg_profile_scope($tenant,$actor,$now,$p);$allowed==true;
+  return check;
+fun cfg_owner_create($tenant:string,$actor:string,$now:datetime,$l:commerce_configuration_owner)->boolean:
+  match $l links(configuration:$p);let $allowed=cfg_profile_create($tenant,$actor,$now,$p);$allowed==true;
+  return check;
+fun cfg_message_create($tenant:string,$actor:string,$now:datetime,$m:commerce_message)->boolean:
+  match (message:$m,configuration:$p) isa commerce_message_owner;let $allowed=cfg_profile_create($tenant,$actor,$now,$p);$allowed==true;
+  return check;
+fun cfg_message_owner_scope($tenant:string,$actor:string,$now:datetime,$l:commerce_message_owner)->boolean:
+  match $l links(message:$m);let $allowed=cfg_message_scope($tenant,$actor,$now,$m);$allowed==true;
+  return check;
+fun cfg_message_owner_create($tenant:string,$actor:string,$now:datetime,$l:commerce_message_owner)->boolean:
+  match $l links(message:$m);let $allowed=cfg_message_create($tenant,$actor,$now,$m);$allowed==true;
+  return check;
+fun cfg_activation_create($tenant:string,$actor:string,$now:datetime,$l:commerce_configuration_activation)->boolean:
+  match $l links(configuration:$p,head:$h,actor:$who),has cx_created == $now;$who has identity_id == $actor;
+    (configuration:$p,merchant:$t) isa commerce_configuration_owner;(head:$h,merchant:$t) isa commerce_configuration_head_owner;
+    let $allowed=cfg_manage($tenant,$actor,$now,$t);$allowed==true;
+  return check;
+fun cfg_activation_scope($tenant:string,$actor:string,$now:datetime,$l:commerce_configuration_activation)->boolean:
+  match $l links(head:$h);(head:$h,merchant:$t) isa commerce_configuration_head_owner;let $allowed=cfg_manage($tenant,$actor,$now,$t);$allowed==true;
+  return check;
+fun cfg_head_update($tenant:string,$actor:string,$now:datetime,$h:commerce_configuration_head,$next:string)->boolean:
+  match (head:$h,merchant:$t) isa commerce_configuration_head_owner;let $allowed=cfg_manage($tenant,$actor,$now,$t);$allowed==true;
+    $p isa commerce_configuration,has cx_id == $next;(merchant:$t,configuration:$p) isa commerce_configuration_owner;
+    $event isa commerce_configuration_activation,links(head:$h,configuration:$p);let $event_allowed=cfg_activation_create($tenant,$actor,$now,$event);$event_allowed==true;
+  return check;
+fun cfg_head_create($tenant:string,$actor:string,$now:datetime,$h:commerce_configuration_head)->boolean:
+  match (head:$h,merchant:$t) isa commerce_configuration_head_owner;$t has tenant_id $id;$h has cx_id == $id,has cfg_active $active;let $next=$active;
+    let $allowed=cfg_head_update($tenant,$actor,$now,$h,$next);$allowed==true;
+  return check;
+fun cfg_head_owner_scope($tenant:string,$actor:string,$now:datetime,$l:commerce_configuration_head_owner)->boolean:
+  match $l links(head:$h);let $allowed=cfg_head_scope($tenant,$actor,$now,$h);$allowed==true;
+  return check;
+fun cfg_head_owner_create($tenant:string,$actor:string,$now:datetime,$l:commerce_configuration_head_owner)->boolean:
+  match $l links(head:$h);let $allowed=cfg_head_create($tenant,$actor,$now,$h);$allowed==true;
+  return check;
+fun cfg_snapshot_scope($tenant:string,$actor:string,$now:datetime,$l:commerce_configuration_snapshot)->boolean:
+  match $l links(order:$o);let $allowed=scope_commerce_order($tenant,$actor,$now,$o);$allowed==true;
+  return check;
+fun cfg_snapshot_create($tenant:string,$actor:string,$now:datetime,$l:commerce_configuration_snapshot)->boolean:
+  match $l links(order:$o,configuration:$p);$o has cx_created == $now;let $scope=scope_commerce_order($tenant,$actor,$now,$o);$scope==true;
+    (order:$o,customer:$c) isa commerce_order_owner;(merchant:$t,customer:$c) isa bill_account;
+    (merchant:$t,configuration:$p) isa commerce_configuration_owner;(merchant:$t,head:$h) isa commerce_configuration_head_owner;$p has cx_id $id;$h has cfg_active == $id;
+  return check;
+fun cfg_order_current($o:commerce_order)->boolean:
+  match (order:$o,customer:$c) isa commerce_order_owner;(merchant:$t,customer:$c) isa bill_account;
+    {(order:$o,configuration:$p) isa commerce_configuration_snapshot;(merchant:$t,configuration:$p) isa commerce_configuration_owner;(merchant:$t,head:$h) isa commerce_configuration_head_owner;$p has cx_id $id;$h has cfg_active == $id;}
+    or {not {(merchant:$t) isa commerce_configuration_head_owner;};not {(order:$o) isa commerce_configuration_snapshot;};};
+  return check;
+fun cfg_order_allowed($o:commerce_order)->boolean:
+  match let $current=cfg_order_current($o);$current==true;
+    {not {(order:$o) isa commerce_configuration_snapshot;};}
+    or {(order:$o,configuration:$p) isa commerce_configuration_snapshot;
+      $p has cfg_max_lines $limit,has cfg_max_quantity $quantity;$o has cx_lines $lines,has cx_currency $currency,has cx_mode $mode;
+      $p has cx_currency == $currency,has cx_mode == $mode;$lines <= $limit;
+      not {$line isa commerce_line,links(order:$o),has cx_quantity $count;$count > $quantity;};
+      not {$kind_line isa commerce_line,links(order:$o,offer:$offer);$offer has cx_kind $kind;not {$p has cx_kind == $kind;};};};
+  return check;
+fun cfg_quote_fresh($o:commerce_order,$now:datetime)->boolean:
+  match let $current=cfg_order_current($o);$current==true;$o has cx_created $at;$at <= $now;
+    {not {(order:$o) isa commerce_configuration_snapshot;};$at >= $now - PT15M;}
+    or {(order:$o,configuration:$p) isa commerce_configuration_snapshot;
+      {$p has cfg_quote_window "5m";$at >= $now - PT5M;}
+      or {$p has cfg_quote_window "15m";$at >= $now - PT15M;}
+      or {$p has cfg_quote_window "1h";$at >= $now - PT1H;}
+      or {$p has cfg_quote_window "1d";$at >= $now - P1D;};};
+  return check;
+fun cfg_checkout_allowed($checkout:commerce_checkout)->boolean:
+  match let $lines=cx_checkout_line_count($checkout);not {(checkout:$checkout,order:$o) isa commerce_checkout_item;(order:$o,configuration:$p) isa commerce_configuration_snapshot;$p has cfg_max_groups $limit,has cfg_max_lines $max_lines;$checkout has cx_groups $groups;{$groups > $limit;}or{$lines>$max_lines;};};
+  return check;
+fun cfg_invoice_profile($i:bill_invoice)->{commerce_configuration}:
+  match (invoice:$i,plan:$plan) isa bill_invoice_owner;(plan:$plan,order:$o) isa commerce_execution;(order:$o,configuration:$p) isa commerce_configuration_snapshot;
+  return {$p};
+fun cfg_invoice_refunds($i:bill_invoice,$now:datetime)->boolean:
+  match {not {let $legacy_profile in cfg_invoice_profile($i);};}
+    or {let $p in cfg_invoice_profile($i);$p has cfg_refunds true;(invoice:$i,plan:$plan) isa bill_invoice_owner;(plan:$plan,order:$o) isa commerce_execution;$o has cx_created $at;
+      {$p has cfg_refund_window "unlimited";}
+      or {$p has cfg_refund_window "day";$now <= $at + P1D;}
+      or {$p has cfg_refund_window "week";$now <= $at + P1W;}
+      or {$p has cfg_refund_window "month";$now <= $at + P1M;}
+      or {$p has cfg_refund_window "year";$now <= $at + P1Y;};};
+  return check;
+
+fun cfg_notice_enabled($i:bill_invoice,$kind:string)->boolean:
+  match {not {let $legacy_profile in cfg_invoice_profile($i);};}
+    or {let $p in cfg_invoice_profile($i);(configuration:$p,message:$m) isa commerce_message_owner;$m has cfg_message_kind == $kind,has cfg_message_enabled true;};
+  return check;
+
+entity commerce_configuration @meta("dog.security.scope","cfg_profile_scope") @meta("dog.security.read","cfg_profile_scope") @meta("dog.security.create","cfg_profile_create");
+relation commerce_configuration_owner @meta("dog.security.scope","cfg_owner_scope") @meta("dog.security.read","cfg_owner_scope") @meta("dog.security.create","cfg_owner_create");
+entity commerce_message @meta("dog.security.scope","cfg_message_scope") @meta("dog.security.read","cfg_message_scope") @meta("dog.security.create","cfg_message_create");
+relation commerce_message_owner @meta("dog.security.scope","cfg_message_owner_scope") @meta("dog.security.read","cfg_message_owner_scope") @meta("dog.security.create","cfg_message_owner_create");
+entity commerce_configuration_head @meta("dog.security.scope","cfg_head_scope") @meta("dog.security.read","cfg_head_scope") @meta("dog.security.create","cfg_head_create"),owns cfg_active @meta("dog.security.update","cfg_head_update");
+relation commerce_configuration_head_owner @meta("dog.security.scope","cfg_head_owner_scope") @meta("dog.security.read","cfg_head_owner_scope") @meta("dog.security.create","cfg_head_owner_create");
+relation commerce_configuration_activation @meta("dog.security.scope","cfg_activation_scope") @meta("dog.security.read","cfg_activation_scope") @meta("dog.security.create","cfg_activation_create");
+relation commerce_configuration_snapshot @meta("dog.security.scope","cfg_snapshot_scope") @meta("dog.security.read","cfg_snapshot_scope") @meta("dog.security.create","cfg_snapshot_create");
+
+fun cfg_offer_available($o:commerce_offer)->boolean:
+  match (merchant:$t,offer:$o) isa commerce_catalogue;
+    {not {(merchant:$t) isa commerce_configuration_head_owner;};}
+    or {(merchant:$t,head:$h) isa commerce_configuration_head_owner;$h has cfg_active $id;$p isa commerce_configuration,has cx_id == $id;(merchant:$t,configuration:$p) isa commerce_configuration_owner;$o has cx_currency $currency,has cx_kind $kind;$p has cx_currency == $currency,has cx_kind == $kind;$o has cx_interval $period;{$period=="once";{$p has cx_mode "once";}or{$p has cx_mode "instalments";};}or{$period!="once";$p has cx_mode "recurring";};};
+  return check;
+fun cfg_invoice_name($o:commerce_order)->string:
+  match {(order:$o,configuration:$p) isa commerce_configuration_snapshot;$p has cfg_invoice_name $value;let $label=$value;}
+    or {not {(order:$o) isa commerce_configuration_snapshot;};let $label="Checkout order";};
+  return first $label;
+
+
+fun request_checkout_offer_available($tenant:string,$actor:string,$now:datetime,$o:commerce_offer)->boolean @meta("dog.security.context","true"):
+  match let $scope=scope_commerce_offer($tenant,$actor,$now,$o);$scope==true;let $available=cfg_offer_available($o);
+  return first $available;
+
+fun cfg_notice_decision($i:bill_invoice,$now:integer,$fallback:integer)->string,integer:
+  match {let $configuration in cfg_invoice_profile($i);$configuration has cfg_reminder_days $days,has cfg_reminder_count $maximum;let $interval=$days;let $count=$maximum;}
+    or {not {let $legacy in cfg_invoice_profile($i);};let $interval=$fallback;let $count=4;};
+    let $kind,$bucket=bill_notice_policy($i,$now,$interval,$count);let $enabled=cfg_notice_enabled($i,$kind);$enabled==true;
+  return first $kind,$bucket;
+
+fun request_checkout_configuration_access($tenant:string,$actor:string,$now:datetime,$merchant:string)->boolean @meta("dog.security.context","true"):
+  match $t isa tenant,has tenant_id == $merchant;
+    {let $manage=cfg_manage($tenant,$actor,$now,$t);$manage==true;}
+    or {let $buyer=cx_catalogue_reader($tenant,$actor,$now,$t);$buyer==true;};
+    let $allowed=cfg_manage($tenant,$actor,$now,$t);
+  return first $allowed;
+fun request_checkout_configuration_merchant($tenant:string,$actor:string,$now:datetime,$p:commerce_configuration)->string @meta("dog.security.context","true"):
+  match let $scope=cfg_profile_scope($tenant,$actor,$now,$p);$scope==true;(merchant:$t,configuration:$p) isa commerce_configuration_owner;$t has tenant_id $id_attribute;let $id=$id_attribute;
+  return first $id;
+fun request_checkout_head_merchant($tenant:string,$actor:string,$now:datetime,$h:commerce_configuration_head)->string @meta("dog.security.context","true"):
+  match let $scope=cfg_head_scope($tenant,$actor,$now,$h);$scope==true;(merchant:$t,head:$h) isa commerce_configuration_head_owner;$t has tenant_id $id_attribute;let $id=$id_attribute;
+  return first $id;
+fun request_checkout_configuration_active($tenant:string,$actor:string,$now:datetime,$p:commerce_configuration)->boolean @meta("dog.security.context","true"):
+  match let $scope=cfg_profile_scope($tenant,$actor,$now,$p);$scope==true;(merchant:$t,configuration:$p) isa commerce_configuration_owner;(merchant:$t,head:$h) isa commerce_configuration_head_owner;$p has cx_id $id;$h has cfg_active == $id;
+  return check;
+
+fun cfg_invoice_due_days($o:commerce_order)->integer:
+  match {(order:$o,configuration:$p) isa commerce_configuration_snapshot;$p has cfg_due_days $value;let $days=$value;}
+    or {not {(order:$o) isa commerce_configuration_snapshot;};let $days=0;};
+  return first $days;

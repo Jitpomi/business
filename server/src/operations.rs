@@ -105,7 +105,7 @@ pub async fn metrics(state: &TypeDBState) -> Result<Value> {
         "$r isa automation_record,has auto_kind 'job',has auto_status 'failed';",
     )
     .await?;
-    let overdue=count(&tx,&format!("$r isa automation_record,has auto_kind 'job',has auto_status $status,has auto_when $due;$due<{stale_job};{{$status=='enqueued';}} or {{$status=='retrying';}} or {{$status=='processing';}};")).await?;
+    let overdue=count(&tx,&format!("$r isa automation_record,has auto_kind 'job',has auto_when $due;$due<{stale_job};{{$r has auto_status 'enqueued';}} or {{$r has auto_status 'retrying';}} or {{$r has auto_status 'processing';}};")).await?;
     let attention = count(
         &tx,
         "$r isa automation_record,has auto_kind 'run',has auto_status 'attention';",

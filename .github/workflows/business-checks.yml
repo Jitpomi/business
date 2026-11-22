@@ -26,6 +26,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler pkg-config libssl-dev
       - name: Rust toolchain
         run: rustup component add clippy rustfmt
+      - run: python3 ../deploy/checkout/generate_schema.py --check
       - run: cargo fmt --check
       - run: cargo build --locked --all-targets
       - run: cargo test --locked --all-targets
