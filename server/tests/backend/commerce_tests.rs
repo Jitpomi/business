@@ -208,7 +208,8 @@ has cx_instalments false,has cx_limit 12,has cx_deposit_bp 0,has cx_plan_period 
         let tx=driver.transaction(&db,TransactionType::Read).await?;
         let method=database::documents(&tx,"match $c isa bill_customer,has bill_key 'customer';$p isa bill_plan,has bill_key 'yen-plan';let $supported=bill_method_supports_plan($c,$p);fetch {'supported':$supported};").await?;
         ensure!(method.len()==1&&method[0]["supported"]==false,"USD-only saved method accepted a JPY plan");tx.close().await?;
-        mixed_checkout_policies(&adapter,&buyer,&seller,&outsider).await?;
+        mixed_checkout_policies(&adapter,&buyer,&seller,&outsider).await.context("Mixed native policy regression")?;
+        configuration_policies(&adapter,&buyer,&seller,&outsider,&driver,&db).await.context("Configuration native policies")?;
         write(&adapter,&seller,"match $f isa commerce_offer,has cx_id 'item';update $f has cx_enabled false;fetch {'id':$f.cx_id};".into()).await?;
         ensure!(write(&adapter,&buyer,order("withdrawn","item",1001,1,("once","once",1,0))).await.is_err(),"Withdrawn offer remained purchasable");
         let history=adapter.read(&buyer,json!({"query":"match $o isa commerce_order,has cx_id 'purchase';$f isa commerce_offer;(order:$o,offer:$f) isa commerce_line;fetch {'offer':$f.cx_id};"})).await?;
@@ -437,4 +438,392 @@ async fn retired_generation_is_fenced_by_native_rbac_and_remains_recoverable() -
         eprintln!("Retained retirement fixtures {source} and {target}");
     }
     result
+}
+
+fn configuration_publish(id: &str, previous: Option<&str>, max_quantity: i64) -> String {
+    let spec: Value =
+        serde_json::from_str(include_str!("../../public/checkout-configuration.json")).unwrap();
+    let mut fields = spec["fields"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| {
+            format!(
+                "has {} {}",
+                f["attribute"].as_str().unwrap(),
+                if f["key"] == "max_quantity" {
+                    json!(max_quantity)
+                } else {
+                    f["default"].clone()
+                }
+            )
+        })
+        .collect::<Vec<_>>();
+    for (key, attribute) in [
+        ("currencies", "cx_currency"),
+        ("modes", "cx_mode"),
+        ("kinds", "cx_kind"),
+    ] {
+        for value in spec[key].as_array().unwrap() {
+            fields.push(format!("has {attribute} {value}"));
+        }
+    }
+    let messages=spec["messages"].as_object().unwrap().iter().enumerate().map(|(i,(kind,m))|format!("$m{i} isa commerce_message,has cx_id '{id}:{kind}',has cfg_message_kind '{kind}',has cfg_message_subject {},has cfg_message_text {},has cfg_message_enabled {}; (configuration:$cfg,message:$m{i}) isa commerce_message_owner;",m["subject"],m["text"],m["enabled"])).collect::<String>();
+    let (head_match,head_insert,update)=match previous {None=>("not {(merchant:$t) isa commerce_configuration_head_owner;};".into(),format!("$h isa commerce_configuration_head,has cx_id 'seller',has cfg_active '{id}';(merchant:$t,head:$h) isa commerce_configuration_head_owner;"),String::new()),Some(old)=>(format!("$h isa commerce_configuration_head,has cfg_active '{old}';(merchant:$t,head:$h) isa commerce_configuration_head_owner;"),String::new(),format!("update $h has cfg_active '{id}';"))};
+    format!("match $t isa tenant,has tenant_id 'seller';{head_match}let $now=request_now();let $actor=request_identity();insert $cfg isa commerce_configuration,has cx_id '{id}',has cx_created == $now,has cfg_hash '{}',{};(merchant:$t,configuration:$cfg) isa commerce_configuration_owner;{messages}{head_insert}(head:$h,configuration:$cfg,actor:$actor) isa commerce_configuration_activation,has cx_id '{id}:activation',has cx_created == $now;{update}fetch {{'id':$cfg.cx_id}};","a".repeat(64),fields.join(","))
+}
+async fn configuration_policies(
+    adapter: &SchemaPolicyAdapter,
+    buyer: &AuthenticatedScope,
+    seller: &AuthenticatedScope,
+    outsider: &AuthenticatedScope,
+    driver: &typedb_driver::TypeDBDriver,
+    db: &str,
+) -> Result<()> {
+    ensure!(
+        write(
+            adapter,
+            buyer,
+            configuration_publish("buyer-profile", None, 2)
+        )
+        .await
+        .is_err(),
+        "Buyer published merchant configuration"
+    );
+    ensure!(
+        write(
+            adapter,
+            outsider,
+            configuration_publish("foreign-profile", None, 2)
+        )
+        .await
+        .is_err(),
+        "Foreign tenant published merchant configuration"
+    );
+    let bad_brand = configuration_publish("bad-brand", None, 2).replace(
+        "has cfg_brand \"\"",
+        &format!(
+            "has cfg_brand {}",
+            serde_json::to_string("Unsafe\r\nHeader")?
+        ),
+    );
+    ensure!(
+        write(adapter, seller, bad_brand).await.is_err(),
+        "Direct data client inserted a multiline notification name"
+    );
+    let bad_template = configuration_publish("bad-template", None, 2).replace(
+        "has cfg_message_subject \"Payment received\"",
+        "has cfg_message_subject \"{credentials}\"",
+    );
+    ensure!(
+        write(adapter, seller, bad_template).await.is_err(),
+        "Direct data client inserted an unknown template variable"
+    );
+    write(
+        adapter,
+        seller,
+        configuration_publish("config-one", None, 2),
+    )
+    .await
+    .context("Publish native checkout configuration")?;
+    let configured = |id: &str, quantity: i64, profile: &str| {
+        order(id,"item",1001,quantity,("once","once",1,0)).replace("has cx_id \"standard\"","has cx_id \"mixed-policy\"").replace("let $now=request_now();",&format!("$cfg isa commerce_configuration,has cx_id '{profile}';let $now=request_now();")).replace("fetch {\"id\":$o.cx_id};","(order:$o,configuration:$cfg) isa commerce_configuration_snapshot;fetch {\"id\":$o.cx_id};")
+    };
+    ensure!(
+        write(
+            adapter,
+            buyer,
+            order(
+                "missing-configuration",
+                "item",
+                1001,
+                1,
+                ("once", "once", 1, 0)
+            )
+        )
+        .await
+        .is_err(),
+        "Omitting configuration bypassed tenant rules"
+    );
+    ensure!(
+        write(
+            adapter,
+            buyer,
+            configured("excess-config-quantity", 3, "config-one")
+        )
+        .await
+        .is_err(),
+        "Tenant quantity cap bypassed"
+    );
+    write(
+        adapter,
+        buyer,
+        configured("configured-accepted", 2, "config-one"),
+    )
+    .await?;
+    write(
+        adapter,
+        buyer,
+        configured("configured-stale", 1, "config-one"),
+    )
+    .await?;
+    let accept = |id: &str| {
+        format!("match $o isa commerce_order,has cx_id '{id}';let $actor=request_identity();let $now=request_now();insert (order:$o,actor:$actor) isa commerce_signatory,has cx_created == $now;fetch {{'id':$o.cx_id}};")
+    };
+    write(adapter, buyer, accept("configured-accepted")).await?;
+    write(
+        adapter,
+        seller,
+        configuration_publish("config-two", Some("config-one"), 1),
+    )
+    .await?;
+    ensure!(
+        write(adapter, buyer, accept("configured-stale"))
+            .await
+            .is_err(),
+        "Stale quote was accepted after configuration changed"
+    );
+    ensure!(
+        write(
+            adapter,
+            buyer,
+            configured("stale-config-create", 1, "config-one")
+        )
+        .await
+        .is_err(),
+        "New quote pinned an old configuration"
+    );
+    write(
+        adapter,
+        buyer,
+        configured("current-config-create", 1, "config-two"),
+    )
+    .await?;
+    for query in ["match $p isa commerce_configuration,has cx_id 'config-one';update $p has cfg_max_quantity 60;fetch {'id':$p.cx_id};","match $h isa commerce_configuration_head;update $h has cfg_active 'config-one';fetch {'id':$h.cx_id};","match $m isa commerce_message,has cx_id 'config-one:receipt';update $m has cfg_message_enabled false;fetch {'id':$m.cx_id};"] {ensure!(write(adapter,seller,query.into()).await.is_err(),"Immutable configuration or unaudited activation was accepted");}
+    let foreign = adapter
+        .read(
+            outsider,
+            json!({"query":"match $p isa commerce_configuration;fetch {'id':$p.cx_id};"}),
+        )
+        .await?;
+    ensure!(
+        foreign["ok"]["answers"]
+            .as_array()
+            .context("Configuration scope")?
+            .is_empty(),
+        "Configuration leaked across tenants"
+    );
+    let history=adapter.read(buyer,json!({"query":"match $o isa commerce_order,has cx_id 'configured-accepted';(order:$o,configuration:$p) isa commerce_configuration_snapshot;$p isa commerce_configuration;fetch {'id':$p.cx_id,'limit':$p.cfg_max_quantity};"})).await?;
+    ensure!(
+        history["ok"]["answers"][0]["data"]["id"] == "config-one"
+            && history["ok"]["answers"][0]["data"]["limit"].as_f64() == Some(2.0),
+        "Accepted order configuration was reinterpreted: {history}"
+    );
+    // Restore the original cap through an audited activation; no accepted order is rewritten.
+    write(adapter,seller,"match $h isa commerce_configuration_head,has cfg_active 'config-two';$p isa commerce_configuration,has cx_id 'config-one';let $actor=request_identity();let $now=request_now();insert (head:$h,configuration:$p,actor:$actor) isa commerce_configuration_activation,has cx_id 'restore-config-one',has cx_created == $now;update $h has cfg_active 'config-one';fetch {'id':$h.cx_id};".into()).await?;
+    let tx = driver.transaction(db, TransactionType::Write).await?;
+    tx.query("match $t isa tenant,has tenant_id 'seller';$owner isa person,has identity_id 'seller-owner';insert $editor isa person,has identity_id 'checkout-editor',has name 'Checkout editor',has status 'active';(tenant:$t,member:$editor) isa membership,has membership_role 'member',has start_at 2020-01-01T00:00:00;$resource isa resource,has resource_id 'checkout-configuration',has name 'Checkout configuration',has status 'active';(tenant:$t,resource:$resource) isa resource_ownership;$grant isa exception_access_grant,links(tenant:$t,grantee:$editor,resource:$resource,grantor:$owner),has grant_id 'checkout-editor-grant',has permission_level 'write',has effect 'allow',has start_at 2020-01-01T00:00:00,has reason 'Configuration editor fixture';").await?;
+    tx.commit().await?;
+    let editor = AuthenticatedScope::new("seller", "checkout-editor")?;
+    write(
+        adapter,
+        &editor,
+        configuration_publish("config-delegated", Some("config-one"), 1),
+    )
+    .await
+    .context("Native delegated checkout editor")?;
+    let tx = driver.transaction(db, TransactionType::Write).await?;
+    tx.query("match $g isa exception_access_grant,has grant_id 'checkout-editor-grant';update $g has end_at 2020-01-02T00:00:00;").await?;
+    tx.commit().await?;
+    ensure!(
+        write(
+            adapter,
+            &editor,
+            configuration_publish("config-revoked", Some("config-delegated"), 1)
+        )
+        .await
+        .is_err(),
+        "Revoked native configuration grant remained usable"
+    );
+    let pin = |query: String, profile: &str| {
+        query.replace("let $now=request_now();",&format!("$cfg isa commerce_configuration,has cx_id '{profile}';let $now=request_now();")).replace("fetch {\"id\":$o.cx_id};","(order:$o,configuration:$cfg) isa commerce_configuration_snapshot;fetch {\"id\":$o.cx_id};")
+    };
+    let two_lines = |id: &str| {
+        order(id,"item",1001,1,("once","once",1,0)).replace("has cx_lines 1","has cx_lines 2").replace("fetch {\"id\":$o.cx_id};",&format!("$extra isa commerce_line,links(order:$o,offer:$f),has cx_id '{id}:extra',has cx_created == $now,has cx_unit 1001,has cx_quantity 1;fetch {{\"id\":$o.cx_id}};"))
+    };
+    for query in [
+        order(
+            "allowed-recurring",
+            "monthly",
+            2500,
+            1,
+            ("recurring", "month", 0, 0),
+        ),
+        order(
+            "allowed-donation",
+            "donation",
+            1234,
+            1,
+            ("once", "once", 1, 0),
+        ),
+        order("allowed-eur", "item-EUR", 1001, 1, ("once", "once", 1, 0))
+            .replace("has cx_id \"standard\"", "has cx_id \"policy-EUR\"")
+            .replace("has cx_currency \"USD\"", "has cx_currency \"EUR\""),
+        two_lines("allowed-lines"),
+    ] {
+        write(adapter, buyer, pin(query, "config-delegated"))
+            .await
+            .context("Valid baseline before tenant restrictions")?;
+    }
+    let pin_groups = |id: &str, profile: &str| {
+        mixed_quote(id).replace("let $now=request_now();",&format!("$cfg isa commerce_configuration,has cx_id '{profile}';let $now=request_now();")).replace("fetch {\"id\":$checkout.cx_id};","(order:$once,configuration:$cfg) isa commerce_configuration_snapshot;(order:$monthly,configuration:$cfg) isa commerce_configuration_snapshot;fetch {\"id\":$checkout.cx_id};")
+    };
+    write(
+        adapter,
+        buyer,
+        pin_groups("allowed-config-groups", "config-delegated"),
+    )
+    .await
+    .context("Valid baseline before tenant group restriction")?;
+    let mut limited = configuration_publish("config-limited", Some("config-delegated"), 1)
+        .replace("has cfg_max_lines 60", "has cfg_max_lines 1");
+    for value in ["EUR", "GBP", "CAD", "AUD", "JPY"] {
+        limited = limited.replace(&format!(",has cx_currency \"{value}\""), "");
+    }
+    for (attribute, value) in [
+        ("cx_mode", "recurring"),
+        ("cx_mode", "instalments"),
+        ("cx_kind", "service"),
+        ("cx_kind", "donation"),
+    ] {
+        limited = limited.replace(&format!(",has {attribute} \"{value}\""), "");
+    }
+    write(adapter, seller, limited).await?;
+    for query in [
+        order(
+            "denied-recurring",
+            "monthly",
+            2500,
+            1,
+            ("recurring", "month", 0, 0),
+        ),
+        order(
+            "denied-donation",
+            "donation",
+            1234,
+            1,
+            ("once", "once", 1, 0),
+        ),
+        order("denied-eur", "item-EUR", 1001, 1, ("once", "once", 1, 0))
+            .replace("has cx_id \"standard\"", "has cx_id \"policy-EUR\"")
+            .replace("has cx_currency \"USD\"", "has cx_currency \"EUR\""),
+        two_lines("denied-lines"),
+    ] {
+        ensure!(
+            write(adapter, buyer, pin(query, "config-limited"))
+                .await
+                .is_err(),
+            "Direct data client bypassed a tenant currency, mode, kind or cart-line restriction"
+        );
+    }
+    write(
+        adapter,
+        seller,
+        configuration_publish("config-one-group", Some("config-limited"), 1)
+            .replace("has cfg_max_groups 4", "has cfg_max_groups 1")
+            .replace(
+                "has cfg_quote_window \"15m\"",
+                "has cfg_quote_window \"5m\"",
+            ),
+    )
+    .await?;
+    let grouped=mixed_quote("configured-groups").replace("let $now=request_now();","$cfg isa commerce_configuration,has cx_id 'config-one-group';let $now=request_now();").replace("fetch {\"id\":$checkout.cx_id};","(order:$once,configuration:$cfg) isa commerce_configuration_snapshot;(order:$monthly,configuration:$cfg) isa commerce_configuration_snapshot;fetch {\"id\":$checkout.cx_id};");
+    ensure!(
+        write(adapter, buyer, grouped).await.is_err(),
+        "Direct data client bypassed the tenant payment-group limit"
+    );
+    write(
+        adapter,
+        buyer,
+        pin(
+            order("expiry-proof", "item", 1001, 1, ("once", "once", 1, 0)),
+            "config-one-group",
+        ),
+    )
+    .await?;
+    let tx = driver.transaction(db, TransactionType::Read).await?;
+    let expiry=database::documents(&tx,"match $o isa commerce_order,has cx_id 'expiry-proof',has cx_created $created;let $before=$created - PT1M;let $within=$created + PT4M;let $after=$created + PT6M;fetch {'future':cfg_quote_fresh($o,$before),'within':cfg_quote_fresh($o,$within),'expired':cfg_quote_fresh($o,$after)};").await?;
+    tx.close().await?;
+    ensure!(
+        expiry.len() == 1
+            && expiry[0]["within"] == true
+            && expiry[0]["expired"] == false
+            && expiry[0]["future"] == false,
+        "Native quote-time boundaries failed: {expiry:?}"
+    );
+    let mut no_refunds = configuration_publish("config-no-refunds", Some("config-one-group"), 1)
+        .replace("has cfg_refunds true", "has cfg_refunds false")
+        .replace("has cfg_reminder_count 4", "has cfg_reminder_count 0")
+        .replace("has cfg_due_days 0", "has cfg_due_days 5");
+    no_refunds =
+        regex::Regex::new("(has cfg_message_kind 'receipt',[^;]+has cfg_message_enabled )true")?
+            .replace(&no_refunds, "${1}false")
+            .into_owned();
+    write(adapter, seller, no_refunds).await?;
+    let policy_order = order(
+        "refund-policy-disabled",
+        "item",
+        1001,
+        1,
+        ("once", "once", 1, 0),
+    )
+    .replace("has cx_id \"standard\"", "has cx_id \"mixed-policy\"");
+    write(adapter, buyer, pin(policy_order, "config-no-refunds")).await?;
+    write(adapter, buyer, accept("refund-policy-disabled")).await?;
+    write(
+        adapter,
+        seller,
+        configuration_publish("config-refund-day", Some("config-no-refunds"), 1).replace(
+            "has cfg_refund_window \"unlimited\"",
+            "has cfg_refund_window \"day\"",
+        ),
+    )
+    .await?;
+    let policy_order = order("refund-policy-day", "item", 1001, 1, ("once", "once", 1, 0))
+        .replace("has cx_id \"standard\"", "has cx_id \"mixed-policy\"");
+    write(adapter, buyer, pin(policy_order, "config-refund-day")).await?;
+    write(adapter, buyer, accept("refund-policy-day")).await?;
+    // Paid observations here are isolated unit fixtures, never provider settlement overrides.
+    let now = server::clock::unix_seconds();
+    let tx = driver.transaction(db, TransactionType::Write).await?;
+    for id in ["refund-policy-disabled", "refund-policy-day"] {
+        tx.query(format!("match $c isa bill_customer,has bill_key 'customer';$o isa commerce_order,has cx_id '{id}';insert $p isa bill_plan,has bill_key '{id}:plan',has name 'Native policy fixture',has bill_amount 1001,has bill_due_days 0,has bill_anchor {now},has bill_next 0,has bill_sequence 1,has bill_interval 'once',has bill_status 'finished';(customer:$c,plan:$p) isa bill_plan_owner;(order:$o,plan:$p) isa commerce_execution;$i isa bill_invoice,has bill_key '{id}:invoice',has name 'Native policy fixture',has bill_amount 1001,has bill_anchor {now},has bill_next {now},has bill_sequence 0,has bill_choice 'manual',has bill_provider 'usd-only',has bill_status 'paid',has bill_external_id 'synthetic-unit-fixture',has bill_url 'https://example.invalid',has bill_updated {now},has bill_revision 'initial';(plan:$p,invoice:$i) isa bill_invoice_owner;")).await?;
+    }
+    tx.commit().await?;
+    ensure!(write(adapter,seller,"match $i isa bill_invoice,has bill_key 'refund-policy-disabled:invoice';let $at=request_now();let $actor=request_identity();insert $r isa commerce_refund,has cx_id 'disabled-refund-proposal',has cx_created == $at,has cx_amount 1,has cx_refund_status 'queued',has cx_busy 'refund-policy-disabled:invoice:refund';(invoice:$i,request:$r,actor:$actor) isa commerce_refund_owner;fetch {'id':$r.cx_id};".into()).await.is_err(),"New tenant settings overrode a disabled accepted refund policy");
+    let absent=adapter.read(seller,json!({"query":"match $r isa commerce_refund,has cx_id 'disabled-refund-proposal';fetch {'id':$r.cx_id};"})).await?;
+    ensure!(
+        absent["ok"]["answers"]
+            .as_array()
+            .context("Denied refund proposal")?
+            .is_empty(),
+        "Denied refund left an execution proposal"
+    );
+    let tx = driver.transaction(db, TransactionType::Read).await?;
+    let disabled=database::documents(&tx,"match $i isa bill_invoice,has bill_key 'refund-policy-disabled:invoice';$o isa commerce_order,has cx_id 'refund-policy-disabled',has cx_created $created;let $at=$created;fetch {'refunds':cfg_invoice_refunds($i,$at),'receipt':cfg_notice_enabled($i,'receipt'),'days':cfg_invoice_due_days($o)};").await?;
+    ensure!(
+        disabled.len() == 1
+            && disabled[0]["refunds"] == false
+            && disabled[0]["receipt"] == false
+            && server::billing::engine::number(&disabled[0], "days")? == 5,
+        "Pinned refund/receipt/payment window policy differed: {disabled:?}"
+    );
+    let window=database::documents(&tx,"match $i isa bill_invoice,has bill_key 'refund-policy-day:invoice';$o isa commerce_order,has cx_id 'refund-policy-day',has cx_created $created;let $at=$created;let $within=$at + PT23H;let $after=$at + P2D;fetch {'within':cfg_invoice_refunds($i,$within),'expired':cfg_invoice_refunds($i,$after)};").await?;
+    ensure!(
+        window.len() == 1 && window[0]["within"] == true && window[0]["expired"] == false,
+        "Native refund-window boundary failed"
+    );
+    tx.close().await?;
+    println!("Verified native configuration ownership, delegation/revocation, limits, immutable snapshots, stale review denial, audited rollback and cross-tenant isolation");
+    Ok(())
 }

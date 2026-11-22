@@ -161,6 +161,8 @@ pub fn import_schema() -> String {
         crate::automation::store::POLICY_SCHEMA,
         BUSINESS_RULES,
         COMMERCE,
+        include_str!("commerce-configuration-fields.tql"),
+        include_str!("commerce-configuration.tql"),
     ] {
         schema.push_str(
             source
@@ -178,7 +180,7 @@ pub fn import_schema() -> String {
 pub async fn verify_runtime(driver: &TypeDBDriver, name: &str) -> Result<()> {
     verify(driver, name).await?;
     let schema = driver.databases().get(name).await?.schema().await?;
-    ensure!(["entity bill_saved_method","fun create_invitation","fun request_identity","fun scope_visible_tenant","fun bill_has_consent","relation bill_consent_plan","fun cx_order_terms_valid","fun cx_refund_claim","relation commerce_execution","fun bill_invoice_currency","fun bill_method_supports_plan","attribute cx_supported_currency","entity commerce_checkout","fun cx_checkout_signed_at","fun request_inline_payment_allowed","fun cx_inline_origin","fun cx_plugin_fresh","fun cx_inline_amount_valid","relation commerce_embed_origin"].iter().all(|part|schema.contains(part)),"Native account/payment model migration required; startup will not migrate or reset the database");
+    ensure!(["entity bill_saved_method","fun create_invitation","fun request_identity","fun scope_visible_tenant","fun bill_has_consent","relation bill_consent_plan","fun cx_order_terms_valid","fun cx_refund_claim","relation commerce_execution","fun bill_invoice_currency","fun bill_method_supports_plan","attribute cx_supported_currency","entity commerce_checkout","fun cx_checkout_signed_at","fun request_inline_payment_allowed","fun cx_inline_origin","fun cx_plugin_fresh","fun cx_inline_amount_valid","relation commerce_embed_origin","entity commerce_configuration","fun cfg_order_allowed","fun cfg_invoice_refunds","fun cfg_notice_enabled","fun cfg_notice_decision","fun cfg_invoice_due_days","attribute cfg_payment_theme"].iter().all(|part|schema.contains(part)),"Native account/payment model migration required; startup will not migrate or reset the database");
     let tx = driver.transaction(name, TransactionType::Read).await?;
     let versions=documents(&tx,"match $t label bootstrap_record;let $version=get_meta('jitpomi.model.version',$t);fetch {'version':$version};").await?;
     ensure!(

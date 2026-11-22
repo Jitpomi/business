@@ -326,6 +326,7 @@ async fn checkout_gateway_scenario(scenario: Scenario) -> Result<()> {
   ensure!(mail.calls.lock().unwrap().values().all(|n|*n==1),"A notification was submitted twice");
   {let messages=mail.messages.lock().unwrap();ensure!(messages.values().filter(|m|m.subject.contains("Payment received")).count()==1,"Duplicate payment receipt");ensure!(messages.values().filter(|m|m.subject.contains("Refund confirmed")).count()==1,"Refund receipt missing or duplicated");
   }
+  {let messages=mail.messages.lock().unwrap();let receipt=messages.values().find(|m|m.subject.contains("Tenant Payment received")).context("Tenant receipt template was not used")?;ensure!(receipt.text.contains("Tenant checkout contract")&&receipt.text.contains("+03:00")&&receipt.text.contains("Africa/Kampala")&&!receipt.text.contains("Updated tenant checkout"),"Accepted configuration or time zone was reinterpreted");let refund=messages.values().find(|m|m.subject.contains("Tenant Refund confirmed")).context("Tenant refund template was not used")?;ensure!(refund.text.contains("Tenant checkout contract")&&refund.text.contains("Verified payment record"),"Refund receipt lost its pinned template or verified facts");}
   exercise_mixed_gateway(&config_file,&template,&bank,&mail).await?;
 
 

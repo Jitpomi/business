@@ -17,7 +17,7 @@ impl Engine {
         self.reconcile(id).await?;
         let now = crate::clock::unix_seconds();
         let interval = self.runtime.reminder_days;
-        let rows=self.read(format!(r#"{} let $kind,$bucket=bill_notice_decision($i,{now},{interval});fetch {{"email":$c.bill_email,"description":$i.name,"amount":$i.bill_amount,"currency":bill_invoice_currency($i),"due":$i.bill_next,"status":$i.bill_status,"url":$i.bill_url,"kind":$kind,"bucket":$bucket}};"#,self.invoice_match(id)?)).await?;
+        let rows=self.read(format!(r#"{} let $kind,$bucket=cfg_notice_decision($i,{now},{interval});fetch {{"email":$c.bill_email,"description":$i.name,"amount":$i.bill_amount,"currency":bill_invoice_currency($i),"due":$i.bill_next,"status":$i.bill_status,"url":$i.bill_url,"kind":$kind,"bucket":$bucket}};"#,self.invoice_match(id)?)).await?;
         let Some(row) = rows.first() else {
             return Ok(0);
         };
@@ -46,12 +46,27 @@ impl Engine {
         } else {
             (if now>=due {"Payment reminder"} else {"Your invoice"},format!("Your invoice {id} for {description} is {}.\nAmount: {amount}\nDue: {} UTC\nView and pay securely: {url}\nIf you need more time, please contact us. If payment is already processing, no further action is needed.\n",if now>=due{"due"}else{"ready"},chrono::DateTime::from_timestamp(due,0).ok_or_else(||anyhow::anyhow!("Invalid date"))?.format("%Y-%m-%d")))
         };
+        let due_text = chrono::DateTime::from_timestamp(due, 0)
+            .ok_or_else(|| anyhow::anyhow!("Invalid date"))?
+            .format("%Y-%m-%d %H:%M UTC")
+            .to_string();
+        let values = std::collections::BTreeMap::from([
+            ("invoice_id", id.to_owned()),
+            ("description", description.to_owned()),
+            ("amount", amount),
+            ("due_at", due_text),
+            ("url", url.to_owned()),
+            ("refund_id", String::new()),
+        ]);
+        let (subject, body) = self
+            .checkout_message(id, category, values, (subject.to_owned(), body))
+            .await?;
         let subject = if !self.runtime.sandbox {
             subject.to_owned()
         } else {
             format!("[TEST — no real payment] {subject}")
         };
-        self.write(format!(r#"{} let $kind,$bucket=bill_notice_decision($i,{now},{interval});$kind=={};$bucket=={bucket};not {{$n isa bill_notice,has bill_key {};}};select $t,$i;distinct;
+        self.write(format!(r#"{} let $kind,$bucket=cfg_notice_decision($i,{now},{interval});$kind=={};$bucket=={bucket};not {{$n isa bill_notice,has bill_key {};}};select $t,$i;distinct;
    insert $n isa bill_notice,has bill_key {},has bill_status "sending",has bill_updated {now};(invoice:$i,notice:$n) isa bill_notice_owner;fetch {{"id":$n.bill_key}};"#,self.invoice_match(id)?,quoted(category),quoted(&key),quoted(&key))).await?;
         let result = self
             .runtime

@@ -1,0 +1,470 @@
+{
+  "version": 1,
+  "fields": [
+    {
+      "key": "brand",
+      "attribute": "cfg_brand",
+      "kind": "text",
+      "default": "",
+      "label": "Business name",
+      "section": "Appearance",
+      "max": 120,
+      "single_line": true
+    },
+    {
+      "key": "tagline",
+      "attribute": "cfg_tagline",
+      "kind": "text",
+      "default": "",
+      "label": "Tagline",
+      "section": "Appearance",
+      "max": 200,
+      "single_line": true
+    },
+    {
+      "key": "heading",
+      "attribute": "cfg_heading",
+      "kind": "text",
+      "default": "Choose what works for you.",
+      "label": "Catalogue heading",
+      "section": "Appearance",
+      "max": 200,
+      "single_line": true
+    },
+    {
+      "key": "description",
+      "attribute": "cfg_description",
+      "kind": "text",
+      "default": "",
+      "label": "Checkout introduction",
+      "section": "Appearance",
+      "max": 2000
+    },
+    {
+      "key": "review_label",
+      "attribute": "cfg_review_label",
+      "kind": "text",
+      "default": "Review checkout",
+      "label": "Review button",
+      "section": "Appearance",
+      "max": 100,
+      "single_line": true
+    },
+    {
+      "key": "confirm_label",
+      "attribute": "cfg_confirm_label",
+      "kind": "text",
+      "default": "Confirm order",
+      "label": "Confirm button",
+      "section": "Appearance",
+      "max": 100,
+      "single_line": true
+    },
+    {
+      "key": "pay_label",
+      "attribute": "cfg_pay_label",
+      "kind": "text",
+      "default": "Pay securely",
+      "label": "Payment button",
+      "section": "Appearance",
+      "max": 100,
+      "single_line": true
+    },
+    {
+      "key": "footer",
+      "attribute": "cfg_footer",
+      "kind": "text",
+      "default": "",
+      "label": "Footer",
+      "section": "Appearance",
+      "max": 500
+    },
+    {
+      "key": "logo",
+      "attribute": "cfg_logo",
+      "kind": "url",
+      "default": "",
+      "label": "Logo URL",
+      "section": "Appearance",
+      "max": 2000
+    },
+    {
+      "key": "home",
+      "attribute": "cfg_home",
+      "kind": "url",
+      "default": "",
+      "label": "Business website",
+      "section": "Appearance",
+      "max": 2000
+    },
+    {
+      "key": "support",
+      "attribute": "cfg_support",
+      "kind": "url",
+      "default": "",
+      "label": "Support URL",
+      "section": "Appearance",
+      "max": 2000
+    },
+    {
+      "key": "terms",
+      "attribute": "cfg_terms",
+      "kind": "url",
+      "default": "",
+      "label": "Terms URL",
+      "section": "Appearance",
+      "max": 2000
+    },
+    {
+      "key": "accent",
+      "attribute": "cfg_accent",
+      "kind": "color",
+      "default": "#007aff",
+      "label": "Primary colour",
+      "section": "Appearance"
+    },
+    {
+      "key": "background",
+      "attribute": "cfg_background",
+      "kind": "color",
+      "default": "#f5f8fc",
+      "label": "Background colour",
+      "section": "Appearance"
+    },
+    {
+      "key": "foreground",
+      "attribute": "cfg_foreground",
+      "kind": "color",
+      "default": "#142132",
+      "label": "Text colour",
+      "section": "Appearance"
+    },
+    {
+      "key": "font",
+      "attribute": "cfg_font",
+      "kind": "choice",
+      "default": "system",
+      "label": "Font",
+      "section": "Appearance",
+      "choices": [
+        "system",
+        "serif",
+        "mono"
+      ]
+    },
+    {
+      "key": "layout",
+      "attribute": "cfg_layout",
+      "kind": "choice",
+      "default": "cards",
+      "label": "Catalogue layout",
+      "section": "Appearance",
+      "choices": [
+        "cards",
+        "list",
+        "compact"
+      ]
+    },
+    {
+      "key": "locale",
+      "attribute": "cfg_locale",
+      "kind": "locale",
+      "default": "en-US",
+      "label": "Language / number locale",
+      "section": "Appearance"
+    },
+    {
+      "key": "timezone",
+      "attribute": "cfg_timezone",
+      "kind": "timezone",
+      "default": "UTC",
+      "label": "Display timezone",
+      "section": "Appearance"
+    },
+    {
+      "key": "max_lines",
+      "attribute": "cfg_max_lines",
+      "kind": "integer",
+      "default": 60,
+      "label": "Maximum cart lines",
+      "section": "Checkout rules",
+      "min": 1,
+      "max": 60
+    },
+    {
+      "key": "max_groups",
+      "attribute": "cfg_max_groups",
+      "kind": "integer",
+      "default": 4,
+      "label": "Maximum payment schedules",
+      "section": "Checkout rules",
+      "min": 1,
+      "max": 4
+    },
+    {
+      "key": "max_quantity",
+      "attribute": "cfg_max_quantity",
+      "kind": "integer",
+      "default": 1000,
+      "label": "Maximum quantity per line",
+      "section": "Checkout rules",
+      "min": 1,
+      "max": 1000
+    },
+    {
+      "key": "default_count",
+      "attribute": "cfg_default_count",
+      "kind": "integer",
+      "default": 3,
+      "label": "Initial instalment count",
+      "section": "Checkout rules",
+      "min": 2,
+      "max": 360
+    },
+    {
+      "key": "quote_window",
+      "attribute": "cfg_quote_window",
+      "kind": "choice",
+      "default": "15m",
+      "label": "Quote review window",
+      "section": "Checkout rules",
+      "choices": [
+        "5m",
+        "15m",
+        "1h",
+        "1d"
+      ]
+    },
+    {
+      "key": "refunds",
+      "attribute": "cfg_refunds",
+      "kind": "boolean",
+      "default": true,
+      "label": "Allow merchant refunds for new orders",
+      "section": "Checkout rules"
+    },
+    {
+      "key": "refund_window",
+      "attribute": "cfg_refund_window",
+      "kind": "choice",
+      "default": "unlimited",
+      "label": "Refund window from order date",
+      "section": "Checkout rules",
+      "choices": [
+        "unlimited",
+        "day",
+        "week",
+        "month",
+        "year"
+      ]
+    },
+    {
+      "key": "reminder_days",
+      "attribute": "cfg_reminder_days",
+      "kind": "integer",
+      "default": 7,
+      "label": "Days between reminders",
+      "section": "Notifications",
+      "min": 1,
+      "max": 30
+    },
+    {
+      "key": "default_currency",
+      "attribute": "cfg_default_currency",
+      "kind": "choice",
+      "default": "USD",
+      "label": "Initial currency",
+      "section": "Checkout rules",
+      "choices": [
+        "USD",
+        "EUR",
+        "GBP",
+        "CAD",
+        "AUD",
+        "JPY"
+      ]
+    },
+    {
+      "key": "default_mode",
+      "attribute": "cfg_default_mode",
+      "kind": "choice",
+      "default": "once",
+      "label": "Initial payment arrangement",
+      "section": "Checkout rules",
+      "choices": [
+        "once",
+        "recurring",
+        "instalments"
+      ]
+    },
+    {
+      "key": "invoice_name",
+      "attribute": "cfg_invoice_name",
+      "kind": "text",
+      "default": "Checkout order",
+      "label": "Invoice description",
+      "section": "Checkout rules",
+      "max": 120,
+      "single_line": true
+    },
+    {
+      "key": "help",
+      "attribute": "cfg_help",
+      "kind": "text",
+      "default": "",
+      "label": "Customer help",
+      "section": "Appearance",
+      "max": 2000
+    },
+    {
+      "key": "radius",
+      "attribute": "cfg_radius",
+      "kind": "choice",
+      "default": "soft",
+      "label": "Corner style",
+      "section": "Appearance",
+      "choices": [
+        "square",
+        "soft",
+        "round"
+      ]
+    },
+    {
+      "key": "widget_mode",
+      "attribute": "cfg_widget_mode",
+      "kind": "choice",
+      "default": "button",
+      "label": "Initial widget style",
+      "section": "Widgets",
+      "choices": [
+        "button",
+        "cart",
+        "donation",
+        "plan"
+      ]
+    },
+    {
+      "key": "widget_inline",
+      "attribute": "cfg_widget_inline",
+      "kind": "boolean",
+      "default": false,
+      "label": "Show provider fields in approved widgets",
+      "section": "Widgets"
+    },
+    {
+      "key": "reminder_count",
+      "attribute": "cfg_reminder_count",
+      "kind": "integer",
+      "default": 4,
+      "label": "Maximum reminder occurrences",
+      "section": "Notifications",
+      "min": 0,
+      "max": 365
+    },
+    {
+      "key": "due_days",
+      "attribute": "cfg_due_days",
+      "kind": "integer",
+      "default": 0,
+      "label": "Days to pay each invoice (0 means due immediately)",
+      "section": "Checkout rules",
+      "min": 0,
+      "max": 90
+    },
+    {
+      "key": "payment_theme",
+      "attribute": "cfg_payment_theme",
+      "kind": "choice",
+      "default": "stripe",
+      "label": "Secure payment form theme",
+      "section": "Appearance",
+      "choices": [
+        "stripe",
+        "night",
+        "flat"
+      ]
+    },
+    {
+      "key": "payment_layout",
+      "attribute": "cfg_payment_layout",
+      "kind": "choice",
+      "default": "tabs",
+      "label": "Payment method layout",
+      "section": "Appearance",
+      "choices": [
+        "tabs",
+        "accordion"
+      ]
+    },
+    {
+      "key": "widget_title",
+      "attribute": "cfg_widget_title",
+      "kind": "text",
+      "default": "Make it happen.",
+      "max": 200,
+      "label": "Widget heading",
+      "section": "Widgets",
+      "single_line": true
+    },
+    {
+      "key": "widget_label",
+      "attribute": "cfg_widget_label",
+      "kind": "text",
+      "default": "Continue to secure checkout",
+      "max": 100,
+      "label": "Widget button",
+      "section": "Widgets",
+      "single_line": true
+    }
+  ],
+  "currencies": [
+    "USD",
+    "EUR",
+    "GBP",
+    "CAD",
+    "AUD",
+    "JPY"
+  ],
+  "modes": [
+    "once",
+    "recurring",
+    "instalments"
+  ],
+  "messages": {
+    "invoice": {
+      "subject": "Your invoice",
+      "text": "Your invoice {invoice_id} for {description} is ready.\nAmount: {amount}\nDue: {due_at}\nView and pay securely: {url}",
+      "enabled": true
+    },
+    "reminder": {
+      "subject": "Payment reminder",
+      "text": "Your invoice {invoice_id} for {description} is due.\nAmount: {amount}\nDue: {due_at}\nView and pay securely: {url}\nIf payment is already processing, no further action is needed.",
+      "enabled": true
+    },
+    "receipt": {
+      "subject": "Payment received",
+      "text": "Thank you. Your invoice {invoice_id} for {description} is marked paid.\nAmount: {amount}\nView your invoice: {url}",
+      "enabled": true
+    },
+    "refund": {
+      "subject": "Refund confirmed",
+      "text": "Your refund of {amount} for invoice {invoice_id} is confirmed by the payment provider.\nRequest: {refund_id}",
+      "enabled": true
+    }
+  },
+  "template_variables": [
+    "invoice_id",
+    "description",
+    "amount",
+    "due_at",
+    "url",
+    "refund_id",
+    "merchant",
+    "support"
+  ],
+  "kinds": [
+    "product",
+    "service",
+    "donation"
+  ]
+}

@@ -4,13 +4,17 @@ fun bill_valid_reminder_days($days: integer) -> boolean:
   match $days >= 1; $days <= 30;
   return check;
 
-fun bill_notice_decision($i: bill_invoice,$now: integer,$days: integer) -> string,integer:
-  match let $valid=bill_valid_reminder_days($days);$valid==true;
+fun bill_notice_policy($i: bill_invoice,$now: integer,$days: integer,$maximum:integer) -> string,integer:
+  match $maximum>=0;$maximum<=365; let $valid=bill_valid_reminder_days($days);$valid==true;
     not {(invoice:$i,notice:$archive) isa bill_notice_owner;$archive has bill_status "imported-history";};
     $i has bill_status $status,has bill_next $due;
     {$status=="paid";let $kind="receipt";let $bucket=0;}
     or {$status=="open";$now < $due;let $kind="invoice";let $bucket=0;}
-    or {$status=="open";$now >= $due;let $bucket=floor(($now - $due)/($days*86400));$bucket <= 3;let $kind="reminder";};
+    or {$status=="open";$now >= $due;let $bucket=floor(($now - $due)/($days*86400));$bucket < $maximum;let $kind="reminder";};
+  return first $kind,$bucket;
+
+fun bill_notice_decision($i:bill_invoice,$now:integer,$days:integer)->string,integer:
+  match let $kind,$bucket=bill_notice_policy($i,$now,$days,4);
   return first $kind,$bucket;
 
 fun bill_can_collect($c: bill_customer,$p: bill_plan,$i: bill_invoice,$now: integer) -> boolean:
