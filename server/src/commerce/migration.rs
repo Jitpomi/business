@@ -3,6 +3,81 @@ use crate::database::{self, snapshot};
 use anyhow::{ensure, Result};
 use std::{collections::BTreeMap, path::Path};
 use typedb_driver::TypeDBDriver;
+
+/// Check portable facts and every relationship role before importing a successor.
+/// Transactional backups are manifested from an isolated restore, whose internal
+/// row IDs need not be the same as the source's storage IDs.
+pub async fn verify_checkpoint_source(
+    driver: &TypeDBDriver,
+    source: &str,
+    directory: &Path,
+) -> Result<()> {
+    let expected_records = serde_json::from_slice(&std::fs::read(
+        directory.join(format!("{source}.records.json")),
+    )?)?;
+    let expected_graph = serde_json::from_slice(&std::fs::read(
+        directory.join(format!("{source}.graph.json")),
+    )?)?;
+    let current_records = snapshot::records(driver, source).await?;
+    let current_graph = snapshot::graph(driver, source, &[]).await?;
+    verify_source_evidence(
+        &expected_records,
+        &current_records,
+        &expected_graph,
+        &current_graph,
+    )
+}
+
+fn verify_source_evidence(
+    expected_records: &BTreeMap<String, serde_json::Value>,
+    current_records: &BTreeMap<String, serde_json::Value>,
+    expected_graph: &BTreeMap<String, usize>,
+    current_graph: &BTreeMap<String, usize>,
+) -> Result<()> {
+    let values = |records: &BTreeMap<String, serde_json::Value>| {
+        let mut values = records
+            .values()
+            .map(serde_json::Value::to_string)
+            .collect::<Vec<_>>();
+        values.sort();
+        values
+    };
+    ensure!(
+        values(expected_records) == values(current_records),
+        "Source attributes differ from checkpoint; source untouched"
+    );
+    ensure!(
+        expected_graph == current_graph,
+        "Source relationship graph differs from checkpoint; source untouched"
+    );
+    Ok(())
+}
+
+#[cfg(test)]
+mod checkpoint_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn portable_ids_do_not_hide_attribute_or_relationship_changes() {
+        let record = json!({"bill_key":"invoice", "bill_amount":100, "bill_status":"paid"});
+        let original = BTreeMap::from([("source-storage-id".into(), record.clone())]);
+        let restored = BTreeMap::from([("restored-storage-id".into(), record)]);
+        let graph = BTreeMap::from([("tenant-owned-invoice-graph-digest".into(), 1)]);
+        assert!(verify_source_evidence(&original, &restored, &graph, &graph).is_ok());
+
+        let mut altered = restored.clone();
+        altered.get_mut("restored-storage-id").unwrap()["bill_amount"] = json!(200);
+        assert!(verify_source_evidence(&original, &altered, &graph, &graph).is_err());
+        assert!(verify_source_evidence(&original, &BTreeMap::new(), &graph, &graph).is_err());
+
+        // The same entity attributes can be connected to a different tenant.
+        let foreign_graph = BTreeMap::from([("different-tenant-owned-invoice-digest".into(), 1)]);
+        assert!(verify_source_evidence(&original, &restored, &graph, &foreign_graph).is_err());
+        let duplicate_graph = BTreeMap::from([("tenant-owned-invoice-graph-digest".into(), 2)]);
+        assert!(verify_source_evidence(&original, &restored, &graph, &duplicate_graph).is_err());
+    }
+}
 pub async fn import(
     driver: &TypeDBDriver,
     verifier: &TypeDBDriver,
@@ -55,6 +130,13 @@ pub async fn import(
         "Checkpoint does not match restored source; all databases retained"
     );
     let graph = snapshot::graph(verifier, &reference, &[]).await?;
+    let expected_graph: BTreeMap<String, usize> = serde_json::from_slice(&std::fs::read(
+        directory.join(format!("{source}.graph.json")),
+    )?)?;
+    ensure!(
+        graph == expected_graph,
+        "Checkpoint relationship manifest differs from restored source; all databases retained"
+    );
     let approved_before = decisions(verifier, &reference).await?;
 
     let candidate = format!("business_backend_test_{}", uuid::Uuid::new_v4().simple());

@@ -37,14 +37,7 @@ async fn main() -> Result<()> {
             "Quiesce all development writers first"
         );
         let driver = operator_driver().await?;
-        let expected: std::collections::BTreeMap<String, serde_json::Value> =
-            serde_json::from_slice(&std::fs::read(
-                directory.join(format!("{source}.records.json")),
-            )?)?;
-        ensure!(
-            server::database::snapshot::records(&driver, source).await? == expected,
-            "Stale backup; source untouched"
-        );
+        server::commerce::migration::verify_checkpoint_source(&driver, source, directory).await?;
         let target = format!(
             "business_native_dev_v{}",
             server::database::development_version(source).unwrap() + 1

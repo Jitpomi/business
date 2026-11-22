@@ -60,3 +60,6 @@ The audit also updated maintained upstream `url` to 2.5.9 for RUSTSEC-2026-0592.
 An equivalent literal-status predicate reduced the overdue-job query from 30,688 ms to 1,264 ms against the same read snapshot and count (340), avoiding the readiness deadline without changing thresholds or hiding history. Completed synthetic checkout schedules were paused through their owners' native controls, preserving cursor and execution history. Existing uncertain runs were not replayed or marked successful.
 
 Deployment acceptance still requires the coordinated checkpoint, migration and hosted checks above. No live-payment activation is authorized by this change.
+
+
+Transactional checkpoint manifests come from an isolated restore. Internal TypeDB storage IDs can change during that import, so the migration source guard compares the complete multiset of record attributes and the logical graph (including every relationship role and multiplicity). The binary must also reproduce the relationship manifest before a candidate is imported. New work or changed ownership still rejects the cutover before source retirement.
