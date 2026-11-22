@@ -44,11 +44,25 @@ async fn operational_readiness_and_full_graph_recovery() -> Result<()> {
   server::recovery::restore(&driver,dir.path(),&source,&target).await?;ensure!(server::database::snapshot::graph(&driver,&source,&[]).await?==original);ensure!(server::database::snapshot::graph(&driver,&target,&[]).await?==original);ensure!(server::recovery::restore(&driver,dir.path(),&source,&target).await.is_err());
   // The online checkpoint is manifested from its own transactionally exported graph.
   let online=tempfile::tempdir()?;server::database::snapshot::online_checkpoint(&driver,&driver,&source,online.path()).await?;
+  server::commerce::migration::verify_checkpoint_source(&driver,&source,online.path()).await?;
+  // Portable manifests may use different storage IDs; role bindings must still match.
+  let portable=tempfile::tempdir()?;
+  let records:std::collections::BTreeMap<String,serde_json::Value>=serde_json::from_slice(&std::fs::read(online.path().join(format!("{source}.records.json")))?)?;
+  let remapped:std::collections::BTreeMap<_,_>=records.into_values().enumerate().map(|(i,value)|(format!("portable-{i}"),value)).collect();
+  std::fs::write(portable.path().join(format!("{source}.records.json")),serde_json::to_vec(&remapped)?)?;
+  let graph=online.path().join(format!("{source}.graph.json"));
+  std::fs::copy(&graph,portable.path().join(format!("{source}.graph.json")))?;
+  server::commerce::migration::verify_checkpoint_source(&driver,&source,portable.path()).await?;
+  let mut wrong_roles:std::collections::BTreeMap<String,usize>=serde_json::from_slice(&std::fs::read(&graph)?)?;
+  *wrong_roles.values_mut().next().unwrap()+=1;
+  std::fs::write(portable.path().join(format!("{source}.graph.json")),serde_json::to_vec(&wrong_roles)?)?;
+  ensure!(server::commerce::migration::verify_checkpoint_source(&driver,&source,portable.path()).await.is_err(),"Mismatched relationship graph passed the migration guard");
   std::env::set_var("BUSINESS_WRITERS_STOPPED","true");
   server::operations::refresh_control_policy(&driver,&source,&dir.path().join(format!("{source}.graph.json"))).await?;
   std::env::remove_var("BUSINESS_WRITERS_STOPPED");
   let tx=driver.transaction(&source,typedb_driver::TransactionType::Write).await?;tx.query(format!("match $t isa tenant,has tenant_id '{t}';insert $r isa resource,has resource_id '{}',has name 'Written after checkpoint',has status 'active';(tenant:$t,resource:$r) isa resource_ownership;",uuid::Uuid::new_v4())).await?;tx.commit().await?;
   let newer=server::database::snapshot::graph(&driver,&source,&[]).await?;ensure!(newer!=original);
+  ensure!(server::commerce::migration::verify_checkpoint_source(&driver,&source,online.path()).await.is_err(),"Work created after the checkpoint was accepted as unchanged");
   let proof=server::recovery::rehearse(&driver,online.path(),&source).await?;ensure!(proof["graph_verified"]==true&&proof["generated_shadow_removed"]==true);ensure!(server::database::snapshot::graph(&driver,&source,&[]).await?==newer,"Rehearsal rolled back source writes");
   // The fence runs before transport dispatch. A forged custom write cannot reach a service.
   let app=axum::Router::new().fallback(||async{axum::http::StatusCode::OK}).layer(axum::middleware::from_fn(server::operations::recovery_guard));
