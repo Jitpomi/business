@@ -44,6 +44,8 @@ The current data proxy limits a query to 32 KiB. The editor must reject oversize
 
 Tests must cover both merchants' independent settings, foreign edits/reads, direct `/data` bypass attempts, stale quotes, immutable accepted snapshots, audited version selection, scheduling preservation, plugin capability checks, actual gateway authentication, queue execution, payments, partial refunds, notifications and uncertain-effect recovery. Existing orders and legacy configuration paths need regression coverage.
 
+The explicit development successor is `business_native_dev_v11` (from v10). The Render manifest declares that target; do not deploy it before the coordinated migration.
+
 Before development cutover: quiesce writers, take a fresh checkpoint and offsite encrypted recovery archive, restore and compare the complete graph and prior approval decisions in an isolated verifier, import a new development generation, update runtime/monitor/backup target configuration together, then deploy and verify sandbox-only flows. Keep the old database and original checkpoints. Runtime startup verifies the new schema and performs no implicit migration or reset.
 
 Verified locally:
