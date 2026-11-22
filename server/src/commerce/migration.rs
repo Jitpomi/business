@@ -53,31 +53,6 @@ fn verify_source_evidence(
     Ok(())
 }
 
-#[cfg(test)]
-mod checkpoint_tests {
-    use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn portable_ids_do_not_hide_attribute_or_relationship_changes() {
-        let record = json!({"bill_key":"invoice", "bill_amount":100, "bill_status":"paid"});
-        let original = BTreeMap::from([("source-storage-id".into(), record.clone())]);
-        let restored = BTreeMap::from([("restored-storage-id".into(), record)]);
-        let graph = BTreeMap::from([("tenant-owned-invoice-graph-digest".into(), 1)]);
-        assert!(verify_source_evidence(&original, &restored, &graph, &graph).is_ok());
-
-        let mut altered = restored.clone();
-        altered.get_mut("restored-storage-id").unwrap()["bill_amount"] = json!(200);
-        assert!(verify_source_evidence(&original, &altered, &graph, &graph).is_err());
-        assert!(verify_source_evidence(&original, &BTreeMap::new(), &graph, &graph).is_err());
-
-        // The same entity attributes can be connected to a different tenant.
-        let foreign_graph = BTreeMap::from([("different-tenant-owned-invoice-digest".into(), 1)]);
-        assert!(verify_source_evidence(&original, &restored, &graph, &foreign_graph).is_err());
-        let duplicate_graph = BTreeMap::from([("tenant-owned-invoice-graph-digest".into(), 2)]);
-        assert!(verify_source_evidence(&original, &restored, &graph, &duplicate_graph).is_err());
-    }
-}
 pub async fn import(
     driver: &TypeDBDriver,
     verifier: &TypeDBDriver,
@@ -305,4 +280,30 @@ pub async fn retire_source(
         crate::recovery::private_new(&proof, &serde_json::to_vec_pretty(&report)?)?;
     }
     Ok(report)
+}
+
+#[cfg(test)]
+mod checkpoint_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn portable_ids_do_not_hide_attribute_or_relationship_changes() {
+        let record = json!({"bill_key":"invoice", "bill_amount":100, "bill_status":"paid"});
+        let original = BTreeMap::from([("source-storage-id".into(), record.clone())]);
+        let restored = BTreeMap::from([("restored-storage-id".into(), record)]);
+        let graph = BTreeMap::from([("tenant-owned-invoice-graph-digest".into(), 1)]);
+        assert!(verify_source_evidence(&original, &restored, &graph, &graph).is_ok());
+
+        let mut altered = restored.clone();
+        altered.get_mut("restored-storage-id").unwrap()["bill_amount"] = json!(200);
+        assert!(verify_source_evidence(&original, &altered, &graph, &graph).is_err());
+        assert!(verify_source_evidence(&original, &BTreeMap::new(), &graph, &graph).is_err());
+
+        // The same entity attributes can be connected to a different tenant.
+        let foreign_graph = BTreeMap::from([("different-tenant-owned-invoice-digest".into(), 1)]);
+        assert!(verify_source_evidence(&original, &restored, &graph, &foreign_graph).is_err());
+        let duplicate_graph = BTreeMap::from([("tenant-owned-invoice-graph-digest".into(), 2)]);
+        assert!(verify_source_evidence(&original, &restored, &graph, &duplicate_graph).is_err());
+    }
 }
