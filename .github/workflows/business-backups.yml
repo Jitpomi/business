@@ -32,7 +32,19 @@ jobs:
     env:
       BUSINESS_BACKUP_PROFILE: ${{ inputs.profile || 'development' }}
     steps:
+      - name: Resolve active recovery revision
+        id: recovery-revision
+        env:
+          RECOVERY_REF: ${{ inputs.profile == 'production' && (vars.BUSINESS_PRODUCTION_BACKUP_RUNTIME_REF || github.sha) || (vars.BUSINESS_BACKUP_RUNTIME_REF || github.sha) }}
+        run: |
+          if [[ ! "$RECOVERY_REF" =~ ^[a-f0-9]{40}$ ]]; then
+            echo "Recovery revision must be an explicit immutable commit."
+            exit 1
+          fi
+          echo "ref=$RECOVERY_REF" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.recovery-revision.outputs.ref }}
       - uses: actions/cache@v4
         with:
           path: server/target
