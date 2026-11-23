@@ -44,9 +44,13 @@ The current data proxy limits a query to 32 KiB. The editor must reject oversize
 
 Tests must cover both merchants' independent settings, foreign edits/reads, direct `/data` bypass attempts, stale quotes, immutable accepted snapshots, audited version selection, scheduling preservation, plugin capability checks, actual gateway authentication, queue execution, payments, partial refunds, notifications and uncertain-effect recovery. Existing orders and legacy configuration paths need regression coverage.
 
-The explicit development successor is `business_native_dev_v11` (from v10). The Render manifest declares that target; do not deploy it before the coordinated migration.
+The checkout schema release is v11. The physical development database remains `business_native_dev_v10`: a database resource name is independent of its schema version. The Render manifest retains that existing resource. Runtime startup verifies the required schema; it never renames a resource or migrates automatically.
 
-Before development cutover: quiesce writers, take a fresh checkpoint and offsite encrypted recovery archive, restore and compare the complete graph and prior approval decisions in an isolated verifier, import a new development generation, update runtime/monitor/backup target configuration together, then deploy and verify sandbox-only flows. Keep the old database and original checkpoints. Runtime startup verifies the new schema and performs no implicit migration or reset.
+`migrate_checkout --apply-schema SOURCE PRIVATE_CHECKPOINT_DIRECTORY` performs an explicit, additive update in one TypeDB schema transaction. It first restores and rehearses the complete checkpoint on the loopback verifier using the compiled target schema, compares all original facts and relationship roles, and verifies prior automatic-payment approvals. A TypeQL AST comparison rejects removed definitions, changed type annotations/capabilities, and changed public function signatures. Only new definitions/capabilities and reviewed function-body replacements are eligible.
+
+The exclusive schema transaction blocks concurrent writes while the source schema and complete checkpoint are checked again. Every schema query shares that transaction; a failed query closes it without commit. A lost acknowledgement can be checked by rerunning: only the exact source or target schema with the unchanged checkpoint is accepted. Each attempt retains its plan, local recovery shadows and completion evidence. No payment, consent or provider action is replayed.
+
+Before development cutover: quiesce writers, take a fresh checkpoint and offsite encrypted recovery archive, restore and compare the complete graph and prior approval decisions in an isolated verifier, apply the atomic schema update to the existing resource, update the active runtime/backup revision together, then deploy and verify sandbox-only flows. Keep the original checkpoints and recovery shadows. Runtime startup verifies the new schema and performs no implicit migration or reset.
 
 Verified locally:
 
@@ -63,3 +67,5 @@ Deployment acceptance still requires the coordinated checkpoint, migration and h
 
 
 Transactional checkpoint manifests come from an isolated restore. Internal TypeDB storage IDs can change during that import, so the migration source guard compares the complete multiset of record attributes and the logical graph (including every relationship role and multiplicity). The binary must also reproduce the relationship manifest before a candidate is imported. New work or changed ownership still rejects the cutover before source retirement.
+
+The atomic-update operator was independently rehearsed against all 79,246 objects from the retained v10 checkpoint on local TypeDB 3.15.0. Target schema, all original attributes, complete relationship roles and existing approval decisions matched; closing an uncommitted full update left the original schema intact. This is local evidence, not a claim that development has been upgraded.
