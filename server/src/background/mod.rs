@@ -68,6 +68,25 @@ pub async fn reconcile(store: &Store) -> Result<usize> {
     }
     Ok(inserted)
 }
+/// Discover due deliveries and their durable workflow outboxes. Completed
+/// history and future work stay stored without keeping an idle pool polling.
+fn discovery_query(after: Option<&str>, now: i64) -> String {
+    let after = after
+        .map(|cursor| format!("$namespace > {};", q(cursor)))
+        .unwrap_or_default();
+    // Group eligible work before pagination: a run and its delivery must never
+    // occupy separate namespace slots in the supervisor cursor.
+    format!(
+        r#"match $r isa automation_record,has auto_tenant $tenant,has auto_when $when;
+      let $namespace=$tenant;{after}$when <= {now};
+        {{ $r has auto_kind "job";{{ $r has auto_status "enqueued"; }} or {{ $r has auto_status "retrying"; }} or {{ $r has auto_status "processing"; }}; }}
+        or {{ $r has auto_kind "run";{{ $r has auto_status "queued"; }} or {{ $r has auto_status "running"; }} or {{ $r has auto_status "retry"; }} or {{ $r has auto_status "waiting"; }}; }}
+        or {{ $r has auto_kind "schedule",has auto_status "scheduled",has auto_enabled true; }};
+      reduce $eligible=count groupby $namespace;
+      sort $namespace;limit 100;fetch {{'tenant':$namespace}};"#
+    )
+}
+
 struct TenantSource {
     template: Engine,
     capacity: std::sync::Arc<tokio::sync::Semaphore>,
@@ -75,10 +94,7 @@ struct TenantSource {
 #[async_trait::async_trait]
 impl dog_queue::supervisor::TenantWorkers for TenantSource {
     async fn page(&self, after: Option<&str>) -> dog_queue::QueueResult<Vec<String>> {
-        let after = after
-            .map(|cursor| format!("$tenant > {};", q(cursor)))
-            .unwrap_or_default();
-        let query=format!("match $r isa automation_record,has auto_tenant $tenant;{after}select $tenant;distinct;sort $tenant;limit 100;fetch {{'tenant':$tenant}};");
+        let query = discovery_query(after, chrono::Utc::now().timestamp());
         let rows = crate::storage::read(&self.template.store.state, &query)
             .await
             .map_err(|_| {
@@ -105,7 +121,6 @@ impl dog_queue::supervisor::TenantWorkers for TenantSource {
             // capacity still runs different tenants concurrently.
             max_workers: 1,
             poll_interval: Duration::from_secs(2),
-            worker_idle_timeout: Duration::MAX,
             lease_duration: Duration::from_secs(300),
             heartbeat_interval: Duration::from_secs(60),
             ..Default::default()
@@ -148,3 +163,7 @@ pub fn spawn_all(template: Engine) -> Worker {
         capacity: std::sync::Arc::new(tokio::sync::Semaphore::new(4)),
     }))
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/background/discovery.rs"]
+mod discovery_tests;

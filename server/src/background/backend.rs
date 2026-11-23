@@ -229,7 +229,7 @@ impl QueueBackend for TypeDBBackend {
     }
     async fn dequeue(&self, ctx: QueueCtx, queues: &[&str]) -> QueueResult<Option<LeasedJob>> {
         self.check(&ctx)?;
-        let rows = crate::storage::read(&self.store.state,&format!("{} $r isa automation_record,has auto_tenant {},has auto_kind \"job\",has auto_key $key,has auto_when $when,has auto_status $status;$when <= {};{{$status == \"enqueued\";}} or {{$status == \"retrying\";}} or {{$status == \"processing\";}};select $r,$when,$key;sort $when,$key;limit 32;fetch {{'id':$r.auto_key}};",self.store.prefix(),q(&ctx.tenant_id),Utc::now().timestamp())).await.map_err(error)?;
+        let rows = crate::storage::read(&self.store.state,&format!("{} $r isa automation_record,has auto_tenant {},has auto_kind \"job\",has auto_key $key,has auto_when $when;$when <= {};{{$r has auto_status \"enqueued\";}} or {{$r has auto_status \"retrying\";}} or {{$r has auto_status \"processing\";}};select $r,$when,$key;sort $when,$key;limit 32;fetch {{'id':$r.auto_key}};",self.store.prefix(),q(&ctx.tenant_id),Utc::now().timestamp())).await.map_err(error)?;
         for row in rows {
             let id = row["id"]
                 .as_str()
