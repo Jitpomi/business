@@ -179,3 +179,10 @@ and use `operations refresh-control-policy DEVELOPMENT_DATABASE GRAPH_CHECKPOINT
 It refuses a stale graph or production database, updates only the canonical
 control function in one schema transaction, and checks that the graph remains
 identical. There are no startup schema writes or authorization fallbacks.
+
+
+### Backup revision during a staged migration
+
+Recovery tools must match the active database schema. Set the development repository variable `BUSINESS_BACKUP_RUNTIME_REF` to the full immutable commit deployed on the development service while a newer schema migration is staged on main. Production uses only its separate `BUSINESS_PRODUCTION_BACKUP_RUNTIME_REF`; an unset profile defaults to the workflow commit. Branch names and tags are rejected.
+
+The workflow continues to export the explicitly configured database, independently restore and compare its graph, verify its native schema, capture its ciphertext stores, and encrypt the runtime capsule. It archives the selected source commit alongside the checkpoint. This preserves strict schema verification without requiring an undeployed migration to succeed first. Update the database, runtime capsule and recovery revision together only after the coordinated cutover succeeds. Never point a current schema at older recovery code merely to silence a failed check.
