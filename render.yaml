@@ -16,7 +16,7 @@ services:
       - key: HTTP_PORT
         value: "10000"
       - key: TYPEDB_DB
-        value: business_native_dev_v11
+        value: business_native_dev_v10
       - key: TYPEDB_TLS
         value: "true"
       - key: TYPEDB_FORCE_RECREATE

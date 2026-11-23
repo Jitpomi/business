@@ -146,6 +146,7 @@ pub async fn bootstrap(
 #[path = "../tests/unit/database/tests.rs"]
 mod tests;
 
+pub mod schema_upgrade;
 pub mod snapshot;
 
 /// Complete canonical schema for import into a new, never-overwritten database.

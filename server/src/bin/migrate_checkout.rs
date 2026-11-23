@@ -3,6 +3,20 @@ use anyhow::{ensure, Result};
 #[tokio::main]
 async fn main() -> Result<()> {
     let args: Vec<_> = std::env::args().collect();
+    if args.len() == 4 && args[1] == "--apply-schema" {
+        let verifier = server::recovery::local_driver().await?;
+        let driver = operator_driver().await?;
+        let report = server::commerce::migration::apply_schema(
+            &driver,
+            &verifier,
+            &args[2],
+            std::path::Path::new(&args[3]),
+        )
+        .await?;
+        println!("{report}");
+        return Ok(());
+    }
+
     if args.len() == 5 && args[1] == "--retire" {
         ensure!(
             std::env::var("BUSINESS_WRITERS_STOPPED").as_deref() == Ok("true"),
@@ -22,7 +36,7 @@ async fn main() -> Result<()> {
 
     ensure!(
         args.len() == 4 && matches!(args[1].as_str(), "--rehearse" | "--apply"),
-        "Use --rehearse/--apply SOURCE PRIVATE_CHECKPOINT_DIRECTORY"
+        "Use --rehearse/--apply/--apply-schema SOURCE PRIVATE_CHECKPOINT_DIRECTORY"
     );
     let source = &args[2];
     let directory = std::path::Path::new(&args[3]);

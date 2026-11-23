@@ -162,6 +162,91 @@ pub async fn import(
     Ok(expected.len())
 }
 
+/// Rehearse the complete checkpoint locally, then update the existing development
+/// resource in one exclusive schema transaction. No original data is rewritten.
+pub async fn apply_schema(
+    driver: &TypeDBDriver,
+    verifier: &TypeDBDriver,
+    source: &str,
+    directory: &Path,
+) -> Result<serde_json::Value> {
+    ensure!(
+        database::development_version(source).is_some(),
+        "Development source required"
+    );
+    ensure!(
+        std::env::var("BUSINESS_WRITERS_STOPPED").as_deref() == Ok("true"),
+        "Quiesce all development writers first"
+    );
+    let shadow = format!("business_backend_test_{}", uuid::Uuid::new_v4().simple());
+    let count = import(verifier, verifier, source, &shadow, directory).await?;
+    let expected_schema = std::fs::read_to_string(directory.join(format!("{source}.tql")))?;
+    let target_schema = verifier.databases().get(&shadow).await?.schema().await?;
+    let plan = database::schema_upgrade::plan(&expected_schema, &target_schema)?;
+    let attempt = directory.join(format!(
+        "schema-update-{}.json",
+        uuid::Uuid::new_v4().simple()
+    ));
+    let intent = serde_json::json!({"database":source,"local_rehearsal":shadow,"records":count,"plan":plan,"committed":false});
+    crate::recovery::private_new(&attempt, &serde_json::to_vec_pretty(&intent)?)?;
+    // The schema transaction excludes every other schema/write transaction.
+    // Concurrent reads remain available for full checkpoint verification.
+    let tx = driver
+        .transaction(source, typedb_driver::TransactionType::Schema)
+        .await?;
+    let checked: Result<_> = async {
+        let actual = database::schema_upgrade::fingerprint(
+            &driver.databases().get(source).await?.schema().await?,
+        )?;
+        ensure!(
+            actual == plan.source_sha256 || actual == plan.target_sha256,
+            "Source schema differs from the rehearsed checkpoint; nothing changed"
+        );
+        verify_checkpoint_source(driver, source, directory).await?;
+        let approved = decisions(driver, source).await?;
+        if actual != plan.target_sha256 {
+            if !plan.define.is_empty() {
+                tx.query(&plan.define).await?;
+            }
+            for query in &plan.redefine {
+                tx.query(query).await?;
+            }
+        }
+        Ok(approved)
+    }
+    .await;
+    let approved = match checked {
+        Ok(approved) => approved,
+        Err(error) => {
+            tx.close().await?;
+            return Err(error);
+        }
+    };
+    // On an interrupted acknowledgement, a rerun accepts only the exact target
+    // schema and unchanged checkpoint, without replaying any provider action.
+    tx.commit().await?;
+    ensure!(
+        database::schema_upgrade::fingerprint(
+            &driver.databases().get(source).await?.schema().await?
+        )? == plan.target_sha256,
+        "Committed schema differs; retain checkpoint and investigate"
+    );
+    verify_checkpoint_source(driver, source, directory).await?;
+    ensure!(
+        decisions(driver, source).await? == approved,
+        "Existing approvals changed; retain checkpoint and investigate"
+    );
+    database::verify_runtime(driver, source).await?;
+    let report = serde_json::json!({"database":source,"records":count,"committed":true,
+        "checkpoint_preserved":true,"approvals_preserved":true,"runtime_verified":true,
+        "target_sha256":plan.target_sha256,"local_rehearsal":shadow});
+    crate::recovery::private_new(
+        &attempt.with_extension("complete.json"),
+        &serde_json::to_vec_pretty(&report)?,
+    )?;
+    Ok(report)
+}
+
 async fn decisions(driver: &TypeDBDriver, database: &str) -> Result<Vec<String>> {
     let tx = driver
         .transaction(database, typedb_driver::TransactionType::Read)
