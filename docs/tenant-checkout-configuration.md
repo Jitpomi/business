@@ -1,6 +1,6 @@
 # Tenant checkout configuration
 
-Status: the v11 schema was applied atomically to development and both services were deployed. Hosted sandbox acceptance remains in progress; real checkout payments remain disabled.
+Status: the v11 schema and both development deployments are verified. Hosted Stripe sandbox payment, reconciliation, partial refund, reminder and receipt delivery passed. Real checkout payments remain disabled; the free services are unchanged.
 
 ## Authority and history
 
@@ -63,7 +63,7 @@ The audit also updated maintained upstream `url` to 2.5.9 for RUSTSEC-2026-0592.
 
 An equivalent literal-status predicate reduced the overdue-job query from 30,688 ms to 1,264 ms against the same read snapshot and count (340), avoiding the readiness deadline without changing thresholds or hiding history. Completed synthetic checkout schedules were paused through their owners' native controls, preserving cursor and execution history. Existing uncertain runs were not replayed or marked successful.
 
-Hosted payment acceptance remains required after deployment. No live-payment activation is authorized by this change.
+Hosted payment acceptance for this cutover is recorded below. No live-payment activation is authorized by this change.
 
 
 Transactional checkpoint manifests come from an isolated restore. Internal TypeDB storage IDs can change during that import, so the migration source guard compares the complete multiset of record attributes and the logical graph (including every relationship role and multiplicity). The binary must also reproduce the relationship manifest before a candidate is imported. New work or changed ownership still rejects the cutover before source retirement.
@@ -75,8 +75,32 @@ The atomic-update operator was independently rehearsed against all 79,246 object
 
 The frozen development checkpoint contained 79,278 objects. Its encrypted offsite archive was downloaded and decrypted, all 11 files matched their manifest, and the complete graph and prior payment approvals were restored and compared on a loopback TypeDB 3.15 verifier. All 24 stored connection credentials were also verified against the downloaded ciphertext store without contacting providers. The atomic schema update retained every original object and verified the target schema and runtime before writers resumed.
 
-Business revision `bb73d268cba78ff8123fc934f97b67f9f793a592` and website revision `e1861d35daed0ae97e45342645f98c229ea285ba` were deployed. Deployed checkout assets matched their source hashes. Fresh Auth0 principals passed dog-auth and deployed gateway checks, including foreign-tenant and invalid-token rejection. This is not a completed browser login or payment acceptance test.
+Business revision `bb73d268cba78ff8123fc934f97b67f9f793a592` and website revision `e1861d35daed0ae97e45342645f98c229ea285ba` were deployed. Deployed checkout assets matched their source hashes. Fresh Auth0 principals passed dog-auth and deployed gateway checks, including foreign-tenant and invalid-token rejection. That preliminary proof covered machine authentication and native isolation; completed hosted payment acceptance is recorded below. A human browser login was not completed in this operator run.
 
 Hosted testing encountered a TypeDB restart and a quote deadline before any payment submission. The restart's cause is unconfirmed. An exact request-ID read confirmed that the quote had not been created; no financial outcome was guessed or manually overridden.
 
 Queue discovery now selects due deliveries and due durable outboxes, grouping their namespaces before cursor pagination. Historical completed work no longer starts worker pools, and dog-queue's standard idle retirement closes inactive pools. Future work remains stored until due; missing delivery recovery, leases and tenant-scoped execution remain unchanged. The full retained checkpoint includes 61,938 completed deliveries; the read-only discovery rehearsal retained all of them while selecting zero due namespaces instead of twelve historical namespaces.
+
+
+## Hosted acceptance after the queue update
+
+Business `a7bc596518d4193038c5548cf81393443e305d8f` is live on the existing free development service. Website `e1861d35daed0ae97e45342645f98c229ea285ba` is deployed as Cloudflare Worker version `d098bb6f-b0b3-40a6-9eb4-89c365dbc89d`; all six checkout asset hashes matched source. Both pull-request and merged-main correctness workflows passed.
+
+The final loopback TypeDB 3.15 suite passed the actual website gateway, dog-auth, native tenant policies, dog-queue, one-time/instalment/recurring/mixed checkout, payment and notification deduplication, partial refund, uncertain-effect recovery and restart checks (549.09 seconds). The separate inline-widget authorization suite passed (70.76 seconds), as did competing lease, expiry and delayed-work checks (36.86 seconds). All 70 default Rust tests and all-target Clippy passed; the website suite passed 77 tests.
+
+Fresh isolated Auth0 principals exercised the deployed gateway as seller, buyer and unrelated tenant. The saved quote was confirmed absent before retry; quote creation then completed in 5.9 seconds. Repeated quote and acceptance requests retained one order. The authorized buyer obtained the Stripe inline descriptor; the unrelated tenant and an unapproved embedding origin were denied. This automated acceptance used provider JWTs and a gateway test session; it does not claim a completed human browser login or card-entry interaction.
+
+The tenant-scoped Stripe sandbox plugin issued one USD 1.00 invoice. Its actual test PaymentIntent succeeded and Business reconciled the invoice to paid. Two identical USD 0.50 refund requests produced one successful provider refund. Read-only native journal inspection and the operations mailbox confirmed exactly one reminder, one payment receipt and one refund confirmation, with the correct amounts and test labels. No payment status was overridden. The send-only email credential retained its existing permissions; delivery was checked in the receiving mailbox.
+
+The test schedule was paused, obsolete synthetic deliveries were cancelled through the generic queue backend, and all test financial history was retained. The three new identities and tenants were retired; their unexpired JWTs were rejected before the corresponding Auth0 test clients were removed. Existing identities were not reactivated or changed.
+
+Protected readiness returned ready with zero invoice, notice or refund attention, overdue jobs, stale reconciliation or stalled refunds. The existing thirteen attention runs and one failed job remain recorded. The separate dependency-security audit still reports the same three accepted TypeDB maintenance findings.
+
+One unsupported direct query joining internal `bill_notice` types still returns HTTP 500: TypeDB 3.15 raises `INF6` in the framework's leaf-type metadata inspection. It fails closed and is not issued by the customer checkout routes. The dog-typedb compiler needs to reject or inspect this unsupported type without issuing the incompatible metadata query. No permissions or application error mappings were relaxed. It is separate from the verified checkout/payment path and remains a limitation of the generic data-query surface.
+
+
+## Final offsite recovery verification
+
+The [final encrypted backup](https://github.com/Jitpomi/business/actions/runs/45120730462) passed its isolated runner rehearsal against the deployed immutable Business revision. The downloaded archive decrypted with the separately held recovery identity; all 11 payload files and all three configuration files matched their manifests. An independent loopback TypeDB 3.15 restore verified the complete graph and native schema for all 79,629 records. The original 79,278-object migration checkpoint remains retained separately.
+
+All 26 referenced connection credentials were recovered from the downloaded 30-row ciphertext store, with wrong-key and wrong-tenant rejection confirmed. Critical runtime settings matched, and native consent-decision queries were checked for all thirteen retained plans. This drill neither contacted the source secret store nor invoked a provider or modified the development source. The local recovery shadow is retained for inspection. Scheduled backups target the exact deployed runtime revision; the recovery key remains separate from the encrypted archive.
