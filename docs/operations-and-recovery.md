@@ -129,7 +129,7 @@ recovery identity, never silently rotating away the only usable key.
 
 The [native TypeDB online export](https://typedb.com/docs/maintenance-operation/database-export-import/) is transactionally consistent while source
 writes continue. The source cluster performs only the export. Its schema/data are
-imported into a generated database in a separate TypeDB 3.14.1 runner container,
+imported into a generated database in a separate TypeDB 3.15.0 runner container,
 pinned by the official multi-platform image digest, before inventory, records and
 relationship-role manifests are computed. This keeps restore load away from the
 application cluster. The container publishes gRPC only on runner IPv4 loopback;

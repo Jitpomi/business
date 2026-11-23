@@ -52,7 +52,7 @@ jobs:
           CARGO_INCREMENTAL: '0'
       - name: Start isolated restore verification server
         run: |
-          docker run --detach --name business-backup-rehearsal --memory=4g --cpus=2 --publish 127.0.0.1:1729:1729 typedb/typedb@sha256:d39d4f29eb571ee856cb221e8175b76dcb96dfa39939ebde5360cffa0e5bb680
+          docker run --detach --name business-backup-rehearsal --memory=4g --cpus=2 --publish 127.0.0.1:1729:1729 typedb/typedb@sha256:c6fd4a9bccad92cad65fc15cbc2e117319c980dc34dadaaf0805c6babe15fe2d
           for attempt in $(seq 1 60); do
             if docker logs business-backup-rehearsal 2>&1 | grep -q '^Ready!'; then exit 0; fi
             sleep 1
