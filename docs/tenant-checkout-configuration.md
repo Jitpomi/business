@@ -1,6 +1,6 @@
 # Tenant checkout configuration
 
-Status: implemented and verified in an isolated TypeDB 3.14.1 environment. Development cutover is still pending; real checkout payments remain disabled.
+Status: the v11 schema was applied atomically to development and both services were deployed. Hosted sandbox acceptance remains in progress; real checkout payments remain disabled.
 
 ## Authority and history
 
@@ -63,9 +63,20 @@ The audit also updated maintained upstream `url` to 2.5.9 for RUSTSEC-2026-0592.
 
 An equivalent literal-status predicate reduced the overdue-job query from 30,688 ms to 1,264 ms against the same read snapshot and count (340), avoiding the readiness deadline without changing thresholds or hiding history. Completed synthetic checkout schedules were paused through their owners' native controls, preserving cursor and execution history. Existing uncertain runs were not replayed or marked successful.
 
-Deployment acceptance still requires the coordinated checkpoint, migration and hosted checks above. No live-payment activation is authorized by this change.
+Hosted payment acceptance remains required after deployment. No live-payment activation is authorized by this change.
 
 
 Transactional checkpoint manifests come from an isolated restore. Internal TypeDB storage IDs can change during that import, so the migration source guard compares the complete multiset of record attributes and the logical graph (including every relationship role and multiplicity). The binary must also reproduce the relationship manifest before a candidate is imported. New work or changed ownership still rejects the cutover before source retirement.
 
-The atomic-update operator was independently rehearsed against all 79,246 objects from the retained v10 checkpoint on local TypeDB 3.15.0. Target schema, all original attributes, complete relationship roles and existing approval decisions matched; closing an uncommitted full update left the original schema intact. This is local evidence, not a claim that development has been upgraded.
+The atomic-update operator was independently rehearsed against all 79,246 objects from the retained v10 checkpoint on local TypeDB 3.15.0. Target schema, all original attributes, complete relationship roles and existing approval decisions matched; closing an uncommitted full update left the original schema intact. This rehearsal preceded the separately verified development cutover below.
+
+
+## Development cutover and queue discovery
+
+The frozen development checkpoint contained 79,278 objects. Its encrypted offsite archive was downloaded and decrypted, all 11 files matched their manifest, and the complete graph and prior payment approvals were restored and compared on a loopback TypeDB 3.15 verifier. All 24 stored connection credentials were also verified against the downloaded ciphertext store without contacting providers. The atomic schema update retained every original object and verified the target schema and runtime before writers resumed.
+
+Business revision `bb73d268cba78ff8123fc934f97b67f9f793a592` and website revision `e1861d35daed0ae97e45342645f98c229ea285ba` were deployed. Deployed checkout assets matched their source hashes. Fresh Auth0 principals passed dog-auth and deployed gateway checks, including foreign-tenant and invalid-token rejection. This is not a completed browser login or payment acceptance test.
+
+Hosted testing encountered a TypeDB restart and a quote deadline before any payment submission. The restart's cause is unconfirmed. An exact request-ID read confirmed that the quote had not been created; no financial outcome was guessed or manually overridden.
+
+Queue discovery now selects due deliveries and due durable outboxes, grouping their namespaces before cursor pagination. Historical completed work no longer starts worker pools, and dog-queue's standard idle retirement closes inactive pools. Future work remains stored until due; missing delivery recovery, leases and tenant-scoped execution remain unchanged. The full retained checkpoint includes 61,938 completed deliveries; the read-only discovery rehearsal retained all of them while selecting zero due namespaces instead of twelve historical namespaces.
